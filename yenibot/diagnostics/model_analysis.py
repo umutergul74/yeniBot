@@ -109,9 +109,9 @@ def extract_embeddings(
             positions.append(pos.numpy())
     out = working.iloc[np.concatenate(positions)].copy().reset_index(drop=True)
     emb = np.concatenate(embeddings)
-    for idx in range(emb.shape[1]):
-        out[f"embedding_{idx}"] = emb[:, idx]
-    return out
+    embedding_columns = [f"embedding_{idx}" for idx in range(emb.shape[1])]
+    embedding_frame = pd.DataFrame(emb, columns=embedding_columns, index=out.index)
+    return pd.concat([out, embedding_frame], axis=1)
 
 
 def tsne_embeddings(embedding_frame: pd.DataFrame, *, random_state: int = 42) -> pd.DataFrame:

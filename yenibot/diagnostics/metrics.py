@@ -43,7 +43,12 @@ def calibration_table(
     df = pd.DataFrame({"label": labels, "prob_long": prob_long}).replace([np.inf, -np.inf], np.nan).dropna()
     if df.empty:
         return pd.DataFrame(columns=["bin", "count", "mean_prob_long", "actual_long_rate"])
-    df["bin"] = pd.qcut(df["prob_long"].rank(method="first"), q=min(bins, len(df)), duplicates="drop")
+    df["bin"] = pd.qcut(
+        df["prob_long"].rank(method="first"),
+        q=min(bins, len(df)),
+        labels=False,
+        duplicates="drop",
+    )
     grouped = df.groupby("bin", observed=True).agg(
         count=("label", "size"),
         mean_prob_long=("prob_long", "mean"),

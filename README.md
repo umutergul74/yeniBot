@@ -46,3 +46,6 @@ Proceed only when diagnostics show:
 - Positive Rank IC in more than `75%` of folds
 - Calibration separation between actual long and non-long outcomes
 - No leakage alerts
+
+Notebook `05` writes a shareable diagnostics archive under `Drive/yeniBot/reports/`.
+Send that `phase1_diagnostics_*.zip` when a run needs review.
