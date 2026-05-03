@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import zipfile
 from datetime import datetime, timezone
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +177,47 @@ def mtf_leakage_diagnostics(predictions: pd.DataFrame, *, htf_hours: int = 4) ->
     return pd.DataFrame(rows)
 
 
+def stationarity_policy_diagnostics(feature_columns: list[str], config: dict[str, Any] | None = None) -> pd.DataFrame:
+    """Verify that configured nonstationary feature patterns are absent from model inputs."""
+
+    patterns = []
+    if config is not None:
+        patterns = list(_config_get(config, ["features", "stationarity", "exclude_patterns"], []) or [])
+    rows = []
+    for pattern in patterns:
+        matches = sorted(column for column in feature_columns if fnmatch(column, pattern))
+        rows.append(
+            {
+                "check": "nonstationary_feature_excluded",
+                "pattern": pattern,
+                "passed": len(matches) == 0,
+                "matched_count": len(matches),
+                "matched_features": ",".join(matches),
+            }
+        )
+    if rows:
+        total_matches = sum(row["matched_count"] for row in rows)
+        rows.append(
+            {
+                "check": "stationarity_policy_overall",
+                "pattern": "<all>",
+                "passed": total_matches == 0,
+                "matched_count": total_matches,
+                "matched_features": ",".join(
+                    sorted(
+                        {
+                            feature
+                            for row in rows
+                            for feature in str(row["matched_features"]).split(",")
+                            if feature
+                        }
+                    )
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=["check", "pattern", "passed", "matched_count", "matched_features"])
+
+
 def good_bad_feature_audit(
     predictions: pd.DataFrame,
     fold_metrics: pd.DataFrame,
@@ -243,6 +285,7 @@ def write_phase1_diagnostic_bundle(
     threshold_metrics: pd.DataFrame | None = None,
     mtf_leakage: pd.DataFrame | None = None,
     feature_audit: pd.DataFrame | None = None,
+    stationarity_policy: pd.DataFrame | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
 ) -> Path:
@@ -291,6 +334,8 @@ def write_phase1_diagnostic_bundle(
         mtf_leakage.to_csv(bundle_dir / "mtf_leakage.csv", index=False)
     if feature_audit is not None and not feature_audit.empty:
         feature_audit.to_csv(bundle_dir / "good_bad_feature_audit.csv", index=False)
+    if stationarity_policy is not None and not stationarity_policy.empty:
+        stationarity_policy.to_csv(bundle_dir / "stationarity_policy.csv", index=False)
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(
@@ -374,6 +419,20 @@ def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str
     lines.extend(f"- fold {int(row.fold)}: {row.rank_ic:.6f}" for row in top_bad.itertuples())
     lines.append("")
     return "\n".join(lines)
+
+
+def _config_get(config: object, path: list[str], default: object) -> object:
+    current = config
+    for key in path:
+        if isinstance(current, dict):
+            if key not in current:
+                return default
+            current = current[key]
+        else:
+            if not hasattr(current, key):
+                return default
+            current = getattr(current, key)
+    return current
 
 
 def _json_safe(value: Any) -> Any:

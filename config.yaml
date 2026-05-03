@@ -29,6 +29,17 @@ features:
   exclude_columns: []
   exclude_patterns: []
   warmup_rows: 300
+  stationarity:
+    enabled: true
+    normalization_window: 100
+    exclude_nonstationary: true
+    exclude_patterns:
+      - "*close_denoised"
+      - "*volume_denoised"
+      - "*true_cvd_delta"
+      - "*cvd_cumulative_rate"
+      - "*vol_per_trade"
+      - "*atr_14"
   wavelet:
     enabled: true
     window: 256

@@ -21,6 +21,7 @@ from yenibot.diagnostics.reporting import (
     good_bad_fold_summary,
     mtf_leakage_diagnostics,
     regime_diagnostics,
+    stationarity_policy_diagnostics,
     threshold_diagnostics,
     write_phase1_diagnostic_bundle,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "predict_probabilities",
     "rank_ic",
     "regime_diagnostics",
+    "stationarity_policy_diagnostics",
     "threshold_diagnostics",
     "tsne_embeddings",
     "write_phase1_diagnostic_bundle",

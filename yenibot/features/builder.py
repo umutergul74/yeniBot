@@ -56,6 +56,11 @@ def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
     return ((series - mean) / std.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
 
 
+def _log_return(series: pd.Series) -> pd.Series:
+    positive = series.where(series > 0)
+    return np.log(positive / positive.shift(1)).replace([np.inf, -np.inf], np.nan)
+
+
 def _rolling_slope(series: pd.Series, window: int) -> pd.Series:
     x = np.arange(window, dtype=float)
     x = x - x.mean()
@@ -162,6 +167,9 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
     atr_period = int(_config_get(config, ["features", "structure", "atr_period"], 14))
     adx_period = int(_config_get(config, ["features", "structure", "adx_period"], 14))
     vwap_window = int(_config_get(config, ["features", "structure", "vwap_window"], 24))
+    stationarity_cfg = _config_get(config, ["features", "stationarity"], {})
+    stationarity_enabled = bool(_config_get(stationarity_cfg, ["enabled"], True))
+    stationarity_window = int(_config_get(stationarity_cfg, ["normalization_window"], cvd_window))
 
     df["taker_buy_ratio"] = _safe_divide(df["taker_buy_base_vol"], df["volume"], default=0.5).clip(0.0, 1.0)
     df["taker_sell_ratio"] = 1.0 - df["taker_buy_ratio"]
@@ -201,8 +209,29 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
     )
     df["vwap_dist_atr"] = (df["close"] - rolling_vwap) / df["atr_14"].replace(0, np.nan)
 
+    if stationarity_enabled:
+        _add_stationary_features(df, stationarity_window)
+
     feature_columns = select_feature_columns(df)
     return FeatureResult(df, feature_columns)
+
+
+def _add_stationary_features(df: pd.DataFrame, window: int) -> None:
+    if window <= 1:
+        raise ValueError("features.stationarity.normalization_window must be greater than 1")
+
+    rolling_volume = df["volume"].rolling(window, min_periods=window).mean()
+    df["volume_log_zscore"] = _rolling_zscore(np.log1p(df["volume"].clip(lower=0)), window)
+    df["true_cvd_delta_norm"] = _safe_divide(df["true_cvd_delta"], rolling_volume, default=np.nan)
+    df["cvd_cumulative_rate_norm"] = _safe_divide(df["cvd_cumulative_rate"], rolling_volume, default=np.nan)
+    df["vol_per_trade_log_zscore"] = _rolling_zscore(np.log1p(df["vol_per_trade"].clip(lower=0)), window)
+    df["atr_14_pct"] = _safe_divide(df["atr_14"], df["close"], default=np.nan)
+
+    if "close_denoised" in df.columns:
+        df["close_denoised_log_return"] = _log_return(df["close_denoised"])
+    if "volume_denoised" in df.columns:
+        volume_denoised = df["volume_denoised"].clip(lower=0)
+        df["volume_denoised_log_zscore"] = _rolling_zscore(np.log1p(volume_denoised), window)
 
 
 def select_feature_columns(frame: pd.DataFrame) -> list[str]:
@@ -222,6 +251,9 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
 def filter_feature_columns(feature_columns: list[str], config: object) -> list[str]:
     exclude_columns = set(_config_get(config, ["features", "exclude_columns"], []) or [])
     exclude_patterns = list(_config_get(config, ["features", "exclude_patterns"], []) or [])
+    stationarity_cfg = _config_get(config, ["features", "stationarity"], {})
+    if bool(_config_get(stationarity_cfg, ["exclude_nonstationary"], False)):
+        exclude_patterns.extend(list(_config_get(stationarity_cfg, ["exclude_patterns"], []) or []))
     filtered = []
     for column in feature_columns:
         if column in exclude_columns:

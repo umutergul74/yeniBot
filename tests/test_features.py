@@ -26,3 +26,28 @@ def test_causal_wavelet_value_unchanged_when_future_appended() -> None:
     base = causal_wavelet_denoise(series, window=64)
     future = causal_wavelet_denoise(extended, window=64)
     pd.testing.assert_series_equal(base.dropna(), future.iloc[: len(base)].dropna(), check_names=False)
+
+
+def test_stationary_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
+    primary = synthetic_klines(80, "1h")
+    htf = synthetic_klines(24, "4h")
+    extended_primary = synthetic_klines(96, "1h")
+    extended_htf = synthetic_klines(28, "4h")
+
+    base = build_feature_matrix(primary, htf, tiny_config).frame
+    extended = build_feature_matrix(extended_primary, extended_htf, tiny_config).frame
+    timestamp = pd.Timestamp("2022-01-03 12:00", tz="UTC")
+    columns = [
+        "volume_log_zscore",
+        "true_cvd_delta_norm",
+        "cvd_cumulative_rate_norm",
+        "vol_per_trade_log_zscore",
+        "atr_14_pct",
+        "4h_true_cvd_delta_norm",
+        "4h_cvd_cumulative_rate_norm",
+        "4h_atr_14_pct",
+    ]
+
+    base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
+    extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
+    pd.testing.assert_series_equal(base_row, extended_row, check_names=False)

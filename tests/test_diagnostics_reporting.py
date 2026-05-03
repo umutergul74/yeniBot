@@ -12,6 +12,7 @@ from yenibot.diagnostics import (
     good_bad_feature_audit,
     mtf_leakage_diagnostics,
     regime_diagnostics,
+    stationarity_policy_diagnostics,
     threshold_diagnostics,
     write_phase1_diagnostic_bundle,
 )
@@ -67,6 +68,7 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         calibration=calibration,
         fold_metrics=fold_metrics,
         regime_metrics=regime_metrics,
+        stationarity_policy=stationarity_policy_diagnostics(["true_cvd_zscore"], {"features": {"stationarity": {"exclude_patterns": ["*atr_14"]}}}),
         config={"project": {"name": "test"}},
     )
 
@@ -79,6 +81,7 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "calibration.csv" in names
         assert "fold_metrics.csv" in names
         assert "regime_metrics.csv" in names
+        assert "stationarity_policy.csv" in names
         payload = json.loads(archive.read("phase1_report.json"))
         assert payload["passed"] is False
 
@@ -124,3 +127,21 @@ def test_good_bad_feature_audit_returns_ranked_feature_differences() -> None:
 
     assert not audit.empty
     assert {"feature", "ks_stat", "abs_standardized_diff"}.issubset(audit.columns)
+
+
+def test_stationarity_policy_diagnostics_flags_raw_model_features() -> None:
+    config = {
+        "features": {
+            "stationarity": {
+                "exclude_patterns": ["*close_denoised", "*atr_14", "*true_cvd_delta"],
+            }
+        }
+    }
+    diagnostics = stationarity_policy_diagnostics(
+        ["close_denoised_log_return", "4h_atr_14", "true_cvd_delta_norm"],
+        config,
+    )
+
+    overall = diagnostics.loc[diagnostics["check"] == "stationarity_policy_overall"].iloc[0]
+    assert not bool(overall["passed"])
+    assert overall["matched_features"] == "4h_atr_14"
