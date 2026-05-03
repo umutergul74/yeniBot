@@ -23,6 +23,7 @@ binance:
   limit: 1500
   request_sleep_seconds: 0.15
   max_gap_multiplier: 2
+  zero_volume_policy: drop
 
 features:
   warmup_rows: 300

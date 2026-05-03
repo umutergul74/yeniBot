@@ -11,9 +11,12 @@ def validate_full_kline_frame(
     *,
     max_gap_multiplier: int = 2,
     require_taker_nonzero: bool = True,
+    zero_volume_policy: str = "error",
 ) -> pd.DataFrame:
     """Validate full Binance kline data and return a sorted copy."""
 
+    if zero_volume_policy not in {"error", "drop"}:
+        raise ValueError("zero_volume_policy must be one of: error, drop")
     missing = [column for column in KLINE_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"Missing Binance full-kline columns: {missing}")
@@ -28,6 +31,16 @@ def validate_full_kline_frame(
         dupes = df.loc[df["timestamp"].duplicated(), "timestamp"].head().tolist()
         raise ValueError(f"Duplicate kline timestamps detected: {dupes}")
 
+    bad_activity = (df["volume"] <= 0) | (df["num_trades"] <= 0)
+    dropped_zero_volume_rows = int(bad_activity.sum())
+    if dropped_zero_volume_rows:
+        first = df.loc[bad_activity, "timestamp"].iloc[0]
+        if zero_volume_policy == "error":
+            raise ValueError(f"Zero or negative volume/trade activity detected at {first}")
+        df = df.loc[~bad_activity].reset_index(drop=True)
+        if df.empty:
+            raise ValueError("All kline rows were removed by zero_volume_policy=drop")
+
     expected = pd.Timedelta(milliseconds=interval_to_milliseconds(interval))
     max_allowed_gap = expected * max_gap_multiplier
     gaps = df["timestamp"].diff().dropna()
@@ -40,12 +53,6 @@ def validate_full_kline_frame(
             f"({bad_gaps.iloc[0]})"
         )
 
-    if (df["volume"] <= 0).any():
-        first = df.loc[df["volume"] <= 0, "timestamp"].iloc[0]
-        raise ValueError(f"Zero or negative volume detected at {first}")
-    if (df["num_trades"] <= 0).any():
-        first = df.loc[df["num_trades"] <= 0, "timestamp"].iloc[0]
-        raise ValueError(f"Zero or negative num_trades detected at {first}")
     if require_taker_nonzero and df["taker_buy_base_vol"].abs().sum() == 0:
         raise ValueError("taker_buy_base_vol is all zero; this is not usable full-kline data")
     if (df["taker_buy_base_vol"] < 0).any() or (df["taker_buy_base_vol"] > df["volume"]).any():
@@ -53,4 +60,5 @@ def validate_full_kline_frame(
     if (df["taker_buy_quote_vol"] < 0).any() or (df["taker_buy_quote_vol"] > df["quote_volume"]).any():
         raise ValueError("taker_buy_quote_vol must be within [0, quote_volume]")
 
+    df.attrs["dropped_zero_volume_rows"] = dropped_zero_volume_rows
     return df

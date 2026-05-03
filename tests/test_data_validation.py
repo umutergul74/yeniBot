@@ -33,6 +33,20 @@ def test_full_kline_validation_accepts_microstructure_columns(synthetic_klines) 
     assert validated["taker_buy_base_vol"].sum() > 0
 
 
+def test_full_kline_validation_can_drop_zero_volume_rows(synthetic_klines) -> None:
+    frame = synthetic_klines(6, "1h")
+    frame.loc[2, ["volume", "quote_volume", "num_trades", "taker_buy_base_vol", "taker_buy_quote_vol"]] = 0
+
+    with pytest.raises(ValueError, match="Zero or negative volume/trade activity"):
+        validate_full_kline_frame(frame, "1h")
+
+    validated = validate_full_kline_frame(frame, "1h", zero_volume_policy="drop")
+
+    assert len(validated) == 5
+    assert validated.attrs["dropped_zero_volume_rows"] == 1
+    assert pd.Timestamp("2022-01-01 02:00", tz="UTC") not in set(validated["timestamp"])
+
+
 def test_download_full_klines_falls_back_to_vision_on_451() -> None:
     session = _FakeSession()
     df = download_full_klines(
