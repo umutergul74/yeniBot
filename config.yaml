@@ -26,6 +26,8 @@ binance:
   zero_volume_policy: drop
 
 features:
+  exclude_columns: []
+  exclude_patterns: []
   warmup_rows: 300
   wavelet:
     enabled: true

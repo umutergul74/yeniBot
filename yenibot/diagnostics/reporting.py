@@ -9,8 +9,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_recall_curve
+from scipy.stats import ks_2samp
 
 from yenibot.diagnostics.metrics import classification_metrics, rank_ic
+from yenibot.features.builder import LABEL_COLUMNS, METADATA_COLUMNS, RAW_COLUMNS
 
 
 def fold_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -87,6 +90,143 @@ def good_bad_fold_summary(fold_metrics: pd.DataFrame, *, good_ic: float = 0.10, 
     }
 
 
+def threshold_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    threshold_source: str = "val",
+) -> pd.DataFrame:
+    """Report whether bad F1 is mostly a threshold/calibration problem."""
+
+    rows = []
+    has_splits = "split" in predictions.columns
+    for fold, fold_part in predictions.groupby("fold"):
+        if has_splits and threshold_source == "val":
+            source = fold_part[fold_part["split"] == "val"]
+            target = fold_part[fold_part["split"] == "test"]
+            source_name = "val"
+        else:
+            source = fold_part
+            target = fold_part
+            source_name = "same_split_oracle"
+        if source.empty or target.empty:
+            continue
+
+        source_best = best_f1_threshold(source["label"], source[score_column])
+        target_at_source = _metrics_at_threshold(target["label"], target[score_column], source_best["threshold"])
+        target_oracle = best_f1_threshold(target["label"], target[score_column])
+        rows.append(
+            {
+                "fold": int(fold),
+                "threshold_source": source_name,
+                "selected_threshold": source_best["threshold"],
+                "source_best_f1": source_best["f1"],
+                "test_f1_at_selected_threshold": target_at_source["f1"],
+                "test_precision_at_selected_threshold": target_at_source["precision"],
+                "test_recall_at_selected_threshold": target_at_source["recall"],
+                "test_pred_long_rate_at_selected_threshold": target_at_source["pred_long_rate"],
+                "test_oracle_best_threshold": target_oracle["threshold"],
+                "test_oracle_best_f1": target_oracle["f1"],
+                "test_f1_at_050": _metrics_at_threshold(target["label"], target[score_column], 0.5)["f1"],
+            }
+        )
+    return pd.DataFrame(rows).sort_values("fold").reset_index(drop=True)
+
+
+def best_f1_threshold(labels: pd.Series, scores: pd.Series) -> dict[str, float]:
+    y_true = labels.astype(int).to_numpy()
+    y_score = scores.astype(float).to_numpy()
+    if len(np.unique(y_true)) < 2 or len(np.unique(y_score)) < 2:
+        threshold = float(np.median(y_score)) if len(y_score) else 0.5
+        return {"threshold": threshold, **_metrics_at_threshold(labels, scores, threshold)}
+
+    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
+    f1 = 2.0 * precision * recall / np.maximum(precision + recall, 1e-12)
+    best_idx = int(np.nanargmax(f1))
+    threshold = float(thresholds[best_idx]) if best_idx < len(thresholds) else 1.0
+    return {"threshold": threshold, "f1": float(f1[best_idx]), "precision": float(precision[best_idx]), "recall": float(recall[best_idx]), "pred_long_rate": float((y_score >= threshold).mean())}
+
+
+def mtf_leakage_diagnostics(predictions: pd.DataFrame, *, htf_hours: int = 4) -> pd.DataFrame:
+    required = {"timestamp", "4h_source_timestamp", "4h_available_timestamp"}
+    if not required.issubset(predictions.columns):
+        missing = sorted(required - set(predictions.columns))
+        return pd.DataFrame([{"check": "mtf_alignment", "passed": False, "detail": f"missing columns: {missing}"}])
+
+    timestamp = pd.to_datetime(predictions["timestamp"], utc=True)
+    source = pd.to_datetime(predictions["4h_source_timestamp"], utc=True)
+    available = pd.to_datetime(predictions["4h_available_timestamp"], utc=True)
+    expected_available = source + pd.Timedelta(hours=htf_hours)
+    availability_violations = int((available > timestamp).sum())
+    shift_violations = int((available != expected_available).sum())
+    rows = [
+        {
+            "check": "4h_available_lte_primary_timestamp",
+            "passed": availability_violations == 0,
+            "violations": availability_violations,
+            "detail": "4H feature availability must never be after the 1H row timestamp.",
+        },
+        {
+            "check": "4h_source_plus_period_equals_available",
+            "passed": shift_violations == 0,
+            "violations": shift_violations,
+            "detail": f"4H source timestamps must be shifted forward by {htf_hours} hours.",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def good_bad_feature_audit(
+    predictions: pd.DataFrame,
+    fold_metrics: pd.DataFrame,
+    *,
+    good_ic: float = 0.10,
+    bad_ic: float = -0.08,
+    top_n: int = 30,
+) -> pd.DataFrame:
+    summary = good_bad_fold_summary(fold_metrics, good_ic=good_ic, bad_ic=bad_ic)
+    good_folds = set(summary["good_folds"])
+    bad_folds = set(summary["bad_folds"])
+    if not good_folds or not bad_folds:
+        return pd.DataFrame()
+
+    good = predictions[predictions["fold"].isin(good_folds)]
+    bad = predictions[predictions["fold"].isin(bad_folds)]
+    rows = []
+    for column in _diagnostic_feature_columns(predictions):
+        good_values = good[column].replace([np.inf, -np.inf], np.nan).dropna()
+        bad_values = bad[column].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(good_values) < 3 or len(bad_values) < 3:
+            continue
+        pooled_std = float(pd.concat([good_values, bad_values]).std(ddof=0))
+        mean_diff = float(good_values.mean() - bad_values.mean())
+        rows.append(
+            {
+                "feature": column,
+                "good_mean": float(good_values.mean()),
+                "bad_mean": float(bad_values.mean()),
+                "mean_diff_good_minus_bad": mean_diff,
+                "abs_standardized_diff": abs(mean_diff) / pooled_std if pooled_std > 0 else 0.0,
+                "ks_stat": float(ks_2samp(good_values, bad_values).statistic),
+                "good_folds": ",".join(map(str, sorted(good_folds))),
+                "bad_folds": ",".join(map(str, sorted(bad_folds))),
+            }
+        )
+    columns = [
+        "feature",
+        "good_mean",
+        "bad_mean",
+        "mean_diff_good_minus_bad",
+        "abs_standardized_diff",
+        "ks_stat",
+        "good_folds",
+        "bad_folds",
+    ]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(["ks_stat", "abs_standardized_diff"], ascending=False).head(top_n).reset_index(drop=True)
+
+
 def write_phase1_diagnostic_bundle(
     *,
     output_dir: str | Path,
@@ -97,6 +237,12 @@ def write_phase1_diagnostic_bundle(
     regime_metrics: pd.DataFrame | None = None,
     importance: pd.DataFrame | None = None,
     tsne: pd.DataFrame | None = None,
+    calibrated_report: dict[str, Any] | None = None,
+    calibrated_calibration: pd.DataFrame | None = None,
+    calibrated_predictions: pd.DataFrame | None = None,
+    threshold_metrics: pd.DataFrame | None = None,
+    mtf_leakage: pd.DataFrame | None = None,
+    feature_audit: pd.DataFrame | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
 ) -> Path:
@@ -130,6 +276,21 @@ def write_phase1_diagnostic_bundle(
         importance.to_csv(bundle_dir / "permutation_importance.csv", index=False)
     if tsne is not None and not tsne.empty:
         tsne.to_parquet(bundle_dir / "tsne_embeddings.parquet", index=False)
+    if calibrated_report is not None:
+        (bundle_dir / "calibrated_phase1_report.json").write_text(
+            json.dumps(_json_safe(calibrated_report), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if calibrated_calibration is not None and not calibrated_calibration.empty:
+        calibrated_calibration.to_csv(bundle_dir / "calibrated_calibration.csv", index=False)
+    if calibrated_predictions is not None and not calibrated_predictions.empty:
+        calibrated_predictions.to_parquet(bundle_dir / "calibrated_test_predictions.parquet", index=False)
+    if threshold_metrics is not None and not threshold_metrics.empty:
+        threshold_metrics.to_csv(bundle_dir / "threshold_metrics.csv", index=False)
+    if mtf_leakage is not None and not mtf_leakage.empty:
+        mtf_leakage.to_csv(bundle_dir / "mtf_leakage.csv", index=False)
+    if feature_audit is not None and not feature_audit.empty:
+        feature_audit.to_csv(bundle_dir / "good_bad_feature_audit.csv", index=False)
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(
@@ -142,6 +303,44 @@ def write_phase1_diagnostic_bundle(
         for path in sorted(bundle_dir.rglob("*")):
             archive.write(path, path.relative_to(bundle_dir))
     return zip_path
+
+
+def _metrics_at_threshold(labels: pd.Series, scores: pd.Series, threshold: float) -> dict[str, float]:
+    y_true = labels.astype(int).to_numpy()
+    y_score = scores.astype(float).to_numpy()
+    y_pred = y_score >= threshold
+    tp = int(((y_true == 1) & y_pred).sum())
+    fp = int(((y_true == 0) & y_pred).sum())
+    fn = int(((y_true == 1) & ~y_pred).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "pred_long_rate": float(y_pred.mean()),
+    }
+
+
+def _diagnostic_feature_columns(frame: pd.DataFrame) -> list[str]:
+    excluded = RAW_COLUMNS | METADATA_COLUMNS | LABEL_COLUMNS
+    excluded |= {
+        "fold",
+        "source_row_position",
+        "forward_return",
+        "prob_long",
+        "prob_long_raw",
+        "prob_long_calibrated",
+    }
+    excluded_prefixes = ("regime_prob_", "pred_")
+    columns = []
+    for column in frame.columns:
+        if column in excluded or any(column.startswith(prefix) for prefix in excluded_prefixes):
+            continue
+        if pd.api.types.is_numeric_dtype(frame[column]):
+            columns.append(column)
+    return sorted(columns)
 
 
 def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str:

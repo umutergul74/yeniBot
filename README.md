@@ -49,3 +49,6 @@ Proceed only when diagnostics show:
 
 Notebook `05` writes a shareable diagnostics archive under `Drive/yeniBot/reports/`.
 Send that `phase1_diagnostics_*.zip` when a run needs review.
+The archive includes raw and validation-calibrated reports, threshold diagnostics,
+MTF alignment sentinels, regime metrics, good/bad fold feature audit tables, and
+selected-fold permutation importance.

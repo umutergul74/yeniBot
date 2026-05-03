@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from typing import Iterable
 
 import numpy as np
@@ -218,6 +219,21 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
     return sorted(columns)
 
 
+def filter_feature_columns(feature_columns: list[str], config: object) -> list[str]:
+    exclude_columns = set(_config_get(config, ["features", "exclude_columns"], []) or [])
+    exclude_patterns = list(_config_get(config, ["features", "exclude_patterns"], []) or [])
+    filtered = []
+    for column in feature_columns:
+        if column in exclude_columns:
+            continue
+        if any(fnmatch(column, pattern) for pattern in exclude_patterns):
+            continue
+        filtered.append(column)
+    if not filtered:
+        raise ValueError("Feature filtering removed every feature column")
+    return filtered
+
+
 def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, config: object) -> FeatureResult:
     """Build 1H features plus correctly delayed 4H features."""
 
@@ -250,4 +266,4 @@ def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, c
     if merged[feature_columns].isna().any().any():
         bad = merged[feature_columns].columns[merged[feature_columns].isna().any()].tolist()
         raise ValueError(f"Feature matrix contains NaNs after warmup/fill: {bad}")
-    return FeatureResult(merged, feature_columns)
+    return FeatureResult(merged, filter_feature_columns(feature_columns, config))

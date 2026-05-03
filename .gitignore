@@ -17,3 +17,16 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+reports/
+phase1_diagnostics_*/
+calibration.csv
+calibrated_calibration.csv
+calibrated_test_predictions.parquet
+fold_metrics.csv
+good_bad_feature_audit.csv
+permutation_importance.csv
+regime_metrics.csv
+summary.md
+test_predictions.parquet
+threshold_metrics.csv
+tsne_embeddings.parquet

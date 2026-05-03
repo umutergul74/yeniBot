@@ -6,9 +6,13 @@ import zipfile
 import pandas as pd
 
 from yenibot.diagnostics import (
+    calibrate_test_probabilities_from_val,
     calibration_table,
     fold_diagnostics,
+    good_bad_feature_audit,
+    mtf_leakage_diagnostics,
     regime_diagnostics,
+    threshold_diagnostics,
     write_phase1_diagnostic_bundle,
 )
 
@@ -24,6 +28,10 @@ def _predictions() -> pd.DataFrame:
             "regime_prob_0": [0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1, 0.1, 0.2, 0.2, 0.3, 0.4],
             "regime_prob_1": [0.1, 0.2, 0.3, 0.5, 0.6, 0.7, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3],
             "regime_prob_2": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.3],
+            "4h_source_timestamp": pd.date_range("2021-12-31 20:00", periods=12, freq="1h", tz="UTC"),
+            "4h_available_timestamp": pd.date_range("2022-01-01", periods=12, freq="1h", tz="UTC"),
+            "true_cvd_zscore": [-1.0, 0.5, -0.8, 0.8, -0.5, 1.0, -0.3, -0.2, 0.4, 1.2, -0.9, 0.7],
+            "4h_true_cvd_zscore": [-0.5, 0.4, -0.4, 0.7, -0.2, 0.8, -0.1, -0.2, 0.2, 0.9, -0.6, 0.5],
         }
     )
 
@@ -73,3 +81,46 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "regime_metrics.csv" in names
         payload = json.loads(archive.read("phase1_report.json"))
         assert payload["passed"] is False
+
+
+def test_calibration_threshold_and_leakage_diagnostics() -> None:
+    predictions = pd.concat(
+        [
+            _predictions().assign(split="val"),
+            _predictions().assign(split="test"),
+        ],
+        ignore_index=True,
+    )
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "max_rank_ic_std": 0.03,
+            "min_positive_ic_fraction": 0.75,
+            "min_long_f1": 0.45,
+            "suspicious_rank_ic": 0.10,
+            "random_like_rank_ic": 0.01,
+            "calibration_bins": 4,
+        }
+    }
+
+    calibrated, report, calibrated_table = calibrate_test_probabilities_from_val(predictions, config)
+    thresholds = threshold_diagnostics(predictions)
+    leakage = mtf_leakage_diagnostics(predictions[predictions["split"] == "test"])
+
+    assert "prob_long_calibrated" in calibrated.columns
+    assert "mean_rank_ic" in report
+    assert len(calibrated_table) == 4
+    assert {"selected_threshold", "test_oracle_best_f1"}.issubset(thresholds.columns)
+    assert leakage["passed"].all()
+
+
+def test_good_bad_feature_audit_returns_ranked_feature_differences() -> None:
+    predictions = _predictions()
+    fold_metrics = fold_diagnostics(predictions)
+    fold_metrics.loc[fold_metrics["fold"] == 0, "rank_ic"] = 0.20
+    fold_metrics.loc[fold_metrics["fold"] == 1, "rank_ic"] = -0.20
+
+    audit = good_bad_feature_audit(predictions, fold_metrics, top_n=5)
+
+    assert not audit.empty
+    assert {"feature", "ks_stat", "abs_standardized_diff"}.issubset(audit.columns)

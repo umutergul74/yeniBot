@@ -12,7 +12,7 @@ from sklearn.preprocessing import RobustScaler
 from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
-from yenibot.features.builder import select_feature_columns
+from yenibot.features.builder import filter_feature_columns, select_feature_columns
 from yenibot.losses import FocalLossWithLogits, RankICLoss
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
@@ -281,6 +281,7 @@ def run_walk_forward_training(
 ) -> dict[str, Any]:
     if feature_columns is None:
         feature_columns = select_feature_columns(frame)
+    feature_columns = filter_feature_columns(feature_columns, config)
     cv_cfg = _cfg(config, ["walk_forward"], {})
     cv = PurgedWalkForwardCV(
         train_bars=int(_cfg(cv_cfg, ["train_bars"], 5040)),
