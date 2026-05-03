@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import random
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,29 @@ def _device(device: str | torch.device | None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def set_random_seed(seed: int, *, deterministic: bool = False) -> None:
+    """Seed Python, NumPy, and Torch for repeatable fold training."""
+
+    os.environ.setdefault("PYTHONHASHSEED", str(seed))
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = deterministic
+    torch.use_deterministic_algorithms(deterministic, warn_only=True)
+
+
+def _base_seed(config: Any) -> int:
+    return int(_cfg(config, ["project", "random_seed"], 42))
+
+
+def _deterministic(config: Any) -> bool:
+    return bool(_cfg(config, ["project", "deterministic"], False))
 
 
 def _build_model(n_features: int, config: Any) -> HybridEncoder:
@@ -100,7 +125,7 @@ def _predict_dataset(
     return rows
 
 
-def _fit_hmm(train_part: pd.DataFrame, config: Any) -> OnlineGaussianHMM:
+def _fit_hmm(train_part: pd.DataFrame, config: Any, *, random_state: int | None = None) -> OnlineGaussianHMM:
     hmm_cfg = _cfg(config, ["hmm"], {})
     hmm_features = list(_cfg(hmm_cfg, ["features"], []))
     missing = [column for column in hmm_features if column not in train_part.columns]
@@ -110,7 +135,7 @@ def _fit_hmm(train_part: pd.DataFrame, config: Any) -> OnlineGaussianHMM:
         n_states=int(_cfg(hmm_cfg, ["n_states"], 3)),
         covariance_type=str(_cfg(hmm_cfg, ["covariance_type"], "full")),
         n_iter=int(_cfg(hmm_cfg, ["n_iter"], 200)),
-        random_state=int(_cfg(hmm_cfg, ["random_state"], 42)),
+        random_state=int(random_state if random_state is not None else _cfg(hmm_cfg, ["random_state"], 42)),
         gamma_floor=float(_cfg(hmm_cfg, ["gamma_floor"], 0.02)),
         state_weight_floor=float(_cfg(hmm_cfg, ["state_weight_floor"], 0.08)),
         n_ratio_alarm=float(_cfg(hmm_cfg, ["n_ratio_alarm"], 15.0)),
@@ -148,6 +173,8 @@ def train_one_fold(
     """Train one purged walk-forward fold and return metrics plus predictions."""
 
     torch_device = _device(device)
+    fold_seed = _base_seed(config) + int(fold.fold)
+    set_random_seed(fold_seed, deterministic=_deterministic(config))
     train_part = frame.iloc[fold.train].copy().reset_index(drop=True)
     val_part = frame.iloc[fold.val].copy().reset_index(drop=True)
     test_part = frame.iloc[fold.test].copy().reset_index(drop=True)
@@ -157,7 +184,7 @@ def train_one_fold(
     for part in (train_part, val_part, test_part):
         part.loc[:, feature_columns] = scaler.transform(part[feature_columns])
 
-    hmm = _fit_hmm(train_part, config)
+    hmm = _fit_hmm(train_part, config, random_state=fold_seed)
     val_part = _add_regime_probs(val_part, hmm, config)
     test_part = _add_regime_probs(test_part, hmm, config)
 
@@ -189,6 +216,7 @@ def train_one_fold(
         batch_size=int(_cfg(train_cfg, ["batch_size"], 256)),
         shuffle=True,
         drop_last=False,
+        generator=torch.Generator().manual_seed(fold_seed),
     )
 
     best_rank_ic = -np.inf
@@ -252,6 +280,8 @@ def train_one_fold(
                 "model_state_dict": model.state_dict(),
                 "feature_columns": feature_columns,
                 "config_model": _cfg(config, ["model"], {}),
+                "random_seed": fold_seed,
+                "deterministic": _deterministic(config),
             },
             output_dir / f"model_fold_{fold.fold:03d}.pt",
         )
@@ -279,6 +309,7 @@ def run_walk_forward_training(
     max_folds: int | None = None,
     device: str | torch.device | None = None,
 ) -> dict[str, Any]:
+    set_random_seed(_base_seed(config), deterministic=_deterministic(config))
     if feature_columns is None:
         feature_columns = select_feature_columns(frame)
     feature_columns = filter_feature_columns(feature_columns, config)

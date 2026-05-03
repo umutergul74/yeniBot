@@ -210,13 +210,13 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
     df["vwap_dist_atr"] = (df["close"] - rolling_vwap) / df["atr_14"].replace(0, np.nan)
 
     if stationarity_enabled:
-        _add_stationary_features(df, stationarity_window)
+        _add_stationary_features(df, config, stationarity_window)
 
     feature_columns = select_feature_columns(df)
     return FeatureResult(df, feature_columns)
 
 
-def _add_stationary_features(df: pd.DataFrame, window: int) -> None:
+def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> None:
     if window <= 1:
         raise ValueError("features.stationarity.normalization_window must be greater than 1")
 
@@ -232,6 +232,53 @@ def _add_stationary_features(df: pd.DataFrame, window: int) -> None:
     if "volume_denoised" in df.columns:
         volume_denoised = df["volume_denoised"].clip(lower=0)
         df["volume_denoised_log_zscore"] = _rolling_zscore(np.log1p(volume_denoised), window)
+
+    _add_order_flow_v2_features(df, config, window)
+
+
+def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window: int) -> None:
+    cfg = _config_get(config, ["features", "order_flow_v2"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        return
+
+    ratio_window = int(_config_get(cfg, ["ratio_zscore_window"], default_window))
+    ratio_delta_periods = int(_config_get(cfg, ["ratio_delta_periods"], 1))
+    slope_window = int(_config_get(cfg, ["imbalance_slope_window"], 24))
+    pressure_windows = list(_config_get(cfg, ["pressure_windows"], [3, 6, 12, 24]) or [])
+    efficiency_epsilon = float(_config_get(cfg, ["efficiency_epsilon"], 1e-3))
+
+    taker_imbalance = (df["taker_buy_ratio"] - df["taker_sell_ratio"]).clip(-1.0, 1.0)
+    large_trade_intensity = (df["vpt_zscore"] - df["vpt_zscore"].rolling(default_window, min_periods=default_window).median()).clip(lower=0.0)
+    signed_large_trade_pressure = large_trade_intensity * taker_imbalance
+    normalized_return = _safe_divide(
+        df["log_return"],
+        df["realized_vol_14"].replace(0, np.nan),
+        default=0.0,
+    ).clip(-10.0, 10.0)
+    abs_cvd_pressure = df["true_cvd_delta_norm"].abs()
+
+    df["taker_imbalance"] = taker_imbalance
+    df["taker_buy_ratio_zscore"] = _rolling_zscore(df["taker_buy_ratio"], ratio_window)
+    df["taker_buy_ratio_delta"] = df["taker_buy_ratio"].diff(ratio_delta_periods)
+    df["taker_imbalance_slope"] = _rolling_slope(taker_imbalance, slope_window)
+    df["signed_large_trade_pressure"] = signed_large_trade_pressure
+    df["orderflow_efficiency"] = _safe_divide(
+        normalized_return,
+        abs_cvd_pressure + efficiency_epsilon,
+        default=0.0,
+    ).clip(-10.0, 10.0)
+    df["absorption_pressure"] = (-normalized_return * taker_imbalance).clip(-10.0, 10.0)
+    df["cvd_price_divergence"] = (df["true_cvd_delta_norm"] - normalized_return).clip(-10.0, 10.0)
+
+    for item in pressure_windows:
+        window = int(item)
+        if window <= 1:
+            raise ValueError("features.order_flow_v2.pressure_windows values must be greater than 1")
+        df[f"taker_imbalance_mean_{window}"] = taker_imbalance.rolling(window, min_periods=window).mean()
+        df[f"cvd_pressure_{window}"] = df["true_cvd_delta_norm"].rolling(window, min_periods=window).sum()
+        df[f"large_trade_pressure_{window}"] = signed_large_trade_pressure.rolling(window, min_periods=window).mean()
+        df[f"absorption_pressure_{window}"] = df["absorption_pressure"].rolling(window, min_periods=window).mean()
+        df[f"cvd_price_divergence_{window}"] = df["cvd_price_divergence"].rolling(window, min_periods=window).mean()
 
 
 def select_feature_columns(frame: pd.DataFrame) -> list[str]:

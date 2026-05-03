@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 
 from yenibot.features import build_feature_matrix
@@ -33,3 +35,26 @@ def test_small_pipeline_runs_one_training_step(synthetic_klines, tiny_config, tm
     assert (tmp_path / "model_fold_000.pt").exists()
     assert (tmp_path / "hmm_fold_000.pkl").exists()
     assert (tmp_path / "predictions_fold_000.parquet").exists()
+
+
+def test_train_one_fold_repeats_with_same_seed_on_cpu(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["project"] = {"random_seed": 123, "deterministic": True}
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    first = train_one_fold(frame, fold, features.feature_columns, config, device="cpu")
+    second = train_one_fold(frame, fold, features.feature_columns, config, device="cpu")
+
+    np.testing.assert_allclose(
+        first["predictions"]["prob_long"].to_numpy(),
+        second["predictions"]["prob_long"].to_numpy(),
+        rtol=1e-6,
+        atol=1e-6,
+    )

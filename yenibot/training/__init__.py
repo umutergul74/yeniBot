@@ -1,7 +1,7 @@
 """Training utilities."""
 
 from yenibot.training.dataset import SequenceDataset
-from yenibot.training.trainer import run_walk_forward_training, train_one_fold
+from yenibot.training.trainer import run_walk_forward_training, set_random_seed, train_one_fold
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
 
 __all__ = [
@@ -9,5 +9,6 @@ __all__ = [
     "FoldIndices",
     "PurgedWalkForwardCV",
     "run_walk_forward_training",
+    "set_random_seed",
     "train_one_fold",
 ]

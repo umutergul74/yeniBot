@@ -134,6 +134,39 @@ def threshold_diagnostics(
     return pd.DataFrame(rows).sort_values("fold").reset_index(drop=True)
 
 
+def threshold_summary_diagnostics(threshold_metrics: pd.DataFrame) -> pd.DataFrame:
+    if threshold_metrics.empty:
+        return pd.DataFrame()
+    columns = [
+        "selected_threshold",
+        "source_best_f1",
+        "test_f1_at_selected_threshold",
+        "test_precision_at_selected_threshold",
+        "test_recall_at_selected_threshold",
+        "test_pred_long_rate_at_selected_threshold",
+        "test_oracle_best_f1",
+        "test_f1_at_050",
+    ]
+    rows = []
+    for column in columns:
+        if column not in threshold_metrics.columns:
+            continue
+        values = threshold_metrics[column].replace([np.inf, -np.inf], np.nan).dropna()
+        rows.append(
+            {
+                "metric": column,
+                "mean": float(values.mean()),
+                "std": float(values.std(ddof=0)),
+                "min": float(values.min()),
+                "p25": float(values.quantile(0.25)),
+                "median": float(values.median()),
+                "p75": float(values.quantile(0.75)),
+                "max": float(values.max()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def best_f1_threshold(labels: pd.Series, scores: pd.Series) -> dict[str, float]:
     y_true = labels.astype(int).to_numpy()
     y_score = scores.astype(float).to_numpy()
@@ -146,6 +179,40 @@ def best_f1_threshold(labels: pd.Series, scores: pd.Series) -> dict[str, float]:
     best_idx = int(np.nanargmax(f1))
     threshold = float(thresholds[best_idx]) if best_idx < len(thresholds) else 1.0
     return {"threshold": threshold, "f1": float(f1[best_idx]), "precision": float(precision[best_idx]), "recall": float(recall[best_idx]), "pred_long_rate": float((y_score >= threshold).mean())}
+
+
+def score_lift_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    bins: int = 10,
+) -> pd.DataFrame:
+    required = {"label", score_column}
+    if not required.issubset(predictions.columns):
+        return pd.DataFrame()
+
+    frame = predictions.copy().replace([np.inf, -np.inf], np.nan).dropna(subset=["label", score_column])
+    if frame.empty:
+        return pd.DataFrame()
+    frame["score_bin"] = pd.qcut(
+        frame[score_column].rank(method="first"),
+        q=min(bins, len(frame)),
+        labels=False,
+        duplicates="drop",
+    )
+    base_long_rate = float(frame["label"].mean())
+    grouped = frame.groupby("score_bin", observed=True).agg(
+        count=("label", "size"),
+        mean_prob_long=(score_column, "mean"),
+        actual_long_rate=("label", "mean"),
+    )
+    if "forward_return" in frame.columns:
+        grouped["mean_forward_return"] = frame.groupby("score_bin", observed=True)["forward_return"].mean()
+    grouped = grouped.reset_index()
+    grouped["base_long_rate"] = base_long_rate
+    grouped["lift_vs_base"] = grouped["actual_long_rate"] / base_long_rate if base_long_rate > 0 else np.nan
+    grouped["is_top_bin"] = grouped["score_bin"] == grouped["score_bin"].max()
+    return grouped
 
 
 def mtf_leakage_diagnostics(predictions: pd.DataFrame, *, htf_hours: int = 4) -> pd.DataFrame:
@@ -218,6 +285,10 @@ def stationarity_policy_diagnostics(feature_columns: list[str], config: dict[str
     return pd.DataFrame(rows, columns=["check", "pattern", "passed", "matched_count", "matched_features"])
 
 
+def model_feature_columns_frame(feature_columns: list[str]) -> pd.DataFrame:
+    return pd.DataFrame({"position": range(len(feature_columns)), "feature": list(feature_columns)})
+
+
 def good_bad_feature_audit(
     predictions: pd.DataFrame,
     fold_metrics: pd.DataFrame,
@@ -283,9 +354,12 @@ def write_phase1_diagnostic_bundle(
     calibrated_calibration: pd.DataFrame | None = None,
     calibrated_predictions: pd.DataFrame | None = None,
     threshold_metrics: pd.DataFrame | None = None,
+    threshold_summary: pd.DataFrame | None = None,
     mtf_leakage: pd.DataFrame | None = None,
     feature_audit: pd.DataFrame | None = None,
     stationarity_policy: pd.DataFrame | None = None,
+    score_lift: pd.DataFrame | None = None,
+    model_feature_columns: list[str] | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
 ) -> Path:
@@ -313,6 +387,10 @@ def write_phase1_diagnostic_bundle(
     predictions.to_parquet(bundle_dir / "test_predictions.parquet", index=False)
     calibration.to_csv(bundle_dir / "calibration.csv", index=False)
     fold_metrics.to_csv(bundle_dir / "fold_metrics.csv", index=False)
+    if model_feature_columns is not None:
+        model_feature_columns_frame(model_feature_columns).to_csv(bundle_dir / "model_feature_columns.csv", index=False)
+        if stationarity_policy is None:
+            stationarity_policy = stationarity_policy_diagnostics(model_feature_columns, config)
     if regime_metrics is not None and not regime_metrics.empty:
         regime_metrics.to_csv(bundle_dir / "regime_metrics.csv", index=False)
     if importance is not None and not importance.empty:
@@ -330,12 +408,21 @@ def write_phase1_diagnostic_bundle(
         calibrated_predictions.to_parquet(bundle_dir / "calibrated_test_predictions.parquet", index=False)
     if threshold_metrics is not None and not threshold_metrics.empty:
         threshold_metrics.to_csv(bundle_dir / "threshold_metrics.csv", index=False)
+        if threshold_summary is None:
+            threshold_summary = threshold_summary_diagnostics(threshold_metrics)
+    if threshold_summary is not None and not threshold_summary.empty:
+        threshold_summary.to_csv(bundle_dir / "threshold_summary.csv", index=False)
     if mtf_leakage is not None and not mtf_leakage.empty:
         mtf_leakage.to_csv(bundle_dir / "mtf_leakage.csv", index=False)
     if feature_audit is not None and not feature_audit.empty:
         feature_audit.to_csv(bundle_dir / "good_bad_feature_audit.csv", index=False)
     if stationarity_policy is not None and not stationarity_policy.empty:
         stationarity_policy.to_csv(bundle_dir / "stationarity_policy.csv", index=False)
+    if score_lift is None and config is not None:
+        bins = int(_config_get(config, ["validation", "calibration_bins"], 10))
+        score_lift = score_lift_diagnostics(predictions, bins=bins)
+    if score_lift is not None and not score_lift.empty:
+        score_lift.to_csv(bundle_dir / "score_lift.csv", index=False)
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(

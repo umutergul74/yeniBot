@@ -11,6 +11,7 @@ The project intentionally stops at validated model research. It does not include
 - Config-controlled dropping of rare zero-volume/no-trade archive bars before feature generation.
 - Bias-safe microstructure feature engineering.
 - Stationary transforms for price/volume/order-flow scale features, with raw level columns excluded from model inputs by config.
+- Continuous order-flow v2 features for taker imbalance, CVD pressure, large-trade pressure, absorption, and price-flow divergence.
 - Correct 4H-to-1H alignment by shifting 4H bars forward before merge.
 - Long-only binary triple-barrier labels.
 - Binary TCN+GRU sequence model with focal and rank-correlation losses.
@@ -51,6 +52,6 @@ Proceed only when diagnostics show:
 Notebook `05` writes a shareable diagnostics archive under `Drive/yeniBot/reports/`.
 Send that `phase1_diagnostics_*.zip` when a run needs review.
 The archive includes raw and validation-calibrated reports, threshold diagnostics,
-MTF alignment sentinels, regime metrics, good/bad fold feature audit tables, and
-selected-fold permutation importance. New runs also include a stationarity policy
-check showing whether raw level/scale features leaked into the saved model input list.
+threshold summaries, score-lift tables, MTF alignment sentinels, regime metrics,
+model feature columns, stationarity policy checks, good/bad fold feature audit
+tables, and selected-fold permutation importance.

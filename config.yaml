@@ -3,6 +3,7 @@ project:
   package: yenibot
   phase: 1
   random_seed: 42
+  deterministic: true
 
 paths:
   drive_base: /content/drive/MyDrive/yeniBot
@@ -50,6 +51,13 @@ features:
     cvd_zscore_window: 100
     cvd_rate_window: 100
     imbalance_ema_span: 14
+  order_flow_v2:
+    enabled: true
+    ratio_zscore_window: 100
+    ratio_delta_periods: 1
+    imbalance_slope_window: 24
+    pressure_windows: [3, 6, 12, 24]
+    efficiency_epsilon: 0.001
   whale:
     vpt_zscore_window: 100
     whale_zscore_threshold: 2.0
