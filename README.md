@@ -7,6 +7,7 @@ The project intentionally stops at validated model research. It does not include
 ## What This Builds
 
 - Binance USDT-M full-kline downloader for `BTCUSDT` 1H and 4H data.
+- Binance Vision fallback for Colab or other hosts that receive HTTP 451 from the REST API.
 - Bias-safe microstructure feature engineering.
 - Correct 4H-to-1H alignment by shifting 4H bars forward before merge.
 - Long-only binary triple-barrier labels.

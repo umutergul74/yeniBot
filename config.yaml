@@ -13,6 +13,8 @@ paths:
 
 binance:
   base_url: https://fapi.binance.com
+  vision_base_url: https://s3-ap-northeast-1.amazonaws.com/data.binance.vision
+  data_source: auto
   symbol: BTCUSDT
   primary_interval: 1h
   htf_interval: 4h
