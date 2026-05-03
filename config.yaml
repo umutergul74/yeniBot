@@ -1,0 +1,118 @@
+project:
+  name: yeniBot
+  package: yenibot
+  phase: 1
+  random_seed: 42
+
+paths:
+  drive_base: /content/drive/MyDrive/yeniBot
+  data_dir: /content/drive/MyDrive/yeniBot/data
+  checkpoint_dir: /content/drive/MyDrive/yeniBot/checkpoints
+  local_data_dir: data
+  local_checkpoint_dir: checkpoints
+
+binance:
+  base_url: https://fapi.binance.com
+  symbol: BTCUSDT
+  primary_interval: 1h
+  htf_interval: 4h
+  start_date: "2022-01-01"
+  end_date: null
+  limit: 1500
+  request_sleep_seconds: 0.15
+  max_gap_multiplier: 2
+
+features:
+  warmup_rows: 300
+  wavelet:
+    enabled: true
+    window: 256
+    wavelet: db4
+    level: 2
+    threshold_scale: 0.5
+  order_flow:
+    cvd_zscore_window: 100
+    cvd_rate_window: 100
+    imbalance_ema_span: 14
+  whale:
+    vpt_zscore_window: 100
+    whale_zscore_threshold: 2.0
+    whale_buy_ratio: 0.55
+    whale_sell_ratio: 0.45
+    large_trade_window: 100
+  structure:
+    realized_vol_window: 14
+    gk_vol_window: 14
+    atr_period: 14
+    adx_period: 14
+    vwap_window: 24
+  mtf:
+    shift_hours: 4
+
+labeling:
+  tp_multiplier: 2.0
+  sl_multiplier: 5.0
+  max_holding_bars: 10
+  atr_column: atr_14
+  min_long_forward_return: 0.003
+  max_not_long_forward_return: 0.001
+  min_long_pct: 0.20
+  max_long_pct: 0.50
+
+model:
+  seq_len: 64
+  tcn_channels: 64
+  tcn_kernel_size: 3
+  tcn_dilations: [1, 2, 4, 8, 16]
+  gru_hidden: 128
+  gru_layers: 2
+  dropout: 0.2
+  fusion_hidden: 128
+
+training:
+  batch_size: 256
+  epochs: 100
+  early_stop_patience: 15
+  optimizer:
+    lr: 0.001
+    weight_decay: 0.0001
+  scheduler:
+    T_0: 10
+    T_mult: 2
+  grad_clip: 1.0
+  loss:
+    focal_gamma: 2.0
+    focal_alpha: 0.6
+    rank_ic_weight: 0.2
+
+walk_forward:
+  train_bars: 5040
+  val_bars: 1080
+  test_bars: 720
+  step_bars: 720
+  purge_bars: 24
+  embargo_bars: 6
+
+hmm:
+  n_states: 3
+  covariance_type: full
+  n_iter: 200
+  random_state: 42
+  gamma_floor: 0.02
+  state_weight_floor: 0.08
+  n_ratio_alarm: 15.0
+  features:
+    - log_return
+    - gk_vol_14
+    - adx_14
+    - true_cvd_zscore
+    - vwap_dist_atr
+
+validation:
+  target_rank_ic: 0.03
+  max_rank_ic_std: 0.03
+  min_positive_ic_fraction: 0.75
+  min_long_f1: 0.45
+  suspicious_rank_ic: 0.10
+  random_like_rank_ic: 0.01
+  calibration_bins: 10
