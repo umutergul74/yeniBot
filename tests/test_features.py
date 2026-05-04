@@ -57,6 +57,47 @@ def test_stationary_features_are_causal_when_future_rows_appended(synthetic_klin
     pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
 
 
+def test_structure_stability_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["structure_stability"] = {
+        "enabled": True,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
+        "source_columns": [
+            "log_return",
+            "realized_vol_14",
+            "gk_vol_14",
+            "atr_14_pct",
+            "adx_14",
+            "vwap_dist_atr",
+            "volume_log_zscore",
+        ],
+    }
+    primary = synthetic_klines(112, "1h")
+    htf = synthetic_klines(34, "4h")
+    extended_primary = synthetic_klines(128, "1h")
+    extended_htf = synthetic_klines(38, "4h")
+
+    base = build_feature_matrix(primary, htf, config).frame
+    extended = build_feature_matrix(extended_primary, extended_htf, config).frame
+    timestamp = pd.Timestamp("2022-01-03 12:00", tz="UTC")
+    columns = [
+        "log_return_stable_zscore",
+        "gk_vol_14_stable_rank",
+        "atr_14_pct_stable_zscore",
+        "vwap_dist_atr_stable_rank",
+        "volume_log_zscore_stable_zscore",
+        "4h_gk_vol_14_stable_rank",
+        "4h_volume_log_zscore_stable_zscore",
+    ]
+
+    assert set(columns).issubset(base.columns)
+    base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
+    extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
+    pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
+
+
 def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["order_flow_v2"] = {

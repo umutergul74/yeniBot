@@ -222,6 +222,7 @@ def test_fold_lift_recent_and_feature_group_diagnostics() -> None:
         [
             "signed_large_trade_pressure_stable_zscore",
             "4h_cvd_pressure_3_stable_rank",
+            "4h_gk_vol_14_stable_rank",
             "gk_vol_14",
         ]
     )
@@ -240,7 +241,11 @@ def test_fold_lift_recent_and_feature_group_diagnostics() -> None:
 
     assert {"top_lift_vs_base", "bin_long_rate_spearman"}.issubset(lift_by_fold.columns)
     assert "recent_minus_all" in recent.columns
-    assert set(groups["family"]) == {"order_flow_v2_stable", "volatility_structure"}
+    assert set(groups["family"]) == {
+        "order_flow_v2_stable",
+        "volatility_structure",
+        "volatility_structure_stable",
+    }
     assert "mean_rank_ic_drop" in group_importance.columns
     assert "profile_include_pattern" in set(profile["check"])
 

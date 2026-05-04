@@ -576,6 +576,9 @@ def classify_feature_column(feature: str) -> tuple[str, str]:
     timeframe = "4h" if feature.startswith("4h_") else "1h"
     name = feature[3:] if timeframe == "4h" else feature
     if "_stable_" in name:
+        base_name = name.split("_stable_", 1)[0]
+        if any(token in base_name for token in ("log_return", "realized_vol", "gk_vol", "atr", "adx", "vwap", "denoised", "volume_log_zscore")):
+            return timeframe, "volatility_structure_stable"
         return timeframe, "order_flow_v2_stable"
     if any(token in name for token in ("orderflow_efficiency", "absorption_pressure", "cvd_price_divergence", "large_trade_pressure", "cvd_pressure")):
         return timeframe, "order_flow_v2_raw"

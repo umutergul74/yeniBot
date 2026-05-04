@@ -162,3 +162,63 @@ def test_filter_feature_columns_can_drop_inherited_4h_tier1_family() -> None:
         "4h_whale_buy_flag",
         "4h_gk_vol_14",
     ]
+
+
+def test_filter_feature_columns_can_replace_raw_structure_with_stable_structure() -> None:
+    columns = [
+        "taker_buy_ratio",
+        "true_cvd_zscore",
+        "gk_vol_14",
+        "gk_vol_14_stable_zscore",
+        "gk_vol_14_stable_rank",
+        "4h_gk_vol_14",
+        "4h_gk_vol_14_stable_zscore",
+        "4h_taker_imbalance_mean_6",
+        "4h_true_cvd_zscore",
+        "signed_large_trade_pressure_stable_zscore",
+    ]
+    config = {
+        "features": {
+            "active_profile": "baseline_plus_4h_bounded_whale_stable_structure",
+            "profiles": {
+                "baseline_40": {
+                    "include_patterns": [
+                        "*taker_buy_ratio",
+                        "*true_cvd_zscore",
+                        "*gk_vol_14",
+                    ],
+                    "exclude_patterns": [],
+                },
+                "baseline_plus_4h_bounded_whale": {
+                    "inherit": "baseline_40",
+                    "include_patterns": ["4h_taker_imbalance_mean_*"],
+                    "exclude_patterns": [],
+                },
+                "baseline_plus_4h_bounded_whale_no_4h_tier1": {
+                    "inherit": "baseline_plus_4h_bounded_whale",
+                    "exclude_patterns": ["4h_true_cvd_zscore"],
+                },
+                "baseline_plus_4h_bounded_whale_stable_structure": {
+                    "inherit": "baseline_plus_4h_bounded_whale_no_4h_tier1",
+                    "include_patterns": [
+                        "*gk_vol_14_stable_zscore",
+                        "*gk_vol_14_stable_rank",
+                    ],
+                    "exclude_patterns": [
+                        "4h_true_cvd_zscore",
+                        "*large_trade_pressure*",
+                        "*gk_vol_14",
+                    ],
+                },
+            },
+        }
+    }
+
+    assert filter_feature_columns(columns, config) == [
+        "taker_buy_ratio",
+        "true_cvd_zscore",
+        "gk_vol_14_stable_zscore",
+        "gk_vol_14_stable_rank",
+        "4h_gk_vol_14_stable_zscore",
+        "4h_taker_imbalance_mean_6",
+    ]

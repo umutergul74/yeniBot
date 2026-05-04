@@ -224,13 +224,13 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
     df["vwap_dist_atr"] = (df["close"] - rolling_vwap) / df["atr_14"].replace(0, np.nan)
 
     if stationarity_enabled:
-        _add_stationary_features(df, config, stationarity_window)
+        df = _add_stationary_features(df, config, stationarity_window)
 
     feature_columns = select_feature_columns(df)
     return FeatureResult(df, feature_columns)
 
 
-def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> None:
+def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> pd.DataFrame:
     if window <= 1:
         raise ValueError("features.stationarity.normalization_window must be greater than 1")
 
@@ -247,13 +247,54 @@ def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> N
         volume_denoised = df["volume_denoised"].clip(lower=0)
         df["volume_denoised_log_zscore"] = _rolling_zscore(np.log1p(volume_denoised), window)
 
-    _add_order_flow_v2_features(df, config, window)
+    df = _add_structure_stability_features(df, config, window)
+    return _add_order_flow_v2_features(df, config, window)
 
 
-def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window: int) -> None:
+def _add_structure_stability_features(df: pd.DataFrame, config: object, default_window: int) -> pd.DataFrame:
+    cfg = _config_get(config, ["features", "structure_stability"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        return df
+
+    stable_window = int(_config_get(cfg, ["stable_window"], default_window))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    source_columns = list(
+        _config_get(
+            cfg,
+            ["source_columns"],
+            [
+                "log_return",
+                "close_denoised_log_return",
+                "realized_vol_14",
+                "gk_vol_14",
+                "atr_14_pct",
+                "adx_14",
+                "vwap_dist_atr",
+                "volume_log_zscore",
+                "volume_denoised_log_zscore",
+            ],
+        )
+        or []
+    )
+    stable_scores = _stable_rolling_score_frame(
+        df,
+        [str(column) for column in source_columns],
+        stable_window,
+        stable_clip_abs,
+        stable_transforms,
+        error_context="features.structure_stability.stable_window",
+        missing_ok=True,
+    )
+    if stable_scores.empty:
+        return df
+    return pd.concat([df, stable_scores], axis=1)
+
+
+def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window: int) -> pd.DataFrame:
     cfg = _config_get(config, ["features", "order_flow_v2"], {})
     if not bool(_config_get(cfg, ["enabled"], False)):
-        return
+        return df
 
     ratio_window = int(_config_get(cfg, ["ratio_zscore_window"], default_window))
     ratio_delta_periods = int(_config_get(cfg, ["ratio_delta_periods"], 1))
@@ -286,18 +327,21 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
     ).clip(-10.0, 10.0)
     df["absorption_pressure"] = (-normalized_return * taker_imbalance).clip(-10.0, 10.0)
     df["cvd_price_divergence"] = (df["true_cvd_delta_norm"] - normalized_return).clip(-10.0, 10.0)
-    _add_stable_order_flow_scores(
-        df,
-        [
-            "signed_large_trade_pressure",
-            "orderflow_efficiency",
-            "absorption_pressure",
-            "cvd_price_divergence",
-        ],
-        stable_window,
-        stable_clip_abs,
-        stable_transforms,
-    )
+    stable_frames = [
+        _stable_rolling_score_frame(
+            df,
+            [
+                "signed_large_trade_pressure",
+                "orderflow_efficiency",
+                "absorption_pressure",
+                "cvd_price_divergence",
+            ],
+            stable_window,
+            stable_clip_abs,
+            stable_transforms,
+            error_context="features.order_flow_v2.stable_window",
+        )
+    ]
 
     for item in pressure_windows:
         window = int(item)
@@ -308,35 +352,51 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
         df[f"large_trade_pressure_{window}"] = signed_large_trade_pressure.rolling(window, min_periods=window).mean()
         df[f"absorption_pressure_{window}"] = df["absorption_pressure"].rolling(window, min_periods=window).mean()
         df[f"cvd_price_divergence_{window}"] = df["cvd_price_divergence"].rolling(window, min_periods=window).mean()
-        _add_stable_order_flow_scores(
-            df,
-            [
-                f"cvd_pressure_{window}",
-                f"large_trade_pressure_{window}",
-                f"absorption_pressure_{window}",
-                f"cvd_price_divergence_{window}",
-            ],
-            stable_window,
-            stable_clip_abs,
-            stable_transforms,
+        stable_frames.append(
+            _stable_rolling_score_frame(
+                df,
+                [
+                    f"cvd_pressure_{window}",
+                    f"large_trade_pressure_{window}",
+                    f"absorption_pressure_{window}",
+                    f"cvd_price_divergence_{window}",
+                ],
+                stable_window,
+                stable_clip_abs,
+                stable_transforms,
+                error_context="features.order_flow_v2.stable_window",
+            )
         )
+    stable_frames = [frame for frame in stable_frames if not frame.empty]
+    if stable_frames:
+        return pd.concat([df, *stable_frames], axis=1)
+    return df
 
 
-def _add_stable_order_flow_scores(
+def _stable_rolling_score_frame(
     df: pd.DataFrame,
     columns: list[str],
     window: int,
     clip_abs: float,
     transforms: set[str],
+    *,
+    error_context: str,
+    missing_ok: bool = False,
 ) -> None:
     if window <= 1:
-        raise ValueError("features.order_flow_v2.stable_window must be greater than 1")
+        raise ValueError(f"{error_context} must be greater than 1")
+    additions: dict[str, pd.Series] = {}
     for column in columns:
+        if column not in df.columns:
+            if missing_ok:
+                continue
+            raise KeyError(f"Stable source column is missing: {column}")
         series = df[column].replace([np.inf, -np.inf], np.nan)
         if "zscore" in transforms:
-            df[f"{column}_stable_zscore"] = _rolling_zscore(series, window).clip(-clip_abs, clip_abs)
+            additions[f"{column}_stable_zscore"] = _rolling_zscore(series, window).clip(-clip_abs, clip_abs)
         if "rank" in transforms:
-            df[f"{column}_stable_rank"] = _rolling_rank_score(series, window)
+            additions[f"{column}_stable_rank"] = _rolling_rank_score(series, window)
+    return pd.DataFrame(additions, index=df.index)
 
 
 def select_feature_columns(frame: pd.DataFrame) -> list[str]:
