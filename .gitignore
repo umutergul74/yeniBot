@@ -12,6 +12,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .testtmp/
+.codex_tmp/
+.codex_pytest_run/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/

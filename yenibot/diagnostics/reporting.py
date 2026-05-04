@@ -197,15 +197,9 @@ def score_lift_diagnostics(
     if not required.issubset(predictions.columns):
         return pd.DataFrame()
 
-    frame = predictions.copy().replace([np.inf, -np.inf], np.nan).dropna(subset=["label", score_column])
+    frame = _assign_score_bins(predictions, score_column=score_column, bins=bins)
     if frame.empty:
         return pd.DataFrame()
-    frame["score_bin"] = pd.qcut(
-        frame[score_column].rank(method="first"),
-        q=min(bins, len(frame)),
-        labels=False,
-        duplicates="drop",
-    )
     base_long_rate = float(frame["label"].mean())
     grouped = frame.groupby("score_bin", observed=True).agg(
         count=("label", "size"),
@@ -219,6 +213,95 @@ def score_lift_diagnostics(
     grouped["lift_vs_base"] = grouped["actual_long_rate"] / base_long_rate if base_long_rate > 0 else np.nan
     grouped["is_top_bin"] = grouped["score_bin"] == grouped["score_bin"].max()
     return grouped
+
+
+def score_band_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    bins: int = 10,
+    bands: list[dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    required = {"label", score_column}
+    if not required.issubset(predictions.columns):
+        return pd.DataFrame()
+
+    frame = _assign_score_bins(predictions, score_column=score_column, bins=bins)
+    if frame.empty:
+        return pd.DataFrame()
+
+    resolved_bands = _resolve_score_bands(bands, bins=int(frame["score_bin"].max()) + 1)
+    base_long_rate = float(frame["label"].mean())
+    rows = []
+    for band in resolved_bands:
+        part = frame[(frame["score_bin"] >= band["min_bin"]) & (frame["score_bin"] <= band["max_bin"])]
+        if part.empty:
+            continue
+        row = {
+            "band": band["name"],
+            "min_bin": int(band["min_bin"]),
+            "max_bin": int(band["max_bin"]),
+            "count": int(len(part)),
+            "selection_rate": float(len(part) / len(frame)),
+            "mean_prob_long": float(part[score_column].mean()),
+            "actual_long_rate": float(part["label"].mean()),
+            "base_long_rate": base_long_rate,
+            "lift_vs_base": float(part["label"].mean() / base_long_rate) if base_long_rate > 0 else np.nan,
+        }
+        if "forward_return" in part.columns:
+            row["mean_forward_return"] = float(part["forward_return"].mean())
+            row["rank_ic_within_band"] = rank_ic(part[score_column], part["forward_return"])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def score_band_by_fold_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    bins: int = 10,
+    bands: list[dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    rows = []
+    if "fold" not in predictions.columns:
+        return pd.DataFrame()
+    for fold, part in predictions.groupby("fold"):
+        band_lift = score_band_diagnostics(part, score_column=score_column, bins=bins, bands=bands)
+        if band_lift.empty:
+            continue
+        band_lift = band_lift.copy()
+        band_lift.insert(0, "fold", int(fold))
+        rows.append(band_lift)
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True).sort_values(["fold", "min_bin", "max_bin"]).reset_index(drop=True)
+
+
+def score_band_summary_diagnostics(score_band_by_fold: pd.DataFrame) -> pd.DataFrame:
+    if score_band_by_fold is None or score_band_by_fold.empty:
+        return pd.DataFrame()
+    frame = score_band_by_fold.copy()
+    aggregations: dict[str, Any] = {
+        "folds": ("fold", "nunique"),
+        "mean_selection_rate": ("selection_rate", "mean"),
+        "mean_actual_long_rate": ("actual_long_rate", "mean"),
+        "mean_lift_vs_base": ("lift_vs_base", "mean"),
+        "median_lift_vs_base": ("lift_vs_base", "median"),
+        "positive_lift_fold_rate": ("lift_vs_base", lambda values: float((values > 1.0).mean())),
+    }
+    if "mean_forward_return" in frame.columns:
+        aggregations["mean_forward_return"] = ("mean_forward_return", "mean")
+        aggregations["positive_forward_return_fold_rate"] = (
+            "mean_forward_return",
+            lambda values: float((values > 0).mean()),
+        )
+    if "rank_ic_within_band" in frame.columns:
+        aggregations["mean_rank_ic_within_band"] = ("rank_ic_within_band", "mean")
+    summary = frame.groupby(["band", "min_bin", "max_bin"], as_index=False).agg(**aggregations)
+    sort_columns = ["mean_lift_vs_base"]
+    if "mean_forward_return" in summary.columns:
+        sort_columns.append("mean_forward_return")
+    return summary.sort_values(sort_columns, ascending=False).reset_index(drop=True)
 
 
 def score_lift_by_fold_diagnostics(
@@ -254,6 +337,134 @@ def score_lift_by_fold_diagnostics(
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("fold").reset_index(drop=True)
+
+
+def bad_fold_feature_forensics(
+    predictions: pd.DataFrame,
+    fold_metrics: pd.DataFrame,
+    *,
+    feature_columns: list[str] | None = None,
+    good_ic: float = 0.10,
+    bad_ic: float = -0.08,
+    target_column: str = "forward_return",
+    min_abs_reference_ic: float = 0.02,
+) -> pd.DataFrame:
+    required = {"fold", target_column}
+    if not required.issubset(predictions.columns) or fold_metrics.empty:
+        return pd.DataFrame()
+
+    summary = good_bad_fold_summary(fold_metrics, good_ic=good_ic, bad_ic=bad_ic)
+    good_folds = set(summary["good_folds"])
+    bad_folds = set(summary["bad_folds"])
+    if not good_folds or not bad_folds:
+        return pd.DataFrame()
+
+    if feature_columns is None:
+        feature_columns = _diagnostic_feature_columns(predictions)
+    feature_columns = [column for column in feature_columns if column in predictions.columns]
+    good = predictions[predictions["fold"].isin(good_folds)]
+    fold_rank_ic = fold_metrics.set_index("fold")["rank_ic"].to_dict()
+    rows = []
+    for bad_fold in sorted(bad_folds):
+        bad = predictions[predictions["fold"] == bad_fold]
+        if bad.empty:
+            continue
+        for feature in feature_columns:
+            if not pd.api.types.is_numeric_dtype(predictions[feature]):
+                continue
+            good_values = good[feature].replace([np.inf, -np.inf], np.nan).dropna()
+            bad_values = bad[feature].replace([np.inf, -np.inf], np.nan).dropna()
+            if len(good_values) < 3 or len(bad_values) < 3:
+                continue
+            pooled_std = float(pd.concat([good_values, bad_values]).std(ddof=0))
+            good_feature_ic = _feature_target_rank_ic(good, feature, target_column)
+            bad_feature_ic = _feature_target_rank_ic(bad, feature, target_column)
+            delta_feature_ic = (
+                float(bad_feature_ic - good_feature_ic)
+                if pd.notna(good_feature_ic) and pd.notna(bad_feature_ic)
+                else np.nan
+            )
+            timeframe, family = classify_feature_column(feature)
+            rows.append(
+                {
+                    "bad_fold": int(bad_fold),
+                    "bad_fold_rank_ic": float(fold_rank_ic.get(bad_fold, np.nan)),
+                    "feature": feature,
+                    "timeframe": timeframe,
+                    "family": family,
+                    "good_feature_ic": good_feature_ic,
+                    "bad_feature_ic": bad_feature_ic,
+                    "delta_feature_ic_bad_minus_good": delta_feature_ic,
+                    "signal_reversal": bool(
+                        pd.notna(good_feature_ic)
+                        and pd.notna(bad_feature_ic)
+                        and abs(good_feature_ic) >= min_abs_reference_ic
+                        and abs(bad_feature_ic) >= min_abs_reference_ic
+                        and np.sign(good_feature_ic) != np.sign(bad_feature_ic)
+                    ),
+                    "good_mean": float(good_values.mean()),
+                    "bad_mean": float(bad_values.mean()),
+                    "mean_diff_bad_minus_good": float(bad_values.mean() - good_values.mean()),
+                    "abs_standardized_diff": abs(float(bad_values.mean() - good_values.mean())) / pooled_std
+                    if pooled_std > 0
+                    else 0.0,
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    return frame.sort_values(
+        ["bad_fold", "signal_reversal", "abs_standardized_diff", "delta_feature_ic_bad_minus_good"],
+        ascending=[True, False, False, True],
+    ).reset_index(drop=True)
+
+
+def bad_fold_group_forensics(
+    predictions: pd.DataFrame,
+    fold_metrics: pd.DataFrame,
+    *,
+    feature_columns: list[str] | None = None,
+    good_ic: float = 0.10,
+    bad_ic: float = -0.08,
+) -> pd.DataFrame:
+    feature_frame = bad_fold_feature_forensics(
+        predictions,
+        fold_metrics,
+        feature_columns=feature_columns,
+        good_ic=good_ic,
+        bad_ic=bad_ic,
+    )
+    if feature_frame.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for (bad_fold, bad_rank_ic, timeframe, family), part in feature_frame.groupby(
+        ["bad_fold", "bad_fold_rank_ic", "timeframe", "family"],
+        dropna=False,
+    ):
+        ranked_delta = part.reindex(part["delta_feature_ic_bad_minus_good"].abs().sort_values(ascending=False).index)
+        shifted = part.sort_values("abs_standardized_diff", ascending=False)
+        rows.append(
+            {
+                "bad_fold": int(bad_fold),
+                "bad_fold_rank_ic": float(bad_rank_ic),
+                "timeframe": timeframe,
+                "family": family,
+                "feature_count": int(part["feature"].nunique()),
+                "mean_good_feature_ic": float(part["good_feature_ic"].mean()),
+                "mean_bad_feature_ic": float(part["bad_feature_ic"].mean()),
+                "mean_delta_feature_ic_bad_minus_good": float(part["delta_feature_ic_bad_minus_good"].mean()),
+                "mean_abs_delta_feature_ic": float(part["delta_feature_ic_bad_minus_good"].abs().mean()),
+                "signal_reversal_rate": float(part["signal_reversal"].mean()),
+                "mean_abs_standardized_diff": float(part["abs_standardized_diff"].mean()),
+                "top_delta_features": ",".join(ranked_delta["feature"].head(5).astype(str).tolist()),
+                "top_shifted_features": ",".join(shifted["feature"].head(5).astype(str).tolist()),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(
+        ["bad_fold", "signal_reversal_rate", "mean_abs_delta_feature_ic", "mean_abs_standardized_diff"],
+        ascending=[True, False, False, False],
+    ).reset_index(drop=True)
 
 
 def recent_fold_diagnostics(fold_metrics: pd.DataFrame, *, recent_folds: int = 5) -> pd.DataFrame:
@@ -545,11 +756,16 @@ def write_phase1_diagnostic_bundle(
     stationarity_policy: pd.DataFrame | None = None,
     score_lift: pd.DataFrame | None = None,
     score_lift_by_fold: pd.DataFrame | None = None,
+    score_band_lift: pd.DataFrame | None = None,
+    score_band_by_fold: pd.DataFrame | None = None,
+    score_band_summary: pd.DataFrame | None = None,
     recent_fold_summary: pd.DataFrame | None = None,
     feature_groups: pd.DataFrame | None = None,
     feature_profile: pd.DataFrame | None = None,
     feature_group_importance: pd.DataFrame | None = None,
     group_permutation_importance: pd.DataFrame | None = None,
+    bad_fold_feature_forensics_table: pd.DataFrame | None = None,
+    bad_fold_group_forensics_table: pd.DataFrame | None = None,
     model_feature_columns: list[str] | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
@@ -625,6 +841,21 @@ def write_phase1_diagnostic_bundle(
         score_lift_by_fold = score_lift_by_fold_diagnostics(predictions, bins=bins)
     if score_lift_by_fold is not None and not score_lift_by_fold.empty:
         score_lift_by_fold.to_csv(bundle_dir / "score_lift_by_fold.csv", index=False)
+    score_bands = _config_get(config, ["validation", "score_bands"], None) if config is not None else None
+    if score_band_lift is None and config is not None:
+        bins = int(_config_get(config, ["validation", "score_lift_bins"], _config_get(config, ["validation", "calibration_bins"], 10)))
+        score_band_lift = score_band_diagnostics(predictions, bins=bins, bands=score_bands)
+    if score_band_lift is not None and not score_band_lift.empty:
+        score_band_lift.to_csv(bundle_dir / "score_band_lift.csv", index=False)
+    if score_band_by_fold is None and config is not None:
+        bins = int(_config_get(config, ["validation", "score_lift_bins"], _config_get(config, ["validation", "calibration_bins"], 10)))
+        score_band_by_fold = score_band_by_fold_diagnostics(predictions, bins=bins, bands=score_bands)
+    if score_band_by_fold is not None and not score_band_by_fold.empty:
+        score_band_by_fold.to_csv(bundle_dir / "score_band_by_fold.csv", index=False)
+        if score_band_summary is None:
+            score_band_summary = score_band_summary_diagnostics(score_band_by_fold)
+    if score_band_summary is not None and not score_band_summary.empty:
+        score_band_summary.to_csv(bundle_dir / "score_band_summary.csv", index=False)
     if recent_fold_summary is None and config is not None:
         recent_fold_count = int(_config_get(config, ["validation", "recent_folds"], 5))
         recent_fold_summary = recent_fold_diagnostics(fold_metrics, recent_folds=recent_fold_count)
@@ -638,6 +869,22 @@ def write_phase1_diagnostic_bundle(
         feature_group_importance.to_csv(bundle_dir / "feature_group_importance.csv", index=False)
     if group_permutation_importance is not None and not group_permutation_importance.empty:
         group_permutation_importance.to_csv(bundle_dir / "group_permutation_importance.csv", index=False)
+    if bad_fold_feature_forensics_table is None:
+        bad_fold_feature_forensics_table = bad_fold_feature_forensics(
+            predictions,
+            fold_metrics,
+            feature_columns=model_feature_columns,
+        )
+    if bad_fold_feature_forensics_table is not None and not bad_fold_feature_forensics_table.empty:
+        bad_fold_feature_forensics_table.to_csv(bundle_dir / "bad_fold_feature_forensics.csv", index=False)
+    if bad_fold_group_forensics_table is None:
+        bad_fold_group_forensics_table = bad_fold_group_forensics(
+            predictions,
+            fold_metrics,
+            feature_columns=model_feature_columns,
+        )
+    if bad_fold_group_forensics_table is not None and not bad_fold_group_forensics_table.empty:
+        bad_fold_group_forensics_table.to_csv(bundle_dir / "bad_fold_group_forensics.csv", index=False)
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(
@@ -668,6 +915,55 @@ def _metrics_at_threshold(labels: pd.Series, scores: pd.Series, threshold: float
         "recall": float(recall),
         "pred_long_rate": float(y_pred.mean()),
     }
+
+
+def _assign_score_bins(predictions: pd.DataFrame, *, score_column: str, bins: int) -> pd.DataFrame:
+    frame = predictions.copy().replace([np.inf, -np.inf], np.nan).dropna(subset=["label", score_column])
+    if frame.empty:
+        return frame
+    frame["score_bin"] = pd.qcut(
+        frame[score_column].rank(method="first"),
+        q=min(bins, len(frame)),
+        labels=False,
+        duplicates="drop",
+    )
+    return frame
+
+
+def _resolve_score_bands(bands: list[dict[str, Any]] | None, bins: int) -> list[dict[str, Any]]:
+    max_bin = max(0, bins - 1)
+    if bands is None:
+        bands = [
+            {"name": "top_10", "min_bin": max_bin, "max_bin": max_bin},
+            {"name": "top_20", "min_bin": max(0, int(np.floor(bins * 0.80))), "max_bin": max_bin},
+            {"name": "top_30", "min_bin": max(0, int(np.floor(bins * 0.70))), "max_bin": max_bin},
+            {"name": "upper_half", "min_bin": max(0, int(np.floor(bins * 0.50))), "max_bin": max_bin},
+            {
+                "name": "mid_upper_40_90",
+                "min_bin": max(0, int(np.floor(bins * 0.40))),
+                "max_bin": max(0, max_bin - 1),
+            },
+        ]
+    resolved = []
+    for item in bands:
+        name = str(item.get("name", f"bins_{item.get('min_bin')}_{item.get('max_bin')}"))
+        min_bin = int(item.get("min_bin", max_bin))
+        max_item_bin = int(item.get("max_bin", max_bin))
+        min_bin = min(max(min_bin, 0), max_bin)
+        max_item_bin = min(max(max_item_bin, 0), max_bin)
+        if min_bin > max_item_bin:
+            continue
+        resolved.append({"name": name, "min_bin": min_bin, "max_bin": max_item_bin})
+    return resolved
+
+
+def _feature_target_rank_ic(frame: pd.DataFrame, feature: str, target_column: str) -> float:
+    if feature not in frame.columns or target_column not in frame.columns:
+        return np.nan
+    pair = frame[[feature, target_column]].replace([np.inf, -np.inf], np.nan).dropna()
+    if len(pair) < 3:
+        return np.nan
+    return rank_ic(pair[feature], pair[target_column])
 
 
 def _write_parquet_with_csv_fallback(frame: pd.DataFrame, path: Path) -> None:

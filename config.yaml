@@ -243,6 +243,12 @@ validation:
   random_like_rank_ic: 0.01
   calibration_bins: 10
   score_lift_bins: 10
+  score_bands:
+    - {name: top_10, min_bin: 9, max_bin: 9}
+    - {name: top_20, min_bin: 8, max_bin: 9}
+    - {name: top_30, min_bin: 7, max_bin: 9}
+    - {name: upper_half, min_bin: 5, max_bin: 9}
+    - {name: mid_upper_40_90, min_bin: 4, max_bin: 8}
   recent_folds: 5
   permutation_importance_folds: 7
   permutation_repeats: 1

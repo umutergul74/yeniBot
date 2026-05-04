@@ -55,7 +55,8 @@ Notebook `05` writes a shareable diagnostics archive under `Drive/yeniBot/report
 Send that `phase1_diagnostics_*.zip` when a run needs review.
 The archive includes raw and validation-calibrated reports, threshold diagnostics,
 threshold summaries, global and fold-level score-lift tables, recent-fold
-health summaries, MTF alignment sentinels, regime metrics, model feature
-columns, active feature-profile diagnostics, feature-family inventories,
-stationarity policy checks, good/bad fold feature audit tables, selected-fold
-permutation importance, and group-level permutation importance.
+health summaries, score-band lift tables, MTF alignment sentinels, regime
+metrics, model feature columns, active feature-profile diagnostics,
+feature-family inventories, stationarity policy checks, good/bad fold feature
+audit tables, bad-fold forensic tables, selected-fold permutation importance,
+and group-level permutation importance.

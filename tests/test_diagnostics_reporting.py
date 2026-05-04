@@ -6,6 +6,8 @@ import zipfile
 import pandas as pd
 
 from yenibot.diagnostics import (
+    bad_fold_feature_forensics,
+    bad_fold_group_forensics,
     calibrate_test_probabilities_from_val,
     calibration_table,
     feature_group_diagnostics,
@@ -13,6 +15,9 @@ from yenibot.diagnostics import (
     feature_profile_diagnostics,
     fold_diagnostics,
     good_bad_feature_audit,
+    score_band_by_fold_diagnostics,
+    score_band_diagnostics,
+    score_band_summary_diagnostics,
     score_lift_diagnostics,
     score_lift_by_fold_diagnostics,
     mtf_leakage_diagnostics,
@@ -55,6 +60,8 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
     predictions = _predictions()
     calibration = calibration_table(predictions["label"], predictions["prob_long"], bins=4)
     fold_metrics = fold_diagnostics(predictions)
+    fold_metrics.loc[fold_metrics["fold"] == 0, "rank_ic"] = 0.20
+    fold_metrics.loc[fold_metrics["fold"] == 1, "rank_ic"] = -0.20
     regime_metrics = regime_diagnostics(predictions)
     threshold_metrics = threshold_diagnostics(predictions)
     report = {
@@ -101,12 +108,17 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "regime_metrics.csv" in names
         assert "threshold_summary.csv" in names
         assert "score_lift.csv" in names
+        assert "score_band_lift.csv" in names
+        assert "score_band_by_fold.csv" in names
+        assert "score_band_summary.csv" in names
         assert "model_feature_columns.csv" in names
         assert "stationarity_policy.csv" in names
         assert "score_lift_by_fold.csv" in names
         assert "recent_fold_summary.csv" in names
         assert "feature_groups.csv" in names
         assert "feature_profile.csv" in names
+        assert "bad_fold_feature_forensics.csv" in names
+        assert "bad_fold_group_forensics.csv" in names
         payload = json.loads(archive.read("phase1_report.json"))
         assert payload["passed"] is False
 
@@ -231,3 +243,45 @@ def test_fold_lift_recent_and_feature_group_diagnostics() -> None:
     assert set(groups["family"]) == {"order_flow_v2_stable", "volatility_structure"}
     assert "mean_rank_ic_drop" in group_importance.columns
     assert "profile_include_pattern" in set(profile["check"])
+
+
+def test_score_band_diagnostics_reports_upper_score_ranges() -> None:
+    predictions = _predictions()
+    bands = [
+        {"name": "top_bin", "min_bin": 3, "max_bin": 3},
+        {"name": "upper_half", "min_bin": 2, "max_bin": 3},
+    ]
+
+    band_lift = score_band_diagnostics(predictions, bins=4, bands=bands)
+    band_by_fold = score_band_by_fold_diagnostics(predictions, bins=4, bands=bands)
+    summary = score_band_summary_diagnostics(band_by_fold)
+
+    assert band_lift["band"].tolist() == ["top_bin", "upper_half"]
+    assert {"selection_rate", "lift_vs_base", "mean_forward_return"}.issubset(band_lift.columns)
+    assert set(summary["band"]) == {"top_bin", "upper_half"}
+    assert "positive_lift_fold_rate" in summary.columns
+
+
+def test_bad_fold_forensics_reports_group_signal_changes() -> None:
+    predictions = _predictions()
+    fold_metrics = fold_diagnostics(predictions)
+    fold_metrics.loc[fold_metrics["fold"] == 0, "rank_ic"] = 0.20
+    fold_metrics.loc[fold_metrics["fold"] == 1, "rank_ic"] = -0.20
+
+    feature_forensics = bad_fold_feature_forensics(
+        predictions,
+        fold_metrics,
+        feature_columns=["true_cvd_zscore", "4h_true_cvd_zscore"],
+    )
+    group_forensics = bad_fold_group_forensics(
+        predictions,
+        fold_metrics,
+        feature_columns=["true_cvd_zscore", "4h_true_cvd_zscore"],
+    )
+
+    assert {"bad_fold", "feature", "delta_feature_ic_bad_minus_good", "signal_reversal"}.issubset(
+        feature_forensics.columns
+    )
+    assert {"timeframe", "family", "mean_abs_delta_feature_ic", "top_delta_features"}.issubset(
+        group_forensics.columns
+    )

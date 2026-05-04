@@ -17,6 +17,8 @@ from yenibot.diagnostics.model_analysis import (
 )
 from yenibot.diagnostics.reporting import (
     best_f1_threshold,
+    bad_fold_feature_forensics,
+    bad_fold_group_forensics,
     classify_feature_column,
     feature_group_diagnostics,
     feature_group_importance_summary,
@@ -28,6 +30,9 @@ from yenibot.diagnostics.reporting import (
     mtf_leakage_diagnostics,
     recent_fold_diagnostics,
     regime_diagnostics,
+    score_band_by_fold_diagnostics,
+    score_band_diagnostics,
+    score_band_summary_diagnostics,
     score_lift_by_fold_diagnostics,
     score_lift_diagnostics,
     stationarity_policy_diagnostics,
@@ -38,6 +43,8 @@ from yenibot.diagnostics.reporting import (
 
 __all__ = [
     "best_f1_threshold",
+    "bad_fold_feature_forensics",
+    "bad_fold_group_forensics",
     "calibrate_test_probabilities_from_val",
     "calibration_table",
     "classify_feature_column",
@@ -59,6 +66,9 @@ __all__ = [
     "rank_ic",
     "recent_fold_diagnostics",
     "regime_diagnostics",
+    "score_band_by_fold_diagnostics",
+    "score_band_diagnostics",
+    "score_band_summary_diagnostics",
     "score_lift_by_fold_diagnostics",
     "score_lift_diagnostics",
     "stationarity_policy_diagnostics",
