@@ -114,3 +114,51 @@ def test_filter_feature_columns_applies_active_profile_with_inherited_includes()
 def test_filter_feature_columns_rejects_unknown_active_profile() -> None:
     with pytest.raises(ValueError, match="Unknown features.active_profile"):
         filter_feature_columns(["gk_vol_14"], {"features": {"active_profile": "missing", "profiles": {}}})
+
+
+def test_filter_feature_columns_can_drop_inherited_4h_tier1_family() -> None:
+    columns = [
+        "taker_buy_ratio",
+        "4h_taker_buy_ratio",
+        "true_cvd_zscore",
+        "4h_true_cvd_zscore",
+        "4h_taker_imbalance_mean_6",
+        "4h_whale_buy_flag",
+        "4h_gk_vol_14",
+    ]
+    config = {
+        "features": {
+            "active_profile": "baseline_plus_4h_bounded_whale_no_4h_tier1",
+            "profiles": {
+                "baseline_40": {
+                    "include_patterns": [
+                        "*taker_buy_ratio",
+                        "*true_cvd_zscore",
+                        "*gk_vol_14",
+                        "*whale_buy_flag",
+                    ],
+                    "exclude_patterns": [],
+                },
+                "baseline_plus_4h_bounded_whale": {
+                    "inherit": "baseline_40",
+                    "include_patterns": ["4h_taker_imbalance_mean_*"],
+                    "exclude_patterns": [],
+                },
+                "baseline_plus_4h_bounded_whale_no_4h_tier1": {
+                    "inherit": "baseline_plus_4h_bounded_whale",
+                    "exclude_patterns": [
+                        "4h_taker_buy_ratio",
+                        "4h_true_cvd_zscore",
+                    ],
+                },
+            },
+        }
+    }
+
+    assert filter_feature_columns(columns, config) == [
+        "taker_buy_ratio",
+        "true_cvd_zscore",
+        "4h_taker_imbalance_mean_6",
+        "4h_whale_buy_flag",
+        "4h_gk_vol_14",
+    ]

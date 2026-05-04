@@ -27,7 +27,7 @@ binance:
   zero_volume_policy: drop
 
 features:
-  active_profile: baseline_plus_4h_bounded_whale
+  active_profile: baseline_plus_4h_bounded_whale_no_4h_tier1
   exclude_columns: []
   exclude_patterns: []
   profiles:
@@ -97,6 +97,23 @@ features:
         - "4h_whale_sell_flag"
         - "4h_large_trade_ratio"
       exclude_patterns:
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "*_stable_*"
+    baseline_plus_4h_bounded_whale_no_4h_tier1:
+      description: Keep the bounded 4H v2 and whale context, but remove the harmful inherited 4H Tier 1 family.
+      inherit: baseline_plus_4h_bounded_whale
+      include_patterns: []
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
         - "*orderflow_efficiency*"
         - "*absorption_pressure*"
         - "*cvd_price_divergence*"
