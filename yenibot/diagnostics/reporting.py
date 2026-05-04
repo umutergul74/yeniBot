@@ -14,7 +14,7 @@ from sklearn.metrics import precision_recall_curve
 from scipy.stats import ks_2samp
 
 from yenibot.diagnostics.metrics import classification_metrics, rank_ic
-from yenibot.features.builder import LABEL_COLUMNS, METADATA_COLUMNS, RAW_COLUMNS
+from yenibot.features.builder import LABEL_COLUMNS, METADATA_COLUMNS, RAW_COLUMNS, raw_order_flow_v2_model_exclusions
 
 
 def fold_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -215,6 +215,129 @@ def score_lift_diagnostics(
     return grouped
 
 
+def score_lift_by_fold_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    bins: int = 10,
+) -> pd.DataFrame:
+    rows = []
+    for fold, part in predictions.groupby("fold"):
+        lift = score_lift_diagnostics(part, score_column=score_column, bins=bins)
+        if lift.empty:
+            continue
+        bottom = lift.sort_values("score_bin").iloc[0]
+        top = lift.sort_values("score_bin").iloc[-1]
+        long_rate_spearman = lift["score_bin"].corr(lift["actual_long_rate"], method="spearman")
+        row = {
+            "fold": int(fold),
+            "count": int(part["label"].notna().sum()),
+            "base_long_rate": float(part["label"].mean()),
+            "bottom_bin_long_rate": float(bottom["actual_long_rate"]),
+            "top_bin_long_rate": float(top["actual_long_rate"]),
+            "top_lift_vs_base": float(top["lift_vs_base"]),
+            "top_minus_bottom_long_rate": float(top["actual_long_rate"] - bottom["actual_long_rate"]),
+            "bin_long_rate_spearman": float(long_rate_spearman) if pd.notna(long_rate_spearman) else np.nan,
+            "fold_rank_ic": rank_ic(part[score_column], part["forward_return"]) if "forward_return" in part.columns else np.nan,
+        }
+        if "mean_forward_return" in lift.columns:
+            row["bottom_bin_forward_return"] = float(bottom["mean_forward_return"])
+            row["top_bin_forward_return"] = float(top["mean_forward_return"])
+            row["top_minus_bottom_forward_return"] = float(top["mean_forward_return"] - bottom["mean_forward_return"])
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("fold").reset_index(drop=True)
+
+
+def recent_fold_diagnostics(fold_metrics: pd.DataFrame, *, recent_folds: int = 5) -> pd.DataFrame:
+    if fold_metrics.empty:
+        return pd.DataFrame()
+    ordered = fold_metrics.sort_values("fold")
+    recent = ordered.tail(recent_folds)
+    metrics = [
+        "rank_ic",
+        "long_f1",
+        "prauc",
+        "label_long_rate",
+        "pred_long_rate_050",
+        "prob_long_mean",
+        "prob_long_std",
+        "forward_return_mean",
+    ]
+    rows = []
+    for metric in metrics:
+        if metric not in ordered.columns:
+            continue
+        all_values = ordered[metric].replace([np.inf, -np.inf], np.nan).dropna()
+        recent_values = recent[metric].replace([np.inf, -np.inf], np.nan).dropna()
+        if all_values.empty or recent_values.empty:
+            continue
+        rows.append(
+            {
+                "metric": metric,
+                "all_mean": float(all_values.mean()),
+                "recent_mean": float(recent_values.mean()),
+                "recent_minus_all": float(recent_values.mean() - all_values.mean()),
+                "recent_min": float(recent_values.min()),
+                "recent_max": float(recent_values.max()),
+                "recent_folds": ",".join(map(str, recent["fold"].astype(int).tolist())),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def feature_group_diagnostics(feature_columns: list[str]) -> pd.DataFrame:
+    rows = []
+    for position, feature in enumerate(feature_columns):
+        timeframe, family = classify_feature_column(feature)
+        rows.append({"position": position, "feature": feature, "timeframe": timeframe, "family": family})
+    if not rows:
+        return pd.DataFrame(columns=["position", "feature", "timeframe", "family", "count"])
+    frame = pd.DataFrame(rows)
+    counts = frame.groupby(["timeframe", "family"], as_index=False).agg(count=("feature", "size"))
+    return frame.merge(counts, on=["timeframe", "family"], how="left")
+
+
+def feature_group_importance_summary(importance: pd.DataFrame) -> pd.DataFrame:
+    if importance is None or importance.empty or "feature" not in importance.columns:
+        return pd.DataFrame()
+    frame = importance.copy()
+    groups = frame["feature"].map(classify_feature_column)
+    frame["timeframe"] = [item[0] for item in groups]
+    frame["family"] = [item[1] for item in groups]
+    value_column = "rank_ic_drop"
+    grouped = frame.groupby(["timeframe", "family"], as_index=False).agg(
+        features=("feature", "nunique"),
+        rows=("feature", "size"),
+        mean_rank_ic_drop=(value_column, "mean"),
+        median_rank_ic_drop=(value_column, "median"),
+        min_rank_ic_drop=(value_column, "min"),
+        max_rank_ic_drop=(value_column, "max"),
+        positive_drop_rate=(value_column, lambda values: float((values > 0).mean())),
+        total_positive_drop=(value_column, lambda values: float(values[values > 0].sum())),
+    )
+    return grouped.sort_values(["total_positive_drop", "mean_rank_ic_drop"], ascending=False).reset_index(drop=True)
+
+
+def classify_feature_column(feature: str) -> tuple[str, str]:
+    timeframe = "4h" if feature.startswith("4h_") else "1h"
+    name = feature[3:] if timeframe == "4h" else feature
+    if "_stable_" in name:
+        return timeframe, "order_flow_v2_stable"
+    if any(token in name for token in ("orderflow_efficiency", "absorption_pressure", "cvd_price_divergence", "large_trade_pressure", "cvd_pressure")):
+        return timeframe, "order_flow_v2_raw"
+    if any(token in name for token in ("taker_imbalance", "taker_buy_ratio_delta", "taker_buy_ratio_zscore")):
+        return timeframe, "order_flow_v2_bounded"
+    if any(token in name for token in ("true_cvd", "cvd_cumulative", "taker_buy_ratio", "taker_sell_ratio", "buy_sell_imbalance")):
+        return timeframe, "order_flow_tier1"
+    if any(token in name for token in ("vpt", "whale", "vol_per_trade", "large_trade_ratio")):
+        return timeframe, "whale"
+    if any(token in name for token in ("log_return", "realized_vol", "gk_vol", "atr", "adx", "vwap", "denoised")):
+        return timeframe, "volatility_structure"
+    return timeframe, "other"
+
+
 def mtf_leakage_diagnostics(predictions: pd.DataFrame, *, htf_hours: int = 4) -> pd.DataFrame:
     required = {"timestamp", "4h_source_timestamp", "4h_available_timestamp"}
     if not required.issubset(predictions.columns):
@@ -260,6 +383,27 @@ def stationarity_policy_diagnostics(feature_columns: list[str], config: dict[str
                 "passed": len(matches) == 0,
                 "matched_count": len(matches),
                 "matched_features": ",".join(matches),
+            }
+        )
+    raw_v2_matches = sorted(set(feature_columns) & raw_order_flow_v2_model_exclusions(config or {}))
+    if raw_v2_matches:
+        rows.append(
+            {
+                "check": "order_flow_v2_stable_only",
+                "pattern": "<raw_order_flow_v2_exact_columns>",
+                "passed": False,
+                "matched_count": len(raw_v2_matches),
+                "matched_features": ",".join(raw_v2_matches),
+            }
+        )
+    elif config is not None and _config_get(config, ["features", "order_flow_v2", "stable_only"], False):
+        rows.append(
+            {
+                "check": "order_flow_v2_stable_only",
+                "pattern": "<raw_order_flow_v2_exact_columns>",
+                "passed": True,
+                "matched_count": 0,
+                "matched_features": "",
             }
         )
     if rows:
@@ -359,6 +503,11 @@ def write_phase1_diagnostic_bundle(
     feature_audit: pd.DataFrame | None = None,
     stationarity_policy: pd.DataFrame | None = None,
     score_lift: pd.DataFrame | None = None,
+    score_lift_by_fold: pd.DataFrame | None = None,
+    recent_fold_summary: pd.DataFrame | None = None,
+    feature_groups: pd.DataFrame | None = None,
+    feature_group_importance: pd.DataFrame | None = None,
+    group_permutation_importance: pd.DataFrame | None = None,
     model_feature_columns: list[str] | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
@@ -384,19 +533,23 @@ def write_phase1_diagnostic_bundle(
         encoding="utf-8",
     )
 
-    predictions.to_parquet(bundle_dir / "test_predictions.parquet", index=False)
+    _write_parquet_with_csv_fallback(predictions, bundle_dir / "test_predictions.parquet")
     calibration.to_csv(bundle_dir / "calibration.csv", index=False)
     fold_metrics.to_csv(bundle_dir / "fold_metrics.csv", index=False)
     if model_feature_columns is not None:
         model_feature_columns_frame(model_feature_columns).to_csv(bundle_dir / "model_feature_columns.csv", index=False)
+        if feature_groups is None:
+            feature_groups = feature_group_diagnostics(model_feature_columns)
         if stationarity_policy is None:
             stationarity_policy = stationarity_policy_diagnostics(model_feature_columns, config)
     if regime_metrics is not None and not regime_metrics.empty:
         regime_metrics.to_csv(bundle_dir / "regime_metrics.csv", index=False)
     if importance is not None and not importance.empty:
         importance.to_csv(bundle_dir / "permutation_importance.csv", index=False)
+        if feature_group_importance is None:
+            feature_group_importance = feature_group_importance_summary(importance)
     if tsne is not None and not tsne.empty:
-        tsne.to_parquet(bundle_dir / "tsne_embeddings.parquet", index=False)
+        _write_parquet_with_csv_fallback(tsne, bundle_dir / "tsne_embeddings.parquet")
     if calibrated_report is not None:
         (bundle_dir / "calibrated_phase1_report.json").write_text(
             json.dumps(_json_safe(calibrated_report), indent=2, sort_keys=True),
@@ -405,7 +558,7 @@ def write_phase1_diagnostic_bundle(
     if calibrated_calibration is not None and not calibrated_calibration.empty:
         calibrated_calibration.to_csv(bundle_dir / "calibrated_calibration.csv", index=False)
     if calibrated_predictions is not None and not calibrated_predictions.empty:
-        calibrated_predictions.to_parquet(bundle_dir / "calibrated_test_predictions.parquet", index=False)
+        _write_parquet_with_csv_fallback(calibrated_predictions, bundle_dir / "calibrated_test_predictions.parquet")
     if threshold_metrics is not None and not threshold_metrics.empty:
         threshold_metrics.to_csv(bundle_dir / "threshold_metrics.csv", index=False)
         if threshold_summary is None:
@@ -423,6 +576,22 @@ def write_phase1_diagnostic_bundle(
         score_lift = score_lift_diagnostics(predictions, bins=bins)
     if score_lift is not None and not score_lift.empty:
         score_lift.to_csv(bundle_dir / "score_lift.csv", index=False)
+    if score_lift_by_fold is None and config is not None:
+        bins = int(_config_get(config, ["validation", "score_lift_bins"], _config_get(config, ["validation", "calibration_bins"], 10)))
+        score_lift_by_fold = score_lift_by_fold_diagnostics(predictions, bins=bins)
+    if score_lift_by_fold is not None and not score_lift_by_fold.empty:
+        score_lift_by_fold.to_csv(bundle_dir / "score_lift_by_fold.csv", index=False)
+    if recent_fold_summary is None and config is not None:
+        recent_fold_count = int(_config_get(config, ["validation", "recent_folds"], 5))
+        recent_fold_summary = recent_fold_diagnostics(fold_metrics, recent_folds=recent_fold_count)
+    if recent_fold_summary is not None and not recent_fold_summary.empty:
+        recent_fold_summary.to_csv(bundle_dir / "recent_fold_summary.csv", index=False)
+    if feature_groups is not None and not feature_groups.empty:
+        feature_groups.to_csv(bundle_dir / "feature_groups.csv", index=False)
+    if feature_group_importance is not None and not feature_group_importance.empty:
+        feature_group_importance.to_csv(bundle_dir / "feature_group_importance.csv", index=False)
+    if group_permutation_importance is not None and not group_permutation_importance.empty:
+        group_permutation_importance.to_csv(bundle_dir / "group_permutation_importance.csv", index=False)
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(
@@ -453,6 +622,13 @@ def _metrics_at_threshold(labels: pd.Series, scores: pd.Series, threshold: float
         "recall": float(recall),
         "pred_long_rate": float(y_pred.mean()),
     }
+
+
+def _write_parquet_with_csv_fallback(frame: pd.DataFrame, path: Path) -> None:
+    try:
+        frame.to_parquet(path, index=False)
+    except ImportError:
+        frame.to_csv(path.with_suffix(".csv"), index=False)
 
 
 def _diagnostic_feature_columns(frame: pd.DataFrame) -> list[str]:

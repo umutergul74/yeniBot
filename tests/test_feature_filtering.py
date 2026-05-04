@@ -45,3 +45,31 @@ def test_filter_feature_columns_applies_stationarity_policy() -> None:
         "4h_atr_14_pct",
         "true_cvd_delta_norm",
     ]
+
+
+def test_filter_feature_columns_applies_order_flow_v2_stable_only_policy() -> None:
+    columns = [
+        "signed_large_trade_pressure",
+        "signed_large_trade_pressure_stable_zscore",
+        "cvd_pressure_3",
+        "cvd_pressure_3_stable_rank",
+        "4h_absorption_pressure_12",
+        "4h_absorption_pressure_12_stable_zscore",
+        "taker_imbalance_mean_3",
+    ]
+    config = {
+        "features": {
+            "order_flow_v2": {
+                "enabled": True,
+                "stable_only": True,
+                "pressure_windows": [3, 12],
+            }
+        }
+    }
+
+    assert filter_feature_columns(columns, config) == [
+        "signed_large_trade_pressure_stable_zscore",
+        "cvd_pressure_3_stable_rank",
+        "4h_absorption_pressure_12_stable_zscore",
+        "taker_imbalance_mean_3",
+    ]

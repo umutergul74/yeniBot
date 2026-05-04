@@ -9,6 +9,7 @@ import torch
 from sklearn.manifold import TSNE
 
 from yenibot.diagnostics.metrics import rank_ic
+from yenibot.diagnostics.reporting import classify_feature_column
 from yenibot.models import HybridEncoder
 from yenibot.training.dataset import SequenceDataset
 
@@ -167,6 +168,63 @@ def permutation_importance_rank_ic(
             permuted_ic = rank_ic(pred["prob_long_recomputed"], pred[forward_return_column])
             drops.append(baseline_ic - permuted_ic)
         rows.append({"feature": column, "rank_ic_drop": float(np.mean(drops)), "baseline_rank_ic": baseline_ic})
+    return pd.DataFrame(rows).sort_values("rank_ic_drop", ascending=False).reset_index(drop=True)
+
+
+def permutation_group_importance_rank_ic(
+    model: HybridEncoder,
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+    *,
+    seq_len: int,
+    forward_return_column: str = "forward_return",
+    n_repeats: int = 3,
+    random_state: int = 42,
+    device: str | torch.device = "cpu",
+) -> pd.DataFrame:
+    _assert_feature_order(frame, feature_columns)
+    if forward_return_column not in frame.columns:
+        forward_return_column = "fwd_return_10h"
+    baseline = predict_probabilities(
+        model,
+        frame,
+        feature_columns,
+        seq_len=seq_len,
+        device=device,
+    )
+    baseline_ic = rank_ic(baseline["prob_long_recomputed"], baseline[forward_return_column])
+    grouped_columns: dict[tuple[str, str], list[str]] = {}
+    for column in feature_columns:
+        grouped_columns.setdefault(classify_feature_column(column), []).append(column)
+
+    rng = np.random.default_rng(random_state)
+    rows = []
+    for (timeframe, family), columns in sorted(grouped_columns.items()):
+        drops = []
+        for _ in range(n_repeats):
+            permuted = frame.copy()
+            order = rng.permutation(len(permuted))
+            for column in columns:
+                permuted[column] = permuted[column].to_numpy()[order]
+            pred = predict_probabilities(
+                model,
+                permuted,
+                feature_columns,
+                seq_len=seq_len,
+                device=device,
+            )
+            permuted_ic = rank_ic(pred["prob_long_recomputed"], pred[forward_return_column])
+            drops.append(baseline_ic - permuted_ic)
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "family": family,
+                "feature_count": len(columns),
+                "rank_ic_drop": float(np.mean(drops)),
+                "baseline_rank_ic": baseline_ic,
+                "features": ",".join(columns),
+            }
+        )
     return pd.DataFrame(rows).sort_values("rank_ic_drop", ascending=False).reset_index(drop=True)
 
 

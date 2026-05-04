@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 
 import pandas as pd
+import pytest
 
 from yenibot.features import build_feature_matrix
 from yenibot.features.wavelet import causal_wavelet_denoise
@@ -23,6 +24,7 @@ def test_4h_alignment_delays_bar_until_complete(synthetic_klines, tiny_config) -
 
 
 def test_causal_wavelet_value_unchanged_when_future_appended() -> None:
+    pytest.importorskip("pywt")
     series = pd.Series(range(320), dtype=float)
     extended = pd.Series(range(380), dtype=float)
     base = causal_wavelet_denoise(series, window=64)
@@ -64,6 +66,10 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "imbalance_slope_window": 4,
         "pressure_windows": [3, 4],
         "efficiency_epsilon": 0.001,
+        "stable_only": True,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
     }
     primary = synthetic_klines(96, "1h")
     htf = synthetic_klines(30, "4h")
@@ -78,14 +84,22 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "taker_buy_ratio_zscore",
         "taker_imbalance_slope",
         "signed_large_trade_pressure",
+        "signed_large_trade_pressure_stable_zscore",
+        "signed_large_trade_pressure_stable_rank",
         "orderflow_efficiency",
         "absorption_pressure_3",
+        "absorption_pressure_3_stable_rank",
         "cvd_price_divergence_4",
+        "cvd_price_divergence_4_stable_zscore",
         "4h_taker_imbalance",
         "4h_cvd_pressure_3",
+        "4h_cvd_pressure_3_stable_rank",
     ]
 
     assert set(columns).issubset(base.columns)
     base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
     extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
     pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
+
+    assert "signed_large_trade_pressure" not in build_feature_matrix(primary, htf, config).feature_columns
+    assert "signed_large_trade_pressure_stable_zscore" in build_feature_matrix(primary, htf, config).feature_columns

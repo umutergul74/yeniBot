@@ -56,6 +56,20 @@ def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
     return ((series - mean) / std.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
 
 
+def _rolling_rank_score(series: pd.Series, window: int) -> pd.Series:
+    def rank_last(values: np.ndarray) -> float:
+        if np.isnan(values[-1]):
+            return np.nan
+        valid = values[~np.isnan(values)]
+        if len(valid) == 0:
+            return np.nan
+        current = valid[-1]
+        rank = ((valid < current).sum() + 0.5 * (valid == current).sum()) / len(valid)
+        return float(2.0 * rank - 1.0)
+
+    return series.rolling(window, min_periods=window).apply(rank_last, raw=True)
+
+
 def _log_return(series: pd.Series) -> pd.Series:
     positive = series.where(series > 0)
     return np.log(positive / positive.shift(1)).replace([np.inf, -np.inf], np.nan)
@@ -246,6 +260,9 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
     slope_window = int(_config_get(cfg, ["imbalance_slope_window"], 24))
     pressure_windows = list(_config_get(cfg, ["pressure_windows"], [3, 6, 12, 24]) or [])
     efficiency_epsilon = float(_config_get(cfg, ["efficiency_epsilon"], 1e-3))
+    stable_window = int(_config_get(cfg, ["stable_window"], default_window))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
 
     taker_imbalance = (df["taker_buy_ratio"] - df["taker_sell_ratio"]).clip(-1.0, 1.0)
     large_trade_intensity = (df["vpt_zscore"] - df["vpt_zscore"].rolling(default_window, min_periods=default_window).median()).clip(lower=0.0)
@@ -269,6 +286,18 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
     ).clip(-10.0, 10.0)
     df["absorption_pressure"] = (-normalized_return * taker_imbalance).clip(-10.0, 10.0)
     df["cvd_price_divergence"] = (df["true_cvd_delta_norm"] - normalized_return).clip(-10.0, 10.0)
+    _add_stable_order_flow_scores(
+        df,
+        [
+            "signed_large_trade_pressure",
+            "orderflow_efficiency",
+            "absorption_pressure",
+            "cvd_price_divergence",
+        ],
+        stable_window,
+        stable_clip_abs,
+        stable_transforms,
+    )
 
     for item in pressure_windows:
         window = int(item)
@@ -279,6 +308,35 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
         df[f"large_trade_pressure_{window}"] = signed_large_trade_pressure.rolling(window, min_periods=window).mean()
         df[f"absorption_pressure_{window}"] = df["absorption_pressure"].rolling(window, min_periods=window).mean()
         df[f"cvd_price_divergence_{window}"] = df["cvd_price_divergence"].rolling(window, min_periods=window).mean()
+        _add_stable_order_flow_scores(
+            df,
+            [
+                f"cvd_pressure_{window}",
+                f"large_trade_pressure_{window}",
+                f"absorption_pressure_{window}",
+                f"cvd_price_divergence_{window}",
+            ],
+            stable_window,
+            stable_clip_abs,
+            stable_transforms,
+        )
+
+
+def _add_stable_order_flow_scores(
+    df: pd.DataFrame,
+    columns: list[str],
+    window: int,
+    clip_abs: float,
+    transforms: set[str],
+) -> None:
+    if window <= 1:
+        raise ValueError("features.order_flow_v2.stable_window must be greater than 1")
+    for column in columns:
+        series = df[column].replace([np.inf, -np.inf], np.nan)
+        if "zscore" in transforms:
+            df[f"{column}_stable_zscore"] = _rolling_zscore(series, window).clip(-clip_abs, clip_abs)
+        if "rank" in transforms:
+            df[f"{column}_stable_rank"] = _rolling_rank_score(series, window)
 
 
 def select_feature_columns(frame: pd.DataFrame) -> list[str]:
@@ -302,8 +360,11 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
     if bool(_config_get(stationarity_cfg, ["exclude_nonstationary"], False)):
         exclude_patterns.extend(list(_config_get(stationarity_cfg, ["exclude_patterns"], []) or []))
     filtered = []
+    raw_order_flow_v2_columns = raw_order_flow_v2_model_exclusions(config)
     for column in feature_columns:
         if column in exclude_columns:
+            continue
+        if column in raw_order_flow_v2_columns:
             continue
         if any(fnmatch(column, pattern) for pattern in exclude_patterns):
             continue
@@ -311,6 +372,31 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
     if not filtered:
         raise ValueError("Feature filtering removed every feature column")
     return filtered
+
+
+def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:
+    cfg = _config_get(config, ["features", "order_flow_v2"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        return set()
+    if not bool(_config_get(cfg, ["stable_only"], False)):
+        return set()
+    pressure_windows = [int(item) for item in (list(_config_get(cfg, ["pressure_windows"], [3, 6, 12, 24]) or []))]
+    base = {
+        "signed_large_trade_pressure",
+        "orderflow_efficiency",
+        "absorption_pressure",
+        "cvd_price_divergence",
+    }
+    for window in pressure_windows:
+        base.update(
+            {
+                f"cvd_pressure_{window}",
+                f"large_trade_pressure_{window}",
+                f"absorption_pressure_{window}",
+                f"cvd_price_divergence_{window}",
+            }
+        )
+    return base | {f"4h_{column}" for column in base}
 
 
 def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, config: object) -> FeatureResult:

@@ -58,6 +58,10 @@ features:
     imbalance_slope_window: 24
     pressure_windows: [3, 6, 12, 24]
     efficiency_epsilon: 0.001
+    stable_only: true
+    stable_window: 100
+    stable_clip_abs: 5.0
+    stable_transforms: [zscore, rank]
   whale:
     vpt_zscore_window: 100
     whale_zscore_threshold: 2.0
@@ -140,3 +144,7 @@ validation:
   suspicious_rank_ic: 0.10
   random_like_rank_ic: 0.01
   calibration_bins: 10
+  score_lift_bins: 10
+  recent_folds: 5
+  permutation_importance_folds: 7
+  permutation_repeats: 1

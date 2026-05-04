@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pywt
+
+try:
+    import pywt
+except ImportError:  # pragma: no cover - exercised only in minimal local envs
+    pywt = None
 
 
 def _denoise_segment(
@@ -12,6 +16,8 @@ def _denoise_segment(
     level: int,
     threshold_scale: float,
 ) -> np.ndarray:
+    if pywt is None:
+        raise ImportError("PyWavelets is required when features.wavelet.enabled is true")
     coeffs = pywt.wavedec(segment, wavelet=wavelet, level=level, mode="symmetric")
     detail = coeffs[-1]
     sigma = np.median(np.abs(detail - np.median(detail))) / 0.6745 if len(detail) else 0.0

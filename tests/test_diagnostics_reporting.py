@@ -8,10 +8,14 @@ import pandas as pd
 from yenibot.diagnostics import (
     calibrate_test_probabilities_from_val,
     calibration_table,
+    feature_group_diagnostics,
+    feature_group_importance_summary,
     fold_diagnostics,
     good_bad_feature_audit,
     score_lift_diagnostics,
+    score_lift_by_fold_diagnostics,
     mtf_leakage_diagnostics,
+    recent_fold_diagnostics,
     regime_diagnostics,
     stationarity_policy_diagnostics,
     threshold_diagnostics,
@@ -75,6 +79,9 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         threshold_summary=threshold_summary_diagnostics(threshold_metrics),
         stationarity_policy=stationarity_policy_diagnostics(["true_cvd_zscore"], {"features": {"stationarity": {"exclude_patterns": ["*atr_14"]}}}),
         model_feature_columns=["true_cvd_zscore"],
+        score_lift_by_fold=score_lift_by_fold_diagnostics(predictions, bins=4),
+        recent_fold_summary=recent_fold_diagnostics(fold_metrics, recent_folds=1),
+        feature_groups=feature_group_diagnostics(["true_cvd_zscore"]),
         config={"project": {"name": "test"}, "validation": {"calibration_bins": 4}},
     )
 
@@ -83,7 +90,7 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         names = set(archive.namelist())
         assert "phase1_report.json" in names
         assert "summary.md" in names
-        assert "test_predictions.parquet" in names
+        assert {"test_predictions.parquet", "test_predictions.csv"} & names
         assert "calibration.csv" in names
         assert "fold_metrics.csv" in names
         assert "regime_metrics.csv" in names
@@ -91,6 +98,9 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "score_lift.csv" in names
         assert "model_feature_columns.csv" in names
         assert "stationarity_policy.csv" in names
+        assert "score_lift_by_fold.csv" in names
+        assert "recent_fold_summary.csv" in names
+        assert "feature_groups.csv" in names
         payload = json.loads(archive.read("phase1_report.json"))
         assert payload["passed"] is False
 
@@ -156,9 +166,57 @@ def test_stationarity_policy_diagnostics_flags_raw_model_features() -> None:
     assert overall["matched_features"] == "4h_atr_14"
 
 
+def test_stationarity_policy_diagnostics_flags_raw_order_flow_v2_inputs() -> None:
+    config = {
+        "features": {
+            "order_flow_v2": {
+                "enabled": True,
+                "stable_only": True,
+                "pressure_windows": [3],
+            },
+            "stationarity": {"exclude_patterns": []},
+        }
+    }
+    diagnostics = stationarity_policy_diagnostics(
+        ["cvd_pressure_3", "cvd_pressure_3_stable_rank"],
+        config,
+    )
+
+    raw_check = diagnostics.loc[diagnostics["check"] == "order_flow_v2_stable_only"].iloc[0]
+    assert not bool(raw_check["passed"])
+    assert raw_check["matched_features"] == "cvd_pressure_3"
+
+
 def test_score_lift_diagnostics_reports_top_bin_lift() -> None:
     lift = score_lift_diagnostics(_predictions(), bins=4)
 
     assert {"score_bin", "actual_long_rate", "base_long_rate", "lift_vs_base", "is_top_bin"}.issubset(lift.columns)
     assert lift["is_top_bin"].sum() == 1
     assert lift.loc[lift["is_top_bin"], "lift_vs_base"].iloc[0] > 1.0
+
+
+def test_fold_lift_recent_and_feature_group_diagnostics() -> None:
+    predictions = _predictions()
+    fold_metrics = fold_diagnostics(predictions)
+    lift_by_fold = score_lift_by_fold_diagnostics(predictions, bins=3)
+    recent = recent_fold_diagnostics(fold_metrics, recent_folds=1)
+    groups = feature_group_diagnostics(
+        [
+            "signed_large_trade_pressure_stable_zscore",
+            "4h_cvd_pressure_3_stable_rank",
+            "gk_vol_14",
+        ]
+    )
+    group_importance = feature_group_importance_summary(
+        pd.DataFrame(
+            {
+                "feature": ["signed_large_trade_pressure_stable_zscore", "gk_vol_14"],
+                "rank_ic_drop": [0.05, 0.01],
+            }
+        )
+    )
+
+    assert {"top_lift_vs_base", "bin_long_rate_spearman"}.issubset(lift_by_fold.columns)
+    assert "recent_minus_all" in recent.columns
+    assert set(groups["family"]) == {"order_flow_v2_stable", "volatility_structure"}
+    assert "mean_rank_ic_drop" in group_importance.columns
