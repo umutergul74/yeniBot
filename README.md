@@ -13,6 +13,7 @@ The project intentionally stops at validated model research. It does not include
 - Stationary transforms for price/volume/order-flow scale features, with raw level columns excluded from model inputs by config.
 - Continuous order-flow v2 features for taker imbalance, CVD pressure, large-trade pressure, absorption, and price-flow divergence.
 - Stable rolling rank/z-score order-flow v2 model inputs, with high-variance raw pressure/divergence columns kept out of training when `stable_only` is enabled.
+- Config-driven feature profiles for ablation runs such as `baseline_40`, `baseline_plus_bounded_v2`, and `baseline_plus_4h_bounded_whale`.
 - Correct 4H-to-1H alignment by shifting 4H bars forward before merge.
 - Long-only binary triple-barrier labels.
 - Binary TCN+GRU sequence model with focal and rank-correlation losses.
@@ -55,6 +56,6 @@ Send that `phase1_diagnostics_*.zip` when a run needs review.
 The archive includes raw and validation-calibrated reports, threshold diagnostics,
 threshold summaries, global and fold-level score-lift tables, recent-fold
 health summaries, MTF alignment sentinels, regime metrics, model feature
-columns, feature-family inventories, stationarity policy checks, good/bad fold
-feature audit tables, selected-fold permutation importance, and group-level
-permutation importance.
+columns, active feature-profile diagnostics, feature-family inventories,
+stationarity policy checks, good/bad fold feature audit tables, selected-fold
+permutation importance, and group-level permutation importance.

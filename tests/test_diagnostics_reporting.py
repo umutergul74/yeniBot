@@ -10,6 +10,7 @@ from yenibot.diagnostics import (
     calibration_table,
     feature_group_diagnostics,
     feature_group_importance_summary,
+    feature_profile_diagnostics,
     fold_diagnostics,
     good_bad_feature_audit,
     score_lift_diagnostics,
@@ -82,6 +83,10 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         score_lift_by_fold=score_lift_by_fold_diagnostics(predictions, bins=4),
         recent_fold_summary=recent_fold_diagnostics(fold_metrics, recent_folds=1),
         feature_groups=feature_group_diagnostics(["true_cvd_zscore"]),
+        feature_profile=feature_profile_diagnostics(
+            ["true_cvd_zscore"],
+            {"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*true_cvd*"], "exclude_patterns": []}}}},
+        ),
         config={"project": {"name": "test"}, "validation": {"calibration_bins": 4}},
     )
 
@@ -101,6 +106,7 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "score_lift_by_fold.csv" in names
         assert "recent_fold_summary.csv" in names
         assert "feature_groups.csv" in names
+        assert "feature_profile.csv" in names
         payload = json.loads(archive.read("phase1_report.json"))
         assert payload["passed"] is False
 
@@ -215,8 +221,13 @@ def test_fold_lift_recent_and_feature_group_diagnostics() -> None:
             }
         )
     )
+    profile = feature_profile_diagnostics(
+        ["true_cvd_zscore", "gk_vol_14"],
+        {"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*true_cvd*"], "exclude_patterns": ["*atr*"]}}}},
+    )
 
     assert {"top_lift_vs_base", "bin_long_rate_spearman"}.issubset(lift_by_fold.columns)
     assert "recent_minus_all" in recent.columns
     assert set(groups["family"]) == {"order_flow_v2_stable", "volatility_structure"}
     assert "mean_rank_ic_drop" in group_importance.columns
+    assert "profile_include_pattern" in set(profile["check"])

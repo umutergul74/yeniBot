@@ -356,9 +356,13 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
 def filter_feature_columns(feature_columns: list[str], config: object) -> list[str]:
     exclude_columns = set(_config_get(config, ["features", "exclude_columns"], []) or [])
     exclude_patterns = list(_config_get(config, ["features", "exclude_patterns"], []) or [])
+    profile = resolve_feature_profile(config)
+    include_patterns = list(profile.get("include_patterns", []) or [])
+    profile_exclude_patterns = list(profile.get("exclude_patterns", []) or [])
     stationarity_cfg = _config_get(config, ["features", "stationarity"], {})
     if bool(_config_get(stationarity_cfg, ["exclude_nonstationary"], False)):
         exclude_patterns.extend(list(_config_get(stationarity_cfg, ["exclude_patterns"], []) or []))
+    exclude_patterns.extend(profile_exclude_patterns)
     filtered = []
     raw_order_flow_v2_columns = raw_order_flow_v2_model_exclusions(config)
     for column in feature_columns:
@@ -366,12 +370,59 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
             continue
         if column in raw_order_flow_v2_columns:
             continue
+        if include_patterns and not any(fnmatch(column, pattern) for pattern in include_patterns):
+            continue
         if any(fnmatch(column, pattern) for pattern in exclude_patterns):
             continue
         filtered.append(column)
     if not filtered:
         raise ValueError("Feature filtering removed every feature column")
     return filtered
+
+
+def resolve_feature_profile(config: object) -> dict[str, object]:
+    active = _config_get(config, ["features", "active_profile"], None)
+    if not active:
+        return {"name": None, "include_patterns": [], "exclude_patterns": []}
+
+    profiles = _config_get(config, ["features", "profiles"], {}) or {}
+    if not isinstance(profiles, dict) or active not in profiles:
+        raise ValueError(f"Unknown features.active_profile: {active}")
+
+    def load_profile(name: str, seen: set[str] | None = None) -> dict[str, object]:
+        seen = set() if seen is None else seen
+        if name in seen:
+            raise ValueError(f"Cyclic feature profile inheritance detected at {name}")
+        seen.add(name)
+        current = profiles[name]
+        if not isinstance(current, dict):
+            raise ValueError(f"Feature profile must be a mapping: {name}")
+        parent_name = current.get("inherit")
+        parent = load_profile(str(parent_name), seen) if parent_name else {"include_patterns": [], "exclude_patterns": []}
+        include_patterns = _dedupe_patterns(
+            list(parent.get("include_patterns", []) or []) + list(current.get("include_patterns", []) or [])
+        )
+        if "exclude_patterns" in current:
+            exclude_patterns = list(current.get("exclude_patterns", []) or [])
+        else:
+            exclude_patterns = list(parent.get("exclude_patterns", []) or [])
+        return {
+            "name": name,
+            "description": current.get("description", ""),
+            "include_patterns": include_patterns,
+            "exclude_patterns": _dedupe_patterns(exclude_patterns),
+        }
+
+    return load_profile(str(active))
+
+
+def _dedupe_patterns(patterns: list[object]) -> list[str]:
+    deduped: list[str] = []
+    for pattern in patterns:
+        text = str(pattern)
+        if text not in deduped:
+            deduped.append(text)
+    return deduped
 
 
 def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:

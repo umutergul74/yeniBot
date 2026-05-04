@@ -27,8 +27,89 @@ binance:
   zero_volume_policy: drop
 
 features:
+  active_profile: baseline_plus_4h_bounded_whale
   exclude_columns: []
   exclude_patterns: []
+  profiles:
+    all:
+      description: Use every feature that survives leakage and stationarity filters.
+      include_patterns: ["*"]
+      exclude_patterns: []
+    baseline_40:
+      description: Original stationarity-safe Tier 1-3 feature set without order-flow v2.
+      include_patterns:
+        - "*taker_buy_ratio"
+        - "*taker_sell_ratio"
+        - "*true_cvd_zscore"
+        - "*true_cvd_delta_norm"
+        - "*cvd_cumulative_rate_norm"
+        - "*buy_sell_imbalance_ema"
+        - "*volume_log_zscore"
+        - "*volume_denoised_log_zscore"
+        - "*close_denoised_log_return"
+        - "*log_return"
+        - "*realized_vol_14"
+        - "*gk_vol_14"
+        - "*atr_14_pct"
+        - "*adx_14"
+        - "*vwap_dist_atr"
+        - "*vpt_zscore"
+        - "*vol_per_trade_log_zscore"
+        - "*whale_buy_flag"
+        - "*whale_sell_flag"
+        - "*large_trade_ratio"
+      exclude_patterns:
+        - "*taker_imbalance*"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "*_stable_*"
+    baseline_plus_bounded_v2:
+      description: Baseline plus bounded taker-imbalance v2 features on 1H and 4H.
+      inherit: baseline_40
+      include_patterns:
+        - "*taker_imbalance"
+        - "*taker_buy_ratio_zscore"
+        - "*taker_buy_ratio_delta"
+        - "*taker_imbalance_slope"
+        - "*taker_imbalance_mean_*"
+      exclude_patterns:
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "*_stable_*"
+    baseline_plus_4h_bounded_whale:
+      description: Conservative next run; baseline plus only 4H bounded order-flow v2 and whale context.
+      inherit: baseline_40
+      include_patterns:
+        - "4h_taker_imbalance"
+        - "4h_taker_buy_ratio_zscore"
+        - "4h_taker_buy_ratio_delta"
+        - "4h_taker_imbalance_slope"
+        - "4h_taker_imbalance_mean_*"
+        - "4h_vpt_zscore"
+        - "4h_vol_per_trade_log_zscore"
+        - "4h_whale_buy_flag"
+        - "4h_whale_sell_flag"
+        - "4h_large_trade_ratio"
+      exclude_patterns:
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "*_stable_*"
+    baseline_plus_stable_v2:
+      description: Baseline plus stable v2 pressure/divergence features for explicit comparison.
+      inherit: baseline_40
+      include_patterns:
+        - "*_stable_rank"
+        - "*_stable_zscore"
+      exclude_patterns: []
   warmup_rows: 300
   stationarity:
     enabled: true

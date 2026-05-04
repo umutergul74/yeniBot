@@ -14,7 +14,13 @@ from sklearn.metrics import precision_recall_curve
 from scipy.stats import ks_2samp
 
 from yenibot.diagnostics.metrics import classification_metrics, rank_ic
-from yenibot.features.builder import LABEL_COLUMNS, METADATA_COLUMNS, RAW_COLUMNS, raw_order_flow_v2_model_exclusions
+from yenibot.features.builder import (
+    LABEL_COLUMNS,
+    METADATA_COLUMNS,
+    RAW_COLUMNS,
+    raw_order_flow_v2_model_exclusions,
+    resolve_feature_profile,
+)
 
 
 def fold_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -299,6 +305,41 @@ def feature_group_diagnostics(feature_columns: list[str]) -> pd.DataFrame:
     return frame.merge(counts, on=["timeframe", "family"], how="left")
 
 
+def feature_profile_diagnostics(feature_columns: list[str], config: dict[str, Any] | None = None) -> pd.DataFrame:
+    if config is None:
+        return pd.DataFrame()
+    profile = resolve_feature_profile(config)
+    rows = [
+        {
+            "check": "active_feature_profile",
+            "pattern": str(profile.get("name")),
+            "matched_count": len(feature_columns),
+            "matched_features": "",
+        }
+    ]
+    for pattern in list(profile.get("include_patterns", []) or []):
+        matches = sorted(column for column in feature_columns if fnmatch(column, pattern))
+        rows.append(
+            {
+                "check": "profile_include_pattern",
+                "pattern": pattern,
+                "matched_count": len(matches),
+                "matched_features": ",".join(matches),
+            }
+        )
+    for pattern in list(profile.get("exclude_patterns", []) or []):
+        matches = sorted(column for column in feature_columns if fnmatch(column, pattern))
+        rows.append(
+            {
+                "check": "profile_exclude_pattern_absent",
+                "pattern": pattern,
+                "matched_count": len(matches),
+                "matched_features": ",".join(matches),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def feature_group_importance_summary(importance: pd.DataFrame) -> pd.DataFrame:
     if importance is None or importance.empty or "feature" not in importance.columns:
         return pd.DataFrame()
@@ -506,6 +547,7 @@ def write_phase1_diagnostic_bundle(
     score_lift_by_fold: pd.DataFrame | None = None,
     recent_fold_summary: pd.DataFrame | None = None,
     feature_groups: pd.DataFrame | None = None,
+    feature_profile: pd.DataFrame | None = None,
     feature_group_importance: pd.DataFrame | None = None,
     group_permutation_importance: pd.DataFrame | None = None,
     model_feature_columns: list[str] | None = None,
@@ -540,6 +582,8 @@ def write_phase1_diagnostic_bundle(
         model_feature_columns_frame(model_feature_columns).to_csv(bundle_dir / "model_feature_columns.csv", index=False)
         if feature_groups is None:
             feature_groups = feature_group_diagnostics(model_feature_columns)
+        if feature_profile is None:
+            feature_profile = feature_profile_diagnostics(model_feature_columns, config)
         if stationarity_policy is None:
             stationarity_policy = stationarity_policy_diagnostics(model_feature_columns, config)
     if regime_metrics is not None and not regime_metrics.empty:
@@ -588,6 +632,8 @@ def write_phase1_diagnostic_bundle(
         recent_fold_summary.to_csv(bundle_dir / "recent_fold_summary.csv", index=False)
     if feature_groups is not None and not feature_groups.empty:
         feature_groups.to_csv(bundle_dir / "feature_groups.csv", index=False)
+    if feature_profile is not None and not feature_profile.empty:
+        feature_profile.to_csv(bundle_dir / "feature_profile.csv", index=False)
     if feature_group_importance is not None and not feature_group_importance.empty:
         feature_group_importance.to_csv(bundle_dir / "feature_group_importance.csv", index=False)
     if group_permutation_importance is not None and not group_permutation_importance.empty:

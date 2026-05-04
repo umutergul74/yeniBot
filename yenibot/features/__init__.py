@@ -5,6 +5,7 @@ from yenibot.features.builder import (
     compute_bar_features,
     filter_feature_columns,
     raw_order_flow_v2_model_exclusions,
+    resolve_feature_profile,
     select_feature_columns,
 )
 from yenibot.features.wavelet import causal_wavelet_denoise
@@ -14,6 +15,7 @@ __all__ = [
     "compute_bar_features",
     "filter_feature_columns",
     "raw_order_flow_v2_model_exclusions",
+    "resolve_feature_profile",
     "select_feature_columns",
     "causal_wavelet_denoise",
 ]

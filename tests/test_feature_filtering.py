@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from yenibot.features import filter_feature_columns
+from yenibot.features import filter_feature_columns, resolve_feature_profile
 
 
 def test_filter_feature_columns_uses_configured_names_and_patterns() -> None:
@@ -73,3 +73,44 @@ def test_filter_feature_columns_applies_order_flow_v2_stable_only_policy() -> No
         "4h_absorption_pressure_12_stable_zscore",
         "taker_imbalance_mean_3",
     ]
+
+
+def test_filter_feature_columns_applies_active_profile_with_inherited_includes() -> None:
+    columns = [
+        "gk_vol_14",
+        "4h_gk_vol_14",
+        "taker_imbalance",
+        "4h_taker_imbalance_mean_24",
+        "4h_large_trade_ratio",
+        "4h_cvd_pressure_24_stable_rank",
+    ]
+    config = {
+        "features": {
+            "active_profile": "baseline_plus_4h_bounded_whale",
+            "profiles": {
+                "baseline_40": {
+                    "include_patterns": ["*gk_vol_14", "*large_trade_ratio"],
+                    "exclude_patterns": ["*taker_imbalance*", "*_stable_*"],
+                },
+                "baseline_plus_4h_bounded_whale": {
+                    "inherit": "baseline_40",
+                    "include_patterns": ["4h_taker_imbalance_mean_*"],
+                    "exclude_patterns": ["*_stable_*"],
+                },
+            },
+        }
+    }
+
+    profile = resolve_feature_profile(config)
+    assert profile["name"] == "baseline_plus_4h_bounded_whale"
+    assert filter_feature_columns(columns, config) == [
+        "gk_vol_14",
+        "4h_gk_vol_14",
+        "4h_taker_imbalance_mean_24",
+        "4h_large_trade_ratio",
+    ]
+
+
+def test_filter_feature_columns_rejects_unknown_active_profile() -> None:
+    with pytest.raises(ValueError, match="Unknown features.active_profile"):
+        filter_feature_columns(["gk_vol_14"], {"features": {"active_profile": "missing", "profiles": {}}})
