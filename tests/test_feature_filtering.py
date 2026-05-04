@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from yenibot.config import load_config
 from yenibot.features import filter_feature_columns, resolve_feature_profile
 
 
@@ -222,3 +223,75 @@ def test_filter_feature_columns_can_replace_raw_structure_with_stable_structure(
         "4h_gk_vol_14_stable_zscore",
         "4h_taker_imbalance_mean_6",
     ]
+
+
+def test_repo_default_active_profile_reverts_to_no_4h_tier1() -> None:
+    config = load_config("config.yaml")
+
+    assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+
+
+def test_overlay_profile_keeps_raw_structure_and_only_allowed_4h_stable_overlay() -> None:
+    config = load_config("config.yaml")
+    config["features"]["active_profile"] = "baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay"
+    columns = [
+        "taker_buy_ratio",
+        "true_cvd_zscore",
+        "gk_vol_14",
+        "4h_gk_vol_14",
+        "4h_vwap_dist_atr",
+        "4h_taker_imbalance_mean_6",
+        "realized_vol_14_stable_zscore",
+        "gk_vol_14_stable_rank",
+        "4h_realized_vol_14_stable_zscore",
+        "4h_realized_vol_14_stable_rank",
+        "4h_gk_vol_14_stable_zscore",
+        "4h_gk_vol_14_stable_rank",
+        "4h_atr_14_pct_stable_zscore",
+        "4h_atr_14_pct_stable_rank",
+        "4h_adx_14_stable_zscore",
+        "4h_adx_14_stable_rank",
+        "4h_vwap_dist_atr_stable_zscore",
+        "4h_vwap_dist_atr_stable_rank",
+        "4h_log_return_stable_zscore",
+        "4h_close_denoised_log_return_stable_rank",
+        "4h_volume_log_zscore_stable_zscore",
+        "4h_volume_denoised_log_zscore_stable_rank",
+        "4h_true_cvd_zscore",
+    ]
+
+    filtered = filter_feature_columns(columns, config)
+    stable_columns = sorted(column for column in filtered if "_stable_" in column)
+
+    assert filtered == [
+        "taker_buy_ratio",
+        "true_cvd_zscore",
+        "gk_vol_14",
+        "4h_gk_vol_14",
+        "4h_vwap_dist_atr",
+        "4h_taker_imbalance_mean_6",
+        "4h_realized_vol_14_stable_zscore",
+        "4h_realized_vol_14_stable_rank",
+        "4h_gk_vol_14_stable_zscore",
+        "4h_gk_vol_14_stable_rank",
+        "4h_atr_14_pct_stable_zscore",
+        "4h_atr_14_pct_stable_rank",
+        "4h_adx_14_stable_zscore",
+        "4h_adx_14_stable_rank",
+        "4h_vwap_dist_atr_stable_zscore",
+        "4h_vwap_dist_atr_stable_rank",
+    ]
+    assert stable_columns == sorted(
+        [
+            "4h_realized_vol_14_stable_zscore",
+            "4h_realized_vol_14_stable_rank",
+            "4h_gk_vol_14_stable_zscore",
+            "4h_gk_vol_14_stable_rank",
+            "4h_atr_14_pct_stable_zscore",
+            "4h_atr_14_pct_stable_rank",
+            "4h_adx_14_stable_zscore",
+            "4h_adx_14_stable_rank",
+            "4h_vwap_dist_atr_stable_zscore",
+            "4h_vwap_dist_atr_stable_rank",
+        ]
+    )

@@ -504,6 +504,47 @@ def recent_fold_diagnostics(fold_metrics: pd.DataFrame, *, recent_folds: int = 5
     return pd.DataFrame(rows)
 
 
+def experiment_ledger_diagnostics(
+    *,
+    report: dict[str, Any],
+    config: dict[str, Any] | None = None,
+    feature_columns: list[str] | None = None,
+    recent_fold_summary: pd.DataFrame | None = None,
+    score_band_summary: pd.DataFrame | None = None,
+    timestamp: str | None = None,
+) -> pd.DataFrame:
+    profile_name = ""
+    if config is not None:
+        profile_name = str(resolve_feature_profile(config).get("name") or "")
+    recent_rank_ic_mean = np.nan
+    if recent_fold_summary is not None and not recent_fold_summary.empty:
+        recent_row = recent_fold_summary.loc[recent_fold_summary["metric"] == "rank_ic"]
+        if not recent_row.empty:
+            recent_rank_ic_mean = float(recent_row["recent_mean"].iloc[0])
+    top_10_lift = np.nan
+    if score_band_summary is not None and not score_band_summary.empty:
+        top_row = score_band_summary.loc[score_band_summary["band"] == "top_10"]
+        if not top_row.empty:
+            top_10_lift = float(top_row["mean_lift_vs_base"].iloc[0])
+    return pd.DataFrame(
+        [
+            {
+                "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+                "profile": profile_name,
+                "feature_count": int(len(feature_columns or [])),
+                "mean_rank_ic": float(report.get("mean_rank_ic", np.nan)),
+                "std_rank_ic": float(report.get("std_rank_ic", np.nan)),
+                "positive_ic_fraction": float(report.get("positive_ic_fraction", np.nan)),
+                "mean_long_f1": float(report.get("mean_long_f1", np.nan)),
+                "mean_prauc": float(report.get("mean_prauc", np.nan)),
+                "calibration_separation": float(report.get("calibration_separation", np.nan)),
+                "recent_rank_ic_mean": recent_rank_ic_mean,
+                "top_10_lift": top_10_lift,
+            }
+        ]
+    )
+
+
 def feature_group_diagnostics(feature_columns: list[str]) -> pd.DataFrame:
     rows = []
     for position, feature in enumerate(feature_columns):
@@ -769,6 +810,7 @@ def write_phase1_diagnostic_bundle(
     group_permutation_importance: pd.DataFrame | None = None,
     bad_fold_feature_forensics_table: pd.DataFrame | None = None,
     bad_fold_group_forensics_table: pd.DataFrame | None = None,
+    experiment_ledger: pd.DataFrame | None = None,
     model_feature_columns: list[str] | None = None,
     config: dict[str, Any] | None = None,
     prefix: str = "phase1_diagnostics",
@@ -888,6 +930,21 @@ def write_phase1_diagnostic_bundle(
         )
     if bad_fold_group_forensics_table is not None and not bad_fold_group_forensics_table.empty:
         bad_fold_group_forensics_table.to_csv(bundle_dir / "bad_fold_group_forensics.csv", index=False)
+    if experiment_ledger is None:
+        experiment_ledger = experiment_ledger_diagnostics(
+            report=serializable_report,
+            config=config,
+            feature_columns=model_feature_columns,
+            recent_fold_summary=recent_fold_summary,
+            score_band_summary=score_band_summary,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+    if experiment_ledger is not None and not experiment_ledger.empty:
+        experiment_ledger.to_csv(bundle_dir / "experiment_ledger.csv", index=False)
+        (bundle_dir / "experiment_ledger.json").write_text(
+            json.dumps(_json_safe(experiment_ledger.iloc[0].to_dict()), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     fold_summary = good_bad_fold_summary(fold_metrics)
     (bundle_dir / "good_bad_folds.json").write_text(

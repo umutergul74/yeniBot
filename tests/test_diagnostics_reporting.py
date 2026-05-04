@@ -10,6 +10,7 @@ from yenibot.diagnostics import (
     bad_fold_group_forensics,
     calibrate_test_probabilities_from_val,
     calibration_table,
+    experiment_ledger_diagnostics,
     feature_group_diagnostics,
     feature_group_importance_summary,
     feature_profile_diagnostics,
@@ -94,7 +95,11 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
             ["true_cvd_zscore"],
             {"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*true_cvd*"], "exclude_patterns": []}}}},
         ),
-        config={"project": {"name": "test"}, "validation": {"calibration_bins": 4}},
+        config={
+            "project": {"name": "test"},
+            "features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*true_cvd*"], "exclude_patterns": []}}},
+            "validation": {"calibration_bins": 4},
+        },
     )
 
     assert zip_path.exists()
@@ -119,8 +124,13 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "feature_profile.csv" in names
         assert "bad_fold_feature_forensics.csv" in names
         assert "bad_fold_group_forensics.csv" in names
+        assert "experiment_ledger.csv" in names
+        assert "experiment_ledger.json" in names
         payload = json.loads(archive.read("phase1_report.json"))
+        ledger = json.loads(archive.read("experiment_ledger.json"))
         assert payload["passed"] is False
+        assert ledger["profile"] == "base"
+        assert ledger["feature_count"] == 1
 
 
 def test_calibration_threshold_and_leakage_diagnostics() -> None:
@@ -265,6 +275,44 @@ def test_score_band_diagnostics_reports_upper_score_ranges() -> None:
     assert {"selection_rate", "lift_vs_base", "mean_forward_return"}.issubset(band_lift.columns)
     assert set(summary["band"]) == {"top_bin", "upper_half"}
     assert "positive_lift_fold_rate" in summary.columns
+
+
+def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
+    recent_fold_summary = pd.DataFrame(
+        [
+            {"metric": "rank_ic", "recent_mean": 0.123},
+            {"metric": "long_f1", "recent_mean": 0.456},
+        ]
+    )
+    score_band_summary = pd.DataFrame(
+        [
+            {"band": "top_10", "mean_lift_vs_base": 1.12},
+            {"band": "top_20", "mean_lift_vs_base": 1.08},
+        ]
+    )
+
+    ledger = experiment_ledger_diagnostics(
+        report={
+            "mean_rank_ic": 0.04,
+            "std_rank_ic": 0.08,
+            "positive_ic_fraction": 0.73,
+            "mean_long_f1": 0.27,
+            "mean_prauc": 0.34,
+            "calibration_separation": 0.01,
+        },
+        config={"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*"], "exclude_patterns": []}}}},
+        feature_columns=["a", "b"],
+        recent_fold_summary=recent_fold_summary,
+        score_band_summary=score_band_summary,
+        timestamp="2026-05-05T12:00:00+00:00",
+    )
+
+    row = ledger.iloc[0].to_dict()
+    assert row["timestamp"] == "2026-05-05T12:00:00+00:00"
+    assert row["profile"] == "base"
+    assert row["feature_count"] == 2
+    assert row["recent_rank_ic_mean"] == 0.123
+    assert row["top_10_lift"] == 1.12
 
 
 def test_bad_fold_forensics_reports_group_signal_changes() -> None:

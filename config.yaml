@@ -27,7 +27,7 @@ binance:
   zero_volume_policy: drop
 
 features:
-  active_profile: baseline_plus_4h_bounded_whale_stable_structure
+  active_profile: baseline_plus_4h_bounded_whale_no_4h_tier1
   exclude_columns: []
   exclude_patterns: []
   profiles:
@@ -160,6 +160,45 @@ features:
         - "*vwap_dist_atr"
         - "*volume_log_zscore"
         - "*volume_denoised_log_zscore"
+    baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay:
+      description: Keep the stronger raw baseline structure backbone and add only a narrow 4H stable-structure overlay.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
+      include_patterns:
+        - "4h_realized_vol_14_stable_zscore"
+        - "4h_realized_vol_14_stable_rank"
+        - "4h_gk_vol_14_stable_zscore"
+        - "4h_gk_vol_14_stable_rank"
+        - "4h_atr_14_pct_stable_zscore"
+        - "4h_atr_14_pct_stable_rank"
+        - "4h_adx_14_stable_zscore"
+        - "4h_adx_14_stable_rank"
+        - "4h_vwap_dist_atr_stable_zscore"
+        - "4h_vwap_dist_atr_stable_rank"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
     baseline_plus_stable_v2:
       description: Baseline plus stable v2 pressure/divergence features for explicit comparison.
       inherit: baseline_40
