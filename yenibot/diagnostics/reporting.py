@@ -512,6 +512,11 @@ def experiment_ledger_diagnostics(
     recent_fold_summary: pd.DataFrame | None = None,
     score_band_lift: pd.DataFrame | None = None,
     score_band_summary: pd.DataFrame | None = None,
+    fold_scope: str = "",
+    data_start: str = "",
+    data_end: str = "",
+    promotable: bool | None = None,
+    reject_reason: str = "",
     timestamp: str | None = None,
 ) -> pd.DataFrame:
     profile_name = ""
@@ -550,6 +555,9 @@ def experiment_ledger_diagnostics(
                 "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
                 "profile": profile_name,
                 "feature_count": int(len(feature_columns or [])),
+                "fold_scope": fold_scope,
+                "data_start": data_start,
+                "data_end": data_end,
                 "mean_rank_ic": float(report.get("mean_rank_ic", np.nan)),
                 "std_rank_ic": float(report.get("std_rank_ic", np.nan)),
                 "positive_ic_fraction": float(report.get("positive_ic_fraction", np.nan)),
@@ -563,6 +571,9 @@ def experiment_ledger_diagnostics(
                 "top_10_positive_lift_fold_rate": top_10_positive_lift_fold_rate,
                 "top_10_forward_return_fold_mean": top_10_forward_return_fold_mean,
                 "top_10_forward_return_global": top_10_forward_return_global,
+                "passed_phase1": bool(report.get("passed", False)),
+                "promotable": bool(promotable) if promotable is not None else bool(report.get("passed", False)),
+                "reject_reason": reject_reason,
             }
         ]
     )

@@ -316,6 +316,11 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
         recent_fold_summary=recent_fold_summary,
         score_band_lift=score_band_lift,
         score_band_summary=score_band_summary,
+        fold_scope="triage",
+        data_start="2022-01-01 00:00:00+00:00",
+        data_end="2022-02-01 00:00:00+00:00",
+        promotable=False,
+        reject_reason="mean_rank_ic_delta",
         timestamp="2026-05-05T12:00:00+00:00",
     )
 
@@ -323,6 +328,9 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["timestamp"] == "2026-05-05T12:00:00+00:00"
     assert row["profile"] == "base"
     assert row["feature_count"] == 2
+    assert row["fold_scope"] == "triage"
+    assert row["data_start"] == "2022-01-01 00:00:00+00:00"
+    assert row["data_end"] == "2022-02-01 00:00:00+00:00"
     assert row["recent_rank_ic_mean"] == 0.123
     assert row["top_10_lift"] == 1.12
     assert row["top_10_lift_fold_mean"] == 1.12
@@ -330,6 +338,9 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["top_10_positive_lift_fold_rate"] == 0.75
     assert row["top_10_forward_return_fold_mean"] == 0.002
     assert row["top_10_forward_return_global"] == 0.0003
+    assert row["passed_phase1"] is False
+    assert row["promotable"] is False
+    assert row["reject_reason"] == "mean_rank_ic_delta"
 
 
 def test_bad_fold_forensics_reports_group_signal_changes() -> None:

@@ -73,3 +73,26 @@ def test_run_walk_forward_training_fails_fast_on_active_feature_nans(synthetic_k
 
     with pytest.raises(ValueError, match="Re-run notebooks 02 and 03"):
         run_walk_forward_training(frame, tiny_config, feature_columns=features.feature_columns, max_folds=1, device="cpu")
+
+
+def test_run_walk_forward_training_honors_selected_fold_ids(synthetic_klines, tiny_config, tmp_path) -> None:
+    primary = synthetic_klines(260, "1h")
+    htf = synthetic_klines(80, "4h")
+    features = build_feature_matrix(primary, htf, tiny_config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+
+    result = run_walk_forward_training(
+        frame,
+        tiny_config,
+        feature_columns=features.feature_columns,
+        checkpoint_dir=tmp_path,
+        fold_ids=[1],
+        device="cpu",
+    )
+
+    assert sorted(result["predictions"]["fold"].unique().tolist()) == [1]
+    assert not (tmp_path / "model_fold_000.pt").exists()
+    assert (tmp_path / "model_fold_001.pt").exists()

@@ -4,6 +4,7 @@ bot_state.json
 regime_online_stats.json
 data/raw/
 data/processed/
+checkpoints/
 checkpoints/*.pt
 checkpoints/*.pkl
 checkpoints/*.parquet

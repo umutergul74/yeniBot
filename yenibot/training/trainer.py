@@ -334,6 +334,7 @@ def run_walk_forward_training(
     feature_columns: list[str] | None = None,
     checkpoint_dir: str | Path | None = None,
     max_folds: int | None = None,
+    fold_ids: list[int] | tuple[int, ...] | set[int] | None = None,
     device: str | torch.device | None = None,
 ) -> dict[str, Any]:
     set_random_seed(_base_seed(config), deterministic=_deterministic(config))
@@ -353,8 +354,11 @@ def run_walk_forward_training(
 
     fold_results = []
     predictions = []
+    selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
-        if max_folds is not None and fold.fold >= max_folds:
+        if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
+            continue
+        if max_folds is not None and len(fold_results) >= max_folds:
             break
         result = train_one_fold(
             frame,
