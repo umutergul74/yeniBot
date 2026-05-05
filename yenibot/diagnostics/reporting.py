@@ -510,6 +510,7 @@ def experiment_ledger_diagnostics(
     config: dict[str, Any] | None = None,
     feature_columns: list[str] | None = None,
     recent_fold_summary: pd.DataFrame | None = None,
+    score_band_lift: pd.DataFrame | None = None,
     score_band_summary: pd.DataFrame | None = None,
     timestamp: str | None = None,
 ) -> pd.DataFrame:
@@ -522,10 +523,27 @@ def experiment_ledger_diagnostics(
         if not recent_row.empty:
             recent_rank_ic_mean = float(recent_row["recent_mean"].iloc[0])
     top_10_lift = np.nan
+    top_10_lift_fold_mean = np.nan
+    top_10_lift_global = np.nan
+    top_10_positive_lift_fold_rate = np.nan
+    top_10_forward_return_fold_mean = np.nan
+    top_10_forward_return_global = np.nan
     if score_band_summary is not None and not score_band_summary.empty:
         top_row = score_band_summary.loc[score_band_summary["band"] == "top_10"]
         if not top_row.empty:
-            top_10_lift = float(top_row["mean_lift_vs_base"].iloc[0])
+            top_10_lift_fold_mean = float(top_row["mean_lift_vs_base"].iloc[0])
+            top_10_lift = top_10_lift_fold_mean
+            if "positive_lift_fold_rate" in top_row:
+                top_10_positive_lift_fold_rate = float(top_row["positive_lift_fold_rate"].iloc[0])
+            if "mean_forward_return" in top_row:
+                top_10_forward_return_fold_mean = float(top_row["mean_forward_return"].iloc[0])
+    if score_band_lift is not None and not score_band_lift.empty:
+        top_row = score_band_lift.loc[score_band_lift["band"] == "top_10"]
+        if not top_row.empty:
+            if "lift_vs_base" in top_row:
+                top_10_lift_global = float(top_row["lift_vs_base"].iloc[0])
+            if "mean_forward_return" in top_row:
+                top_10_forward_return_global = float(top_row["mean_forward_return"].iloc[0])
     return pd.DataFrame(
         [
             {
@@ -540,6 +558,11 @@ def experiment_ledger_diagnostics(
                 "calibration_separation": float(report.get("calibration_separation", np.nan)),
                 "recent_rank_ic_mean": recent_rank_ic_mean,
                 "top_10_lift": top_10_lift,
+                "top_10_lift_fold_mean": top_10_lift_fold_mean,
+                "top_10_lift_global": top_10_lift_global,
+                "top_10_positive_lift_fold_rate": top_10_positive_lift_fold_rate,
+                "top_10_forward_return_fold_mean": top_10_forward_return_fold_mean,
+                "top_10_forward_return_global": top_10_forward_return_global,
             }
         ]
     )
@@ -936,6 +959,7 @@ def write_phase1_diagnostic_bundle(
             config=config,
             feature_columns=model_feature_columns,
             recent_fold_summary=recent_fold_summary,
+            score_band_lift=score_band_lift,
             score_band_summary=score_band_summary,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )

@@ -286,8 +286,19 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     )
     score_band_summary = pd.DataFrame(
         [
-            {"band": "top_10", "mean_lift_vs_base": 1.12},
-            {"band": "top_20", "mean_lift_vs_base": 1.08},
+            {
+                "band": "top_10",
+                "mean_lift_vs_base": 1.12,
+                "positive_lift_fold_rate": 0.75,
+                "mean_forward_return": 0.002,
+            },
+            {"band": "top_20", "mean_lift_vs_base": 1.08, "positive_lift_fold_rate": 0.50, "mean_forward_return": 0.001},
+        ]
+    )
+    score_band_lift = pd.DataFrame(
+        [
+            {"band": "top_10", "lift_vs_base": 0.98, "mean_forward_return": 0.0003},
+            {"band": "top_20", "lift_vs_base": 1.04, "mean_forward_return": 0.0007},
         ]
     )
 
@@ -303,6 +314,7 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
         config={"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*"], "exclude_patterns": []}}}},
         feature_columns=["a", "b"],
         recent_fold_summary=recent_fold_summary,
+        score_band_lift=score_band_lift,
         score_band_summary=score_band_summary,
         timestamp="2026-05-05T12:00:00+00:00",
     )
@@ -313,6 +325,11 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["feature_count"] == 2
     assert row["recent_rank_ic_mean"] == 0.123
     assert row["top_10_lift"] == 1.12
+    assert row["top_10_lift_fold_mean"] == 1.12
+    assert row["top_10_lift_global"] == 0.98
+    assert row["top_10_positive_lift_fold_rate"] == 0.75
+    assert row["top_10_forward_return_fold_mean"] == 0.002
+    assert row["top_10_forward_return_global"] == 0.0003
 
 
 def test_bad_fold_forensics_reports_group_signal_changes() -> None:
