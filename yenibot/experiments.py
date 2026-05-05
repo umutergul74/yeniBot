@@ -4,6 +4,8 @@ import copy
 import hashlib
 import json
 import re
+import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -537,6 +539,34 @@ def _write_decision_files(run_dir: Path, comparison: pd.DataFrame, decision: dic
     _write_json(run_dir / "best_candidate.json", decision.get("best_candidate") or {})
 
 
+def _write_experiment_bundle(
+    *,
+    output_dir: Path,
+    run_id: str,
+    report_dir: Path,
+    zip_paths: list[str],
+) -> tuple[Path, Path]:
+    bundle_path = output_dir / f"phase1_experiment_bundle_{run_id}.zip"
+    latest_path = output_dir / "phase1_latest_experiment_bundle.zip"
+    summary_files = [
+        "profile_comparison.csv",
+        "profile_comparison.md",
+        "decision_report.json",
+        "best_candidate.json",
+    ]
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for filename in summary_files:
+            path = report_dir / filename
+            if path.exists():
+                archive.write(path, f"{run_id}/{filename}")
+        for item in zip_paths:
+            path = Path(item)
+            if path.exists():
+                archive.write(path, f"{run_id}/diagnostics/{path.name}")
+    shutil.copyfile(bundle_path, latest_path)
+    return bundle_path, latest_path
+
+
 def run_experiment_matrix(
     frame: pd.DataFrame,
     config: dict[str, Any],
@@ -734,6 +764,24 @@ def write_experiment_diagnostics(
     }
     report_dir = Path(output_dir) / "experiments" / run_dir.name
     report_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
+    latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
+    decision["bundle_zip"] = str(bundle_path)
+    decision["latest_bundle_zip"] = str(latest_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
-    return {"run_id": run_dir.name, "run_dir": run_dir, "comparison": comparison, "decision": decision, "zip_paths": zip_paths}
+    bundle_path, latest_bundle_path = _write_experiment_bundle(
+        output_dir=Path(output_dir),
+        run_id=run_dir.name,
+        report_dir=report_dir,
+        zip_paths=zip_paths,
+    )
+    return {
+        "run_id": run_dir.name,
+        "run_dir": run_dir,
+        "comparison": comparison,
+        "decision": decision,
+        "zip_paths": zip_paths,
+        "bundle_zip": str(bundle_path),
+        "latest_bundle_zip": str(latest_bundle_path),
+    }

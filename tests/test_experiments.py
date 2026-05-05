@@ -61,6 +61,12 @@ def test_experiment_settings_resolves_control_and_candidates() -> None:
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
     assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+    assert config["experiments"]["full_cv_profiles"] == [
+        "baseline_plus_4h_bounded_whale_no_4h_tier1",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_stable",
+        "baseline_no_4h_tier1_flow_stable_combo",
+        "baseline_no_4h_tier1_4h_cvd_pressure_stable",
+    ]
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -156,6 +162,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert diagnostics["zip_paths"]
+    assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
+    assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
+    assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
+    assert diagnostics["latest_bundle_zip"].endswith("phase1_latest_experiment_bundle.zip")
     assert diagnostics["decision"]["recommendation"] in {"keep_control_profile", "promote_best_candidate"}
 
 

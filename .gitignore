@@ -27,6 +27,8 @@ phase1_diagnostics_*.zip
 calibration.csv
 calibrated_calibration.csv
 calibrated_test_predictions.parquet
+profile_comparison.csv
+profile_comparison.md
 fold_metrics.csv
 good_bad_feature_audit.csv
 permutation_importance.csv

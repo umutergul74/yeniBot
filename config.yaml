@@ -510,7 +510,11 @@ experiments:
     - baseline_no_4h_tier1_4h_large_trade_pressure_stable
     - baseline_no_4h_tier1_flow_stable_combo
   triage_fold_ids: [0, 5, 9, 13, 17, 22, 24, 28, 32, 37, 38, 41]
-  full_cv_profiles: auto
+  full_cv_profiles:
+    - baseline_plus_4h_bounded_whale_no_4h_tier1
+    - baseline_no_4h_tier1_4h_large_trade_pressure_stable
+    - baseline_no_4h_tier1_flow_stable_combo
+    - baseline_no_4h_tier1_4h_cvd_pressure_stable
   resume_existing: true
   force_retrain: false
   promotion_gates:
