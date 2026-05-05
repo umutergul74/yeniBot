@@ -93,6 +93,33 @@ def _make_dataset(part: pd.DataFrame, feature_columns: list[str], config: Any) -
     )
 
 
+def _forward_return_column(frame: pd.DataFrame, config: Any) -> str:
+    forward_column = f"fwd_return_{int(_cfg(config, ['labeling', 'max_holding_bars'], 10))}h"
+    if forward_column not in frame.columns:
+        forward_column = "fwd_return_10h"
+    return forward_column
+
+
+def _assert_training_inputs_available(frame: pd.DataFrame, feature_columns: list[str], config: Any) -> None:
+    required = list(feature_columns)
+    required.extend(str(column) for column in list(_cfg(config, ["hmm", "features"], []) or []))
+    required.extend(["label", _forward_return_column(frame, config)])
+    required = list(dict.fromkeys(required))
+    missing = [column for column in required if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Training frame is missing required columns: {missing}")
+    bad = [
+        column
+        for column in required
+        if frame[column].replace([np.inf, -np.inf], np.nan).isna().any()
+    ]
+    if bad:
+        raise ValueError(
+            "Training frame contains NaNs in active model/HMM columns. "
+            f"Re-run notebooks 02 and 03 with the active feature profile. Columns: {bad}"
+        )
+
+
 def _predict_dataset(
     model: HybridEncoder,
     dataset: SequenceDataset,
@@ -313,6 +340,7 @@ def run_walk_forward_training(
     if feature_columns is None:
         feature_columns = select_feature_columns(frame)
     feature_columns = filter_feature_columns(feature_columns, config)
+    _assert_training_inputs_available(frame, feature_columns, config)
     cv_cfg = _cfg(config, ["walk_forward"], {})
     cv = PurgedWalkForwardCV(
         train_bars=int(_cfg(cv_cfg, ["train_bars"], 5040)),
