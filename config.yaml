@@ -27,7 +27,7 @@ binance:
   zero_volume_policy: drop
 
 features:
-  active_profile: baseline_plus_4h_bounded_whale_no_4h_tier1
+  active_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay
   exclude_columns: []
   exclude_patterns: []
   profiles:
