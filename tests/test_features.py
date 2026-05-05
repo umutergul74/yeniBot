@@ -98,6 +98,44 @@ def test_structure_stability_features_are_causal_when_future_rows_appended(synth
     pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
 
 
+def test_inactive_stable_features_do_not_change_feature_matrix_rows(synthetic_klines, tiny_config) -> None:
+    base_config = copy.deepcopy(tiny_config)
+    base_config["features"]["profiles"] = {
+        "baseline": {
+            "include_patterns": [
+                "*log_return",
+                "*gk_vol_14",
+                "*adx_14",
+                "*true_cvd_zscore",
+                "*vwap_dist_atr",
+                "*atr_14_pct",
+            ],
+            "exclude_patterns": ["*_stable_*"],
+        }
+    }
+    base_config["features"]["active_profile"] = "baseline"
+    base_config["labeling"]["atr_column"] = "atr_14"
+    stable_config = copy.deepcopy(base_config)
+    stable_config["features"]["structure_stability"] = {
+        "enabled": True,
+        "stable_window": 24,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
+        "source_columns": ["gk_vol_14", "atr_14_pct", "vwap_dist_atr"],
+    }
+    primary = synthetic_klines(96, "1h")
+    htf = synthetic_klines(30, "4h")
+
+    base = build_feature_matrix(primary, htf, base_config)
+    stable = build_feature_matrix(primary, htf, stable_config)
+
+    assert base.feature_columns == stable.feature_columns
+    assert len(base.frame) == len(stable.frame)
+    pd.testing.assert_series_equal(base.frame["timestamp"], stable.frame["timestamp"])
+    assert stable.frame["gk_vol_14_stable_zscore"].isna().any()
+    assert not stable.frame[stable.feature_columns].isna().any().any()
+
+
 def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["order_flow_v2"] = {

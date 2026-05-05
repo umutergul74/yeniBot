@@ -440,6 +440,29 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
     return filtered
 
 
+def feature_availability_columns(feature_columns: list[str], config: object) -> list[str]:
+    """Columns that must be finite before saving the feature matrix.
+
+    The model profile controls trainable inputs, while HMM and labeling need a
+    few non-model columns later. Inactive experimental features must not change
+    the row universe simply because their warmup window is longer.
+    """
+
+    available = set(feature_columns)
+    required = list(filter_feature_columns(feature_columns, config))
+    extra_columns = list(_config_get(config, ["hmm", "features"], []) or [])
+    atr_column = str(_config_get(config, ["labeling", "atr_column"], "atr_14"))
+    extra_columns.append(atr_column)
+
+    missing = [column for column in extra_columns if column not in available]
+    if missing:
+        raise ValueError(f"Missing required non-model feature columns: {missing}")
+    for column in extra_columns:
+        if column not in required:
+            required.append(column)
+    return required
+
+
 def resolve_feature_profile(config: object) -> dict[str, object]:
     active = _config_get(config, ["features", "active_profile"], None)
     if not active:
@@ -538,8 +561,10 @@ def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, c
         merged = merged.iloc[warmup_rows:].copy()
     merged = merged.ffill()
     feature_columns = select_feature_columns(merged)
-    merged = merged.dropna(subset=feature_columns).reset_index(drop=True)
-    if merged[feature_columns].isna().any().any():
-        bad = merged[feature_columns].columns[merged[feature_columns].isna().any()].tolist()
+    model_feature_columns = filter_feature_columns(feature_columns, config)
+    availability_columns = feature_availability_columns(feature_columns, config)
+    merged = merged.dropna(subset=availability_columns).reset_index(drop=True)
+    if merged[availability_columns].isna().any().any():
+        bad = merged[availability_columns].columns[merged[availability_columns].isna().any()].tolist()
         raise ValueError(f"Feature matrix contains NaNs after warmup/fill: {bad}")
-    return FeatureResult(merged, filter_feature_columns(feature_columns, config))
+    return FeatureResult(merged, model_feature_columns)

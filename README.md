@@ -40,6 +40,11 @@ matches the active training profile. Pure profile-selection changes that only
 switch among already-generated columns can be re-tested with notebooks `04`
 and `05` after a Colab session restart.
 
+The saved feature matrix drops warmup rows only when active model inputs, HMM
+features, or the labeling ATR column are unavailable. Inactive experimental
+columns may contain warmup NaNs and must not change the walk-forward row
+universe.
+
 ## Local Checks
 
 ```bash
