@@ -509,9 +509,11 @@ def experiment_ledger_diagnostics(
     report: dict[str, Any],
     config: dict[str, Any] | None = None,
     feature_columns: list[str] | None = None,
+    fold_metrics: pd.DataFrame | None = None,
     recent_fold_summary: pd.DataFrame | None = None,
     threshold_summary: pd.DataFrame | None = None,
     score_band_lift: pd.DataFrame | None = None,
+    score_lift_by_fold: pd.DataFrame | None = None,
     score_band_summary: pd.DataFrame | None = None,
     fold_scope: str = "",
     data_start: str = "",
@@ -528,6 +530,38 @@ def experiment_ledger_diagnostics(
         recent_row = recent_fold_summary.loc[recent_fold_summary["metric"] == "rank_ic"]
         if not recent_row.empty:
             recent_rank_ic_mean = float(recent_row["recent_mean"].iloc[0])
+    recent_rank_ic_min = np.nan
+    if recent_fold_summary is not None and not recent_fold_summary.empty:
+        recent_row = recent_fold_summary.loc[recent_fold_summary["metric"] == "rank_ic"]
+        if not recent_row.empty and "recent_min" in recent_row:
+            recent_rank_ic_min = float(recent_row["recent_min"].iloc[0])
+
+    negative_ic_count = np.nan
+    negative_ic_fraction = np.nan
+    worst_5_rank_ic_mean = np.nan
+    rank_ic_cvar_20 = np.nan
+    bad_fold_rank_ic_mean = np.nan
+    top_10_bad_fold_lift_mean = np.nan
+    if fold_metrics is not None and not fold_metrics.empty and "rank_ic" in fold_metrics.columns:
+        fold_frame = fold_metrics.copy()
+        rank_ic = pd.to_numeric(fold_frame["rank_ic"], errors="coerce").dropna().sort_values()
+        if not rank_ic.empty:
+            negative_ic_count = int((rank_ic < 0).sum())
+            negative_ic_fraction = float((rank_ic < 0).mean())
+            worst_5_rank_ic_mean = float(rank_ic.head(min(5, len(rank_ic))).mean())
+            cvar_count = max(1, int(np.ceil(len(rank_ic) * 0.20)))
+            rank_ic_cvar_20 = float(rank_ic.head(cvar_count).mean())
+            bad_ic_threshold = float(_config_get(config or {}, ["validation", "bad_fold_ic_threshold"], -0.08))
+            bad_fold_rows = fold_frame[pd.to_numeric(fold_frame["rank_ic"], errors="coerce") <= bad_ic_threshold]
+            if not bad_fold_rows.empty:
+                bad_fold_rank_ic_mean = float(pd.to_numeric(bad_fold_rows["rank_ic"], errors="coerce").mean())
+                if score_lift_by_fold is not None and not score_lift_by_fold.empty:
+                    lift_frame = score_lift_by_fold.copy()
+                    bad_lift = lift_frame[lift_frame["fold"].isin(bad_fold_rows["fold"])]
+                    if "top_lift_vs_base" in bad_lift.columns and not bad_lift.empty:
+                        top_10_bad_fold_lift_mean = float(
+                            pd.to_numeric(bad_lift["top_lift_vs_base"], errors="coerce").mean()
+                        )
     top_10_lift = np.nan
     top_10_lift_fold_mean = np.nan
     top_10_lift_global = np.nan
@@ -587,10 +621,17 @@ def experiment_ledger_diagnostics(
                 "mean_prauc": float(report.get("mean_prauc", np.nan)),
                 "calibration_separation": float(report.get("calibration_separation", np.nan)),
                 "recent_rank_ic_mean": recent_rank_ic_mean,
+                "recent_rank_ic_min": recent_rank_ic_min,
+                "negative_ic_count": negative_ic_count,
+                "negative_ic_fraction": negative_ic_fraction,
+                "worst_5_rank_ic_mean": worst_5_rank_ic_mean,
+                "rank_ic_cvar_20": rank_ic_cvar_20,
+                "bad_fold_rank_ic_mean": bad_fold_rank_ic_mean,
                 "top_10_lift": top_10_lift,
                 "top_10_lift_fold_mean": top_10_lift_fold_mean,
                 "top_10_lift_global": top_10_lift_global,
                 "top_10_positive_lift_fold_rate": top_10_positive_lift_fold_rate,
+                "top_10_bad_fold_lift_mean": top_10_bad_fold_lift_mean,
                 "top_10_forward_return_fold_mean": top_10_forward_return_fold_mean,
                 "top_10_forward_return_global": top_10_forward_return_global,
                 "passed_phase1": bool(report.get("passed", False)),
@@ -1048,9 +1089,11 @@ def write_phase1_diagnostic_bundle(
             report=serializable_report,
             config=config,
             feature_columns=model_feature_columns,
+            fold_metrics=fold_metrics,
             recent_fold_summary=recent_fold_summary,
             threshold_summary=threshold_summary,
             score_band_lift=score_band_lift,
+            score_lift_by_fold=score_lift_by_fold,
             score_band_summary=score_band_summary,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )

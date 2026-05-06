@@ -284,9 +284,11 @@ def summarize_profile_predictions(
         report=report,
         config=profile_cfg,
         feature_columns=feature_columns,
+        fold_metrics=fold_metrics,
         recent_fold_summary=recent,
         threshold_summary=threshold_summary,
         score_band_lift=score_band_lift,
+        score_lift_by_fold=score_lift_by_fold,
         score_band_summary=score_band_summary,
         fold_scope=fold_scope,
         data_start=data_window["data_start"],
@@ -422,6 +424,15 @@ def _passes_triage(row: dict[str, Any], control: dict[str, Any], config: dict[st
         reasons.append("top_10_lift_global")
     if _float(row, "top_10_positive_lift_fold_rate") < float(gates.get("min_top_10_positive_lift_fold_rate", 0.55)):
         reasons.append("top_10_positive_lift_fold_rate")
+    worst_5_delta = _optional_gate_float(gates, "min_worst_5_rank_ic_delta", None)
+    if worst_5_delta is not None and _float(row, "worst_5_rank_ic_mean") < _float(control, "worst_5_rank_ic_mean") + worst_5_delta:
+        reasons.append("worst_5_rank_ic_delta")
+    negative_delta = _optional_gate_float(gates, "max_negative_ic_fraction_delta", None)
+    if negative_delta is not None and _float(row, "negative_ic_fraction") > _float(control, "negative_ic_fraction") + negative_delta:
+        reasons.append("negative_ic_fraction")
+    bad_fold_lift_floor = _optional_gate_float(gates, "min_top_10_bad_fold_lift_mean", None)
+    if bad_fold_lift_floor is not None and _float(row, "top_10_bad_fold_lift_mean") < bad_fold_lift_floor:
+        reasons.append("top_10_bad_fold_lift_mean")
     if not bool(row.get("mtf_leakage_passed", False)):
         reasons.append("mtf_leakage")
     if not bool(row.get("stationarity_policy_passed", False)):
@@ -454,6 +465,15 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("mean_long_f1_delta")
     if _float(row, "top_10_lift_global") < _float(control, "top_10_lift_global") + float(gates.get("min_top_10_lift_global_delta", 0.05)):
         reasons.append("top_10_lift_global_delta")
+    worst_5_delta = _optional_gate_float(gates, "min_worst_5_rank_ic_delta", None)
+    if worst_5_delta is not None and _float(row, "worst_5_rank_ic_mean") < _float(control, "worst_5_rank_ic_mean") + worst_5_delta:
+        reasons.append("worst_5_rank_ic_delta")
+    negative_delta = _optional_gate_float(gates, "max_negative_ic_fraction_delta", None)
+    if negative_delta is not None and _float(row, "negative_ic_fraction") > _float(control, "negative_ic_fraction") + negative_delta:
+        reasons.append("negative_ic_fraction")
+    bad_fold_lift_delta = _optional_gate_float(gates, "min_top_10_bad_fold_lift_mean_delta", None)
+    if bad_fold_lift_delta is not None and _float(row, "top_10_bad_fold_lift_mean") < _float(control, "top_10_bad_fold_lift_mean") + bad_fold_lift_delta:
+        reasons.append("top_10_bad_fold_lift_mean_delta")
     if not bool(row.get("mtf_leakage_passed", False)):
         reasons.append("mtf_leakage")
     if not bool(row.get("stationarity_policy_passed", False)):
@@ -503,6 +523,7 @@ def _auto_full_profiles(settings: dict[str, Any], triage_rows: list[dict[str, An
         key=lambda row: (
             _float(row, "mean_rank_ic", -np.inf),
             _float(row, "top_10_lift_global", -np.inf),
+            _float(row, "worst_5_rank_ic_mean", -np.inf),
             _float(row, "top_10_positive_lift_fold_rate", -np.inf),
         ),
         reverse=True,
@@ -533,9 +554,16 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "mean_prauc",
         "calibration_separation",
         "recent_rank_ic_mean",
+        "recent_rank_ic_min",
+        "negative_ic_count",
+        "negative_ic_fraction",
+        "worst_5_rank_ic_mean",
+        "rank_ic_cvar_20",
+        "bad_fold_rank_ic_mean",
         "top_10_lift_fold_mean",
         "top_10_lift_global",
         "top_10_positive_lift_fold_rate",
+        "top_10_bad_fold_lift_mean",
         "mtf_leakage_passed",
         "stationarity_policy_passed",
         "passed_phase1",
@@ -563,8 +591,8 @@ def _best_candidate(comparison: pd.DataFrame, control_profile: str) -> dict[str,
     if candidates.empty:
         return {}
     candidates = candidates.sort_values(
-        ["passed_phase1", "mean_rank_ic", "top_10_lift_global"],
-        ascending=[False, False, False],
+        ["passed_phase1", "mean_rank_ic", "top_10_lift_global", "worst_5_rank_ic_mean"],
+        ascending=[False, False, False, False],
     )
     return candidates.iloc[0].to_dict()
 
@@ -581,9 +609,11 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "mean_rank_ic",
             "std_rank_ic",
             "positive_ic_fraction",
+            "worst_5_rank_ic_mean",
             "mean_long_f1",
             "test_f1_at_selected_threshold",
             "top_10_lift_global",
+            "top_10_bad_fold_lift_mean",
             "passed_phase1_selected_threshold",
             "promotable",
             "reject_reason",

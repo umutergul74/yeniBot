@@ -9,6 +9,7 @@ from yenibot.config import load_config
 from yenibot.experiments import (
     _auto_full_profiles,
     _passes_full,
+    _passes_triage,
     experiment_settings,
     profile_config,
     resolve_experiment_run_id,
@@ -83,15 +84,15 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_volume_context",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_volume_context",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_volume_context",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_4h_stable_vol_overlay",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_no_4h_whale_zscores",
     ]
     assert {2, 4, 8, 17, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
@@ -112,7 +113,14 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_large_trade_pressure_24_stable_zscore",
         "4h_large_trade_pressure_24_stable_rank",
         "4h_gk_vol_14_stable_rank",
+        "4h_gk_vol_14_stable_zscore",
+        "4h_realized_vol_14_stable_rank",
+        "4h_realized_vol_14_stable_zscore",
+        "4h_atr_14_pct_stable_rank",
+        "4h_atr_14_pct_stable_zscore",
+        "4h_adx_14_stable_rank",
         "4h_vwap_dist_atr_stable_zscore",
+        "4h_volume_log_zscore_stable_rank",
         "4h_gk_vol_14",
         "4h_realized_vol_14",
         "4h_atr_14_pct",
@@ -237,6 +245,47 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_large_trade_pressure_24_stable_rank" in no_bounded_flow_columns
     assert "4h_large_trade_ratio" in no_bounded_flow_columns
 
+    stable_vol = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_4h_stable_vol_overlay",
+    )
+    stable_vol_columns = filter_feature_columns(columns, stable_vol)
+    assert "4h_gk_vol_14" not in stable_vol_columns
+    assert "4h_gk_vol_14_stable_rank" in stable_vol_columns
+    assert "4h_realized_vol_14_stable_zscore" in stable_vol_columns
+    assert "4h_adx_14_stable_rank" not in stable_vol_columns
+    assert "4h_volume_log_zscore_stable_rank" not in stable_vol_columns
+
+    no_whale_zscores = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores")
+    no_whale_zscore_columns = filter_feature_columns(columns, no_whale_zscores)
+    assert "4h_vpt_zscore" not in no_whale_zscore_columns
+    assert "4h_vol_per_trade_log_zscore" not in no_whale_zscore_columns
+    assert "4h_large_trade_ratio" in no_whale_zscore_columns
+    assert "4h_whale_buy_flag" in no_whale_zscore_columns
+
+    pressure_24 = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only")
+    pressure_24_columns = filter_feature_columns(columns, pressure_24)
+    assert "4h_large_trade_pressure_12_stable_rank" not in pressure_24_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in pressure_24_columns
+
+    no_vol_pressure_24 = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only",
+    )
+    no_vol_pressure_24_columns = filter_feature_columns(columns, no_vol_pressure_24)
+    assert "4h_gk_vol_14" not in no_vol_pressure_24_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in no_vol_pressure_24_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_vol_pressure_24_columns
+
+    no_vol_no_whale_zscores = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_no_4h_whale_zscores",
+    )
+    no_vol_no_whale_zscore_columns = filter_feature_columns(columns, no_vol_no_whale_zscores)
+    assert "4h_gk_vol_14" not in no_vol_no_whale_zscore_columns
+    assert "4h_vpt_zscore" not in no_vol_no_whale_zscore_columns
+    assert "4h_whale_sell_flag" in no_vol_no_whale_zscore_columns
+
 
 def test_full_promotion_gate_uses_threshold_selected_f1() -> None:
     config = {
@@ -276,6 +325,52 @@ def test_full_promotion_gate_uses_threshold_selected_f1() -> None:
     }
 
     assert _passes_full(candidate, control, config) == (True, "")
+
+
+def test_triage_promotion_gate_uses_downside_metrics() -> None:
+    config = {
+        "experiments": {
+            "promotion_gates": {
+                "triage": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "max_std_rank_ic_delta": 0.005,
+                    "min_top_10_lift_global": 1.05,
+                    "min_top_10_positive_lift_fold_rate": 0.55,
+                    "min_worst_5_rank_ic_delta": 0.0,
+                    "max_negative_ic_fraction_delta": 0.0,
+                    "min_top_10_bad_fold_lift_mean": 1.0,
+                }
+            }
+        }
+    }
+    control = {
+        "mean_rank_ic": 0.03,
+        "std_rank_ic": 0.10,
+        "positive_ic_fraction": 0.50,
+        "top_10_lift_global": 1.07,
+        "top_10_positive_lift_fold_rate": 0.56,
+        "worst_5_rank_ic_mean": -0.11,
+        "negative_ic_fraction": 0.50,
+        "top_10_bad_fold_lift_mean": 0.95,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+    }
+    candidate = {
+        "mean_rank_ic": 0.04,
+        "std_rank_ic": 0.09,
+        "positive_ic_fraction": 0.62,
+        "top_10_lift_global": 1.16,
+        "top_10_positive_lift_fold_rate": 0.70,
+        "worst_5_rank_ic_mean": -0.08,
+        "negative_ic_fraction": 0.38,
+        "top_10_bad_fold_lift_mean": 1.05,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+    }
+    weaker_downside = dict(candidate, worst_5_rank_ic_mean=-0.13)
+
+    assert _passes_triage(candidate, control, config) == (True, "")
+    assert _passes_triage(weaker_downside, control, config) == (False, "worst_5_rank_ic_delta")
 
 
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:

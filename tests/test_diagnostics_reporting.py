@@ -314,6 +314,24 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
             {"metric": "test_f1_at_050", "mean": 0.27},
         ]
     )
+    fold_metrics = pd.DataFrame(
+        [
+            {"fold": 0, "rank_ic": 0.12},
+            {"fold": 1, "rank_ic": -0.10},
+            {"fold": 2, "rank_ic": 0.04},
+            {"fold": 3, "rank_ic": -0.02},
+            {"fold": 4, "rank_ic": 0.08},
+        ]
+    )
+    score_lift_by_fold = pd.DataFrame(
+        [
+            {"fold": 0, "top_lift_vs_base": 1.30},
+            {"fold": 1, "top_lift_vs_base": 0.90},
+            {"fold": 2, "top_lift_vs_base": 1.10},
+            {"fold": 3, "top_lift_vs_base": 1.00},
+            {"fold": 4, "top_lift_vs_base": 1.20},
+        ]
+    )
 
     ledger = experiment_ledger_diagnostics(
         report={
@@ -326,9 +344,11 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
         },
         config={"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*"], "exclude_patterns": []}}}},
         feature_columns=["a", "b"],
+        fold_metrics=fold_metrics,
         recent_fold_summary=recent_fold_summary,
         threshold_summary=threshold_summary,
         score_band_lift=score_band_lift,
+        score_lift_by_fold=score_lift_by_fold,
         score_band_summary=score_band_summary,
         fold_scope="triage",
         data_start="2022-01-01 00:00:00+00:00",
@@ -346,6 +366,12 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["data_start"] == "2022-01-01 00:00:00+00:00"
     assert row["data_end"] == "2022-02-01 00:00:00+00:00"
     assert row["recent_rank_ic_mean"] == 0.123
+    assert row["negative_ic_count"] == 2
+    assert row["negative_ic_fraction"] == 0.4
+    assert round(row["worst_5_rank_ic_mean"], 6) == 0.024
+    assert row["rank_ic_cvar_20"] == -0.1
+    assert row["bad_fold_rank_ic_mean"] == -0.1
+    assert row["top_10_bad_fold_lift_mean"] == 0.9
     assert row["selected_threshold_mean"] == 0.37
     assert row["test_f1_at_selected_threshold"] == 0.46
     assert row["test_precision_at_selected_threshold"] == 0.32
