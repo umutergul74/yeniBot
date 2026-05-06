@@ -85,6 +85,15 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_volume_context",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_volume_context",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_volume_context",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
+    ]
+    assert {2, 4, 8, 17, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -105,9 +114,23 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_gk_vol_14_stable_rank",
         "4h_vwap_dist_atr_stable_zscore",
         "4h_gk_vol_14",
+        "4h_realized_vol_14",
+        "4h_atr_14_pct",
+        "4h_adx_14",
+        "4h_log_return",
+        "4h_close_denoised_log_return",
+        "4h_volume_log_zscore",
+        "4h_volume_denoised_log_zscore",
         "4h_vwap_dist_atr",
+        "4h_taker_imbalance",
+        "4h_taker_buy_ratio_zscore",
+        "4h_taker_buy_ratio_delta",
+        "4h_taker_imbalance_slope",
+        "4h_taker_imbalance_mean_24",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
+        "volume_log_zscore",
+        "volume_denoised_log_zscore",
         "taker_buy_ratio",
     ]
 
@@ -177,6 +200,42 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in stable_structure_columns
     assert "4h_gk_vol_14_stable_rank" in stable_structure_columns
     assert "4h_vwap_dist_atr_stable_zscore" in stable_structure_columns
+
+    no_4h_volume = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_volume_context")
+    no_4h_volume_columns = filter_feature_columns(columns, no_4h_volume)
+    assert "4h_volume_log_zscore" not in no_4h_volume_columns
+    assert "volume_log_zscore" in no_4h_volume_columns
+    assert "4h_vwap_dist_atr" in no_4h_volume_columns
+
+    no_1h_volume = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_volume_context")
+    no_1h_volume_columns = filter_feature_columns(columns, no_1h_volume)
+    assert "volume_log_zscore" not in no_1h_volume_columns
+    assert "4h_volume_log_zscore" in no_1h_volume_columns
+
+    no_volume = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_volume_context")
+    no_volume_columns = filter_feature_columns(columns, no_volume)
+    assert "volume_log_zscore" not in no_volume_columns
+    assert "4h_volume_log_zscore" not in no_volume_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_volume_columns
+
+    no_4h_volatility = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility")
+    no_4h_volatility_columns = filter_feature_columns(columns, no_4h_volatility)
+    assert "4h_gk_vol_14" not in no_4h_volatility_columns
+    assert "4h_atr_14_pct" not in no_4h_volatility_columns
+    assert "4h_vwap_dist_atr" in no_4h_volatility_columns
+
+    vwap_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure")
+    vwap_only_columns = filter_feature_columns(columns, vwap_only)
+    assert "4h_vwap_dist_atr" in vwap_only_columns
+    assert "4h_gk_vol_14" not in vwap_only_columns
+    assert "4h_adx_14" not in vwap_only_columns
+
+    no_bounded_flow = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow")
+    no_bounded_flow_columns = filter_feature_columns(columns, no_bounded_flow)
+    assert "4h_taker_imbalance_mean_24" not in no_bounded_flow_columns
+    assert "4h_taker_buy_ratio_zscore" not in no_bounded_flow_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_bounded_flow_columns
+    assert "4h_large_trade_ratio" in no_bounded_flow_columns
 
 
 def test_full_promotion_gate_uses_threshold_selected_f1() -> None:

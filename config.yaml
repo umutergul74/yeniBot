@@ -577,6 +577,54 @@ features:
         - "4h_vwap_dist_atr"
         - "4h_volume_log_zscore"
         - "4h_volume_denoised_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_volume_context:
+      description: Champion profile with only 4H volume context removed; tests whether bad-fold structure drift is mostly volume-scale driven.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_volume_log_zscore"
+        - "4h_volume_denoised_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_volume_context:
+      description: Champion profile with only 1H volume context removed; tests whether local volume-scale features are causing bad-fold reversals.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "volume_log_zscore"
+        - "volume_denoised_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_volume_context:
+      description: Champion profile with 1H and 4H volume context removed while keeping whale and large-trade pressure features.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "volume_log_zscore"
+        - "volume_denoised_log_zscore"
+        - "4h_volume_log_zscore"
+        - "4h_volume_denoised_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility:
+      description: Champion profile with raw 4H volatility magnitude levels removed, keeping directional/vwap/volume structure context.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure:
+      description: Champion profile keeping only 4H VWAP distance from the raw 4H structure family instead of deleting all 4H structure.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_log_return"
+        - "4h_close_denoised_log_return"
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+        - "4h_adx_14"
+        - "4h_volume_log_zscore"
+        - "4h_volume_denoised_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow:
+      description: Champion profile without 4H bounded taker-flow features, keeping 4H whale, structure, and long-horizon pressure overlays.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_taker_imbalance"
+        - "4h_taker_buy_ratio_zscore"
+        - "4h_taker_buy_ratio_delta"
+        - "4h_taker_imbalance_slope"
+        - "4h_taker_imbalance_mean_*"
     baseline_no_4h_tier1_flow_stable_combo:
       description: Baseline control plus stable 4H CVD pressure and large-trade pressure families.
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
@@ -780,13 +828,13 @@ experiments:
   run_id: null
   control_profile: baseline_no_4h_tier1_4h_large_trade_pressure_long
   candidate_profiles:
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_large_trade_ratio
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_flags
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_structure
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_structure_stable_overlay
-    - baseline_no_4h_tier1_4h_large_trade_pressure_rank_only
-    - baseline_no_4h_tier1_4h_large_trade_pressure_short
-  triage_fold_ids: [0, 5, 9, 13, 17, 22, 24, 28, 32, 37, 38, 41]
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_volume_context
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_volume_context
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_volume_context
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow
+  triage_fold_ids: [2, 4, 8, 13, 16, 17, 20, 22, 23, 29, 35, 36, 38, 39, 40, 41]
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
