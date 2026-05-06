@@ -8,6 +8,7 @@ import pandas as pd
 from yenibot.config import load_config
 from yenibot.experiments import (
     _auto_full_profiles,
+    _passes_full,
     experiment_settings,
     profile_config,
     resolve_experiment_run_id,
@@ -81,9 +82,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_stable",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_rank_only",
     ]
-    assert config["experiments"]["max_auto_full_candidates"] == 3
+    assert config["experiments"]["max_auto_full_candidates"] == 2
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -146,6 +148,46 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     long_columns = filter_feature_columns(columns, long)
     assert "4h_large_trade_pressure_24_stable_rank" in long_columns
     assert "4h_large_trade_pressure_6_stable_rank" not in long_columns
+
+
+def test_full_promotion_gate_uses_threshold_selected_f1() -> None:
+    config = {
+        "experiments": {
+            "promotion_gates": {
+                "full": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "min_positive_ic_fraction_floor": 0.75,
+                    "max_std_rank_ic_delta": 0.002,
+                    "min_selected_threshold_f1": 0.45,
+                    "min_selected_threshold_f1_delta": 0.0,
+                    "min_long_f1_delta": None,
+                    "min_top_10_lift_global_delta": 0.05,
+                }
+            }
+        }
+    }
+    control = {
+        "mean_rank_ic": 0.048,
+        "positive_ic_fraction": 0.738,
+        "std_rank_ic": 0.085,
+        "mean_long_f1": 0.268,
+        "test_f1_at_selected_threshold": 0.463,
+        "top_10_lift_global": 1.044,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+    }
+    candidate = {
+        "mean_rank_ic": 0.060,
+        "positive_ic_fraction": 0.762,
+        "std_rank_ic": 0.086,
+        "mean_long_f1": 0.274,
+        "test_f1_at_selected_threshold": 0.464,
+        "top_10_lift_global": 1.141,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+    }
+
+    assert _passes_full(candidate, control, config) == (True, "")
 
 
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:

@@ -128,9 +128,10 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "experiment_ledger.json" in names
         payload = json.loads(archive.read("phase1_report.json"))
         ledger = json.loads(archive.read("experiment_ledger.json"))
-        assert payload["passed"] is False
-        assert ledger["profile"] == "base"
-        assert ledger["feature_count"] == 1
+    assert payload["passed"] is False
+    assert ledger["profile"] == "base"
+    assert ledger["feature_count"] == 1
+    assert "test_f1_at_selected_threshold" in ledger
 
 
 def test_calibration_threshold_and_leakage_diagnostics() -> None:
@@ -301,6 +302,17 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
             {"band": "top_20", "lift_vs_base": 1.04, "mean_forward_return": 0.0007},
         ]
     )
+    threshold_summary = pd.DataFrame(
+        [
+            {"metric": "selected_threshold", "mean": 0.37},
+            {"metric": "test_f1_at_selected_threshold", "mean": 0.46},
+            {"metric": "test_precision_at_selected_threshold", "mean": 0.32},
+            {"metric": "test_recall_at_selected_threshold", "mean": 0.88},
+            {"metric": "test_pred_long_rate_at_selected_threshold", "mean": 0.86},
+            {"metric": "test_oracle_best_f1", "mean": 0.49},
+            {"metric": "test_f1_at_050", "mean": 0.27},
+        ]
+    )
 
     ledger = experiment_ledger_diagnostics(
         report={
@@ -314,6 +326,7 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
         config={"features": {"active_profile": "base", "profiles": {"base": {"include_patterns": ["*"], "exclude_patterns": []}}}},
         feature_columns=["a", "b"],
         recent_fold_summary=recent_fold_summary,
+        threshold_summary=threshold_summary,
         score_band_lift=score_band_lift,
         score_band_summary=score_band_summary,
         fold_scope="triage",
@@ -332,6 +345,13 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["data_start"] == "2022-01-01 00:00:00+00:00"
     assert row["data_end"] == "2022-02-01 00:00:00+00:00"
     assert row["recent_rank_ic_mean"] == 0.123
+    assert row["selected_threshold_mean"] == 0.37
+    assert row["test_f1_at_selected_threshold"] == 0.46
+    assert row["test_precision_at_selected_threshold"] == 0.32
+    assert row["test_recall_at_selected_threshold"] == 0.88
+    assert row["test_pred_long_rate_at_selected_threshold"] == 0.86
+    assert row["test_oracle_best_f1"] == 0.49
+    assert row["test_f1_at_050"] == 0.27
     assert row["top_10_lift"] == 1.12
     assert row["top_10_lift_fold_mean"] == 1.12
     assert row["top_10_lift_global"] == 0.98

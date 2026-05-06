@@ -702,19 +702,19 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1
   candidate_profiles:
-    - baseline_no_4h_tier1_4h_large_trade_pressure_stable
-    - baseline_no_4h_tier1_4h_large_trade_pressure_stable_pruned_whale
-    - baseline_no_4h_tier1_4h_large_trade_pressure_rank_only
-    - baseline_no_4h_tier1_4h_large_trade_pressure_zscore_only
-    - baseline_no_4h_tier1_4h_large_trade_pressure_short
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
+    - baseline_no_4h_tier1_4h_large_trade_pressure_rank_only
+    - baseline_no_4h_tier1_4h_large_trade_pressure_short
+    - baseline_no_4h_tier1_4h_large_trade_pressure_stable
+    - baseline_no_4h_tier1_4h_large_trade_pressure_zscore_only
     - baseline_no_4h_tier1_4h_cvd_pressure_stable
   triage_fold_ids: [0, 5, 9, 13, 17, 22, 24, 28, 32, 37, 38, 41]
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1
-    - baseline_no_4h_tier1_4h_large_trade_pressure_stable
-  max_auto_full_candidates: 3
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long
+    - baseline_no_4h_tier1_4h_large_trade_pressure_rank_only
+  max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
   promotion_gates:
@@ -726,6 +726,8 @@ experiments:
     full:
       min_mean_rank_ic_delta: 0.005
       min_positive_ic_fraction_floor: 0.75
-      max_std_rank_ic_delta: 0.0
-      min_long_f1_delta: 0.02
+      max_std_rank_ic_delta: 0.002
+      min_selected_threshold_f1: 0.45
+      min_selected_threshold_f1_delta: 0.0
+      min_long_f1_delta: null
       min_top_10_lift_global_delta: 0.05

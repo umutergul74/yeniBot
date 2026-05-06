@@ -510,6 +510,7 @@ def experiment_ledger_diagnostics(
     config: dict[str, Any] | None = None,
     feature_columns: list[str] | None = None,
     recent_fold_summary: pd.DataFrame | None = None,
+    threshold_summary: pd.DataFrame | None = None,
     score_band_lift: pd.DataFrame | None = None,
     score_band_summary: pd.DataFrame | None = None,
     fold_scope: str = "",
@@ -549,6 +550,19 @@ def experiment_ledger_diagnostics(
                 top_10_lift_global = float(top_row["lift_vs_base"].iloc[0])
             if "mean_forward_return" in top_row:
                 top_10_forward_return_global = float(top_row["mean_forward_return"].iloc[0])
+    selected_threshold_mean = _threshold_summary_mean(threshold_summary, "selected_threshold")
+    test_f1_at_selected_threshold = _threshold_summary_mean(threshold_summary, "test_f1_at_selected_threshold")
+    test_precision_at_selected_threshold = _threshold_summary_mean(
+        threshold_summary,
+        "test_precision_at_selected_threshold",
+    )
+    test_recall_at_selected_threshold = _threshold_summary_mean(threshold_summary, "test_recall_at_selected_threshold")
+    test_pred_long_rate_at_selected_threshold = _threshold_summary_mean(
+        threshold_summary,
+        "test_pred_long_rate_at_selected_threshold",
+    )
+    test_oracle_best_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
+    test_f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
     return pd.DataFrame(
         [
             {
@@ -562,6 +576,13 @@ def experiment_ledger_diagnostics(
                 "std_rank_ic": float(report.get("std_rank_ic", np.nan)),
                 "positive_ic_fraction": float(report.get("positive_ic_fraction", np.nan)),
                 "mean_long_f1": float(report.get("mean_long_f1", np.nan)),
+                "selected_threshold_mean": selected_threshold_mean,
+                "test_f1_at_selected_threshold": test_f1_at_selected_threshold,
+                "test_precision_at_selected_threshold": test_precision_at_selected_threshold,
+                "test_recall_at_selected_threshold": test_recall_at_selected_threshold,
+                "test_pred_long_rate_at_selected_threshold": test_pred_long_rate_at_selected_threshold,
+                "test_oracle_best_f1": test_oracle_best_f1,
+                "test_f1_at_050": test_f1_at_050,
                 "mean_prauc": float(report.get("mean_prauc", np.nan)),
                 "calibration_separation": float(report.get("calibration_separation", np.nan)),
                 "recent_rank_ic_mean": recent_rank_ic_mean,
@@ -577,6 +598,17 @@ def experiment_ledger_diagnostics(
             }
         ]
     )
+
+
+def _threshold_summary_mean(threshold_summary: pd.DataFrame | None, metric: str) -> float:
+    if threshold_summary is None or threshold_summary.empty:
+        return np.nan
+    if "metric" not in threshold_summary.columns or "mean" not in threshold_summary.columns:
+        return np.nan
+    row = threshold_summary.loc[threshold_summary["metric"] == metric]
+    if row.empty:
+        return np.nan
+    return float(row["mean"].iloc[0])
 
 
 def feature_group_diagnostics(feature_columns: list[str]) -> pd.DataFrame:
@@ -970,6 +1002,7 @@ def write_phase1_diagnostic_bundle(
             config=config,
             feature_columns=model_feature_columns,
             recent_fold_summary=recent_fold_summary,
+            threshold_summary=threshold_summary,
             score_band_lift=score_band_lift,
             score_band_summary=score_band_summary,
             timestamp=datetime.now(timezone.utc).isoformat(),

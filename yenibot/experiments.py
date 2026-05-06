@@ -283,6 +283,7 @@ def summarize_profile_predictions(
         config=profile_cfg,
         feature_columns=feature_columns,
         recent_fold_summary=recent,
+        threshold_summary=threshold_summary,
         score_band_lift=score_band_lift,
         score_band_summary=score_band_summary,
         fold_scope=fold_scope,
@@ -392,6 +393,20 @@ def _float(row: dict[str, Any], key: str, default: float = np.nan) -> float:
         return default
 
 
+def _optional_gate_float(gates: dict[str, Any], key: str, default: float | None = None) -> float | None:
+    value = gates.get(key, default)
+    if value is None:
+        return None
+    return float(value)
+
+
+def _metric_or(row: dict[str, Any], key: str, fallback: float) -> float:
+    value = _float(row, key, np.nan)
+    if np.isnan(value):
+        return fallback
+    return value
+
+
 def _passes_triage(row: dict[str, Any], control: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str]:
     gates = _cfg(config, ["experiments", "promotion_gates", "triage"], {}) or {}
     reasons = []
@@ -424,7 +439,16 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("positive_ic_fraction")
     if _float(row, "std_rank_ic") > _float(control, "std_rank_ic") + float(gates.get("max_std_rank_ic_delta", 0.0)):
         reasons.append("std_rank_ic")
-    if _float(row, "mean_long_f1") < _float(control, "mean_long_f1") + float(gates.get("min_long_f1_delta", 0.02)):
+    selected_f1 = _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1"))
+    control_selected_f1 = _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1"))
+    selected_f1_floor = _optional_gate_float(gates, "min_selected_threshold_f1", None)
+    if selected_f1_floor is not None and selected_f1 < selected_f1_floor:
+        reasons.append("selected_threshold_f1")
+    selected_f1_delta = _optional_gate_float(gates, "min_selected_threshold_f1_delta", None)
+    if selected_f1_delta is not None and selected_f1 < control_selected_f1 + selected_f1_delta:
+        reasons.append("selected_threshold_f1_delta")
+    mean_long_f1_delta = _optional_gate_float(gates, "min_long_f1_delta", None)
+    if mean_long_f1_delta is not None and _float(row, "mean_long_f1") < _float(control, "mean_long_f1") + mean_long_f1_delta:
         reasons.append("mean_long_f1_delta")
     if _float(row, "top_10_lift_global") < _float(control, "top_10_lift_global") + float(gates.get("min_top_10_lift_global_delta", 0.05)):
         reasons.append("top_10_lift_global_delta")
@@ -502,6 +526,8 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "std_rank_ic",
         "positive_ic_fraction",
         "mean_long_f1",
+        "test_f1_at_selected_threshold",
+        "selected_threshold_mean",
         "mean_prauc",
         "calibration_separation",
         "recent_rank_ic_mean",
@@ -553,6 +579,7 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "std_rank_ic",
             "positive_ic_fraction",
             "mean_long_f1",
+            "test_f1_at_selected_threshold",
             "top_10_lift_global",
             "promotable",
             "reject_reason",
