@@ -563,6 +563,7 @@ def experiment_ledger_diagnostics(
     )
     test_oracle_best_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
     test_f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
+    selected_threshold_passed = bool(report.get("passed_threshold_selected", False))
     return pd.DataFrame(
         [
             {
@@ -593,11 +594,57 @@ def experiment_ledger_diagnostics(
                 "top_10_forward_return_fold_mean": top_10_forward_return_fold_mean,
                 "top_10_forward_return_global": top_10_forward_return_global,
                 "passed_phase1": bool(report.get("passed", False)),
+                "passed_phase1_selected_threshold": selected_threshold_passed,
                 "promotable": bool(promotable) if promotable is not None else bool(report.get("passed", False)),
                 "reject_reason": reject_reason,
             }
         ]
     )
+
+
+def attach_threshold_summary_to_phase1_report(
+    report: dict[str, Any],
+    threshold_summary: pd.DataFrame | None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add val-selected threshold F1 context without replacing the core Phase 1 checks."""
+
+    updated = dict(report)
+    if threshold_summary is None or threshold_summary.empty:
+        return updated
+
+    selected_threshold = _threshold_summary_mean(threshold_summary, "selected_threshold")
+    selected_f1 = _threshold_summary_mean(threshold_summary, "test_f1_at_selected_threshold")
+    selected_precision = _threshold_summary_mean(threshold_summary, "test_precision_at_selected_threshold")
+    selected_recall = _threshold_summary_mean(threshold_summary, "test_recall_at_selected_threshold")
+    selected_pred_rate = _threshold_summary_mean(threshold_summary, "test_pred_long_rate_at_selected_threshold")
+    oracle_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
+    f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
+    min_long_f1 = float(_config_get(config or {}, ["validation", "min_long_f1"], 0.45))
+
+    threshold_checks = {
+        "long_f1_selected_threshold": bool(pd.notna(selected_f1) and selected_f1 > min_long_f1),
+    }
+    core_checks = dict(updated.get("checks", {}) or {})
+    threshold_phase_checks = {
+        key: value
+        for key, value in core_checks.items()
+        if key != "long_f1"
+    }
+    threshold_phase_checks.update(threshold_checks)
+
+    updated["threshold_selected"] = {
+        "selected_threshold_mean": selected_threshold,
+        "test_f1_at_selected_threshold": selected_f1,
+        "test_precision_at_selected_threshold": selected_precision,
+        "test_recall_at_selected_threshold": selected_recall,
+        "test_pred_long_rate_at_selected_threshold": selected_pred_rate,
+        "test_oracle_best_f1": oracle_f1,
+        "test_f1_at_050": f1_at_050,
+    }
+    updated["checks_threshold_selected"] = threshold_phase_checks
+    updated["passed_threshold_selected"] = all(bool(value) for value in threshold_phase_checks.values())
+    return updated
 
 
 def _threshold_summary_mean(threshold_summary: pd.DataFrame | None, metric: str) -> float:
@@ -1124,21 +1171,43 @@ def _diagnostic_feature_columns(frame: pd.DataFrame) -> list[str]:
 def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str:
     top_good = fold_metrics.sort_values("rank_ic", ascending=False).head(5)[["fold", "rank_ic"]]
     top_bad = fold_metrics.sort_values("rank_ic", ascending=True).head(5)[["fold", "rank_ic"]]
+    threshold_selected = report.get("threshold_selected", {}) or {}
+
+    def fmt(value: object) -> str:
+        try:
+            return f"{float(value):.6f}"
+        except (TypeError, ValueError):
+            return "nan"
+
     lines = [
         "# Phase 1 Diagnostics",
         "",
         f"Decision: {'PASS' if report.get('passed') else 'FAIL'}",
-        f"Mean Rank IC: {report.get('mean_rank_ic'):.6f}",
-        f"Rank IC Std: {report.get('std_rank_ic'):.6f}",
-        f"Positive IC Fraction: {report.get('positive_ic_fraction'):.6f}",
-        f"Mean Long F1: {report.get('mean_long_f1'):.6f}",
-        f"Mean PRAUC: {report.get('mean_prauc'):.6f}",
-        f"Calibration Separation: {report.get('calibration_separation'):.6f}",
-        "",
-        "## Checks",
+        f"Mean Rank IC: {fmt(report.get('mean_rank_ic'))}",
+        f"Rank IC Std: {fmt(report.get('std_rank_ic'))}",
+        f"Positive IC Fraction: {fmt(report.get('positive_ic_fraction'))}",
+        f"Mean Long F1: {fmt(report.get('mean_long_f1'))}",
+        f"Mean PRAUC: {fmt(report.get('mean_prauc'))}",
+        f"Calibration Separation: {fmt(report.get('calibration_separation'))}",
     ]
+    if threshold_selected:
+        lines.extend(
+            [
+                f"Selected Threshold Mean: {fmt(threshold_selected.get('selected_threshold_mean'))}",
+                f"Selected-Threshold Long F1: {fmt(threshold_selected.get('test_f1_at_selected_threshold'))}",
+                f"Selected-Threshold Precision: {fmt(threshold_selected.get('test_precision_at_selected_threshold'))}",
+                f"Selected-Threshold Recall: {fmt(threshold_selected.get('test_recall_at_selected_threshold'))}",
+                f"Selected-Threshold Pred Long Rate: {fmt(threshold_selected.get('test_pred_long_rate_at_selected_threshold'))}",
+            ]
+        )
+    lines.extend(["", "## Checks"])
     checks = report.get("checks", {})
     lines.extend(f"- {name}: {value}" for name, value in checks.items())
+    threshold_checks = report.get("checks_threshold_selected", {})
+    if threshold_checks:
+        lines.append("")
+        lines.append("## Threshold-Selected Checks")
+        lines.extend(f"- {name}: {value}" for name, value in threshold_checks.items())
     alerts = report.get("alerts", [])
     if alerts:
         lines.append("")

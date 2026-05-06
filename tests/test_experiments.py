@@ -78,12 +78,11 @@ def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() 
 
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
-    assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+    assert config["features"]["active_profile"] == "baseline_no_4h_tier1_4h_large_trade_pressure_long"
+    assert config["experiments"]["control_profile"] == "baseline_no_4h_tier1_4h_large_trade_pressure_long"
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
-        "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_rank_only",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     columns = [
@@ -105,6 +104,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_large_trade_pressure_24_stable_rank",
         "4h_gk_vol_14_stable_rank",
         "4h_vwap_dist_atr_stable_zscore",
+        "4h_gk_vol_14",
+        "4h_vwap_dist_atr",
+        "4h_whale_buy_flag",
+        "4h_whale_sell_flag",
         "taker_buy_ratio",
     ]
 
@@ -148,6 +151,32 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     long_columns = filter_feature_columns(columns, long)
     assert "4h_large_trade_pressure_24_stable_rank" in long_columns
     assert "4h_large_trade_pressure_6_stable_rank" not in long_columns
+
+    no_ratio = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_large_trade_ratio")
+    no_ratio_columns = filter_feature_columns(columns, no_ratio)
+    assert "4h_large_trade_ratio" not in no_ratio_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_ratio_columns
+
+    no_whale_flags = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_flags")
+    no_whale_columns = filter_feature_columns(columns, no_whale_flags)
+    assert "4h_large_trade_ratio" not in no_whale_columns
+    assert "4h_whale_buy_flag" not in no_whale_columns
+    assert "4h_vpt_zscore" in no_whale_columns
+
+    no_structure = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_structure")
+    no_structure_columns = filter_feature_columns(columns, no_structure)
+    assert "4h_gk_vol_14" not in no_structure_columns
+    assert "4h_vwap_dist_atr" not in no_structure_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_structure_columns
+
+    stable_structure = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_structure_stable_overlay",
+    )
+    stable_structure_columns = filter_feature_columns(columns, stable_structure)
+    assert "4h_gk_vol_14" not in stable_structure_columns
+    assert "4h_gk_vol_14_stable_rank" in stable_structure_columns
+    assert "4h_vwap_dist_atr_stable_zscore" in stable_structure_columns
 
 
 def test_full_promotion_gate_uses_threshold_selected_f1() -> None:

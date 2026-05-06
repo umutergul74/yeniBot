@@ -6,6 +6,7 @@ import zipfile
 import pandas as pd
 
 from yenibot.diagnostics import (
+    attach_threshold_summary_to_phase1_report,
     bad_fold_feature_forensics,
     bad_fold_group_forensics,
     calibrate_test_probabilities_from_val,
@@ -359,8 +360,45 @@ def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:
     assert row["top_10_forward_return_fold_mean"] == 0.002
     assert row["top_10_forward_return_global"] == 0.0003
     assert row["passed_phase1"] is False
+    assert row["passed_phase1_selected_threshold"] is False
     assert row["promotable"] is False
     assert row["reject_reason"] == "mean_rank_ic_delta"
+
+
+def test_threshold_summary_augments_phase1_report_without_masking_core_checks() -> None:
+    threshold_summary = pd.DataFrame(
+        [
+            {"metric": "selected_threshold", "mean": 0.32},
+            {"metric": "test_f1_at_selected_threshold", "mean": 0.46},
+            {"metric": "test_precision_at_selected_threshold", "mean": 0.32},
+            {"metric": "test_recall_at_selected_threshold", "mean": 0.88},
+            {"metric": "test_pred_long_rate_at_selected_threshold", "mean": 0.86},
+            {"metric": "test_oracle_best_f1", "mean": 0.49},
+            {"metric": "test_f1_at_050", "mean": 0.27},
+        ]
+    )
+    report = {
+        "checks": {
+            "rank_ic_mean": True,
+            "rank_ic_std": False,
+            "positive_ic_fraction": True,
+            "long_f1": False,
+            "calibration_separation": True,
+        },
+        "passed": False,
+    }
+
+    updated = attach_threshold_summary_to_phase1_report(
+        report,
+        threshold_summary,
+        {"validation": {"min_long_f1": 0.45}},
+    )
+
+    assert updated["threshold_selected"]["test_f1_at_selected_threshold"] == 0.46
+    assert updated["checks"]["long_f1"] is False
+    assert updated["checks_threshold_selected"]["long_f1_selected_threshold"] is True
+    assert updated["passed"] is False
+    assert updated["passed_threshold_selected"] is False
 
 
 def test_bad_fold_forensics_reports_group_signal_changes() -> None:

@@ -24,8 +24,8 @@ build/
 reports/
 phase1_diagnostics_*/
 phase1_diagnostics_*.zip
-phase1_experiment_bundle_*.zip
-phase1_latest_experiment_bundle.zip
+phase1_experiment_bundle*.zip
+phase1_latest_experiment_bundle*.zip
 calibration.csv
 calibrated_calibration.csv
 calibrated_test_predictions.parquet

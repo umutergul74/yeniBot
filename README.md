@@ -14,7 +14,7 @@ The project intentionally stops at validated model research. It does not include
 - Continuous order-flow v2 features for taker imbalance, CVD pressure, large-trade pressure, absorption, and price-flow divergence.
 - Stable rolling rank/z-score order-flow v2 model inputs, with high-variance raw pressure/divergence columns kept out of training when `stable_only` is enabled.
 - Stable rolling rank/z-score volatility and structure inputs for controlled overlay experiments rather than full-profile replacement.
-- Config-driven feature profiles for ablation runs such as `baseline_40`, `baseline_plus_bounded_v2`, `baseline_plus_4h_bounded_whale`, `baseline_plus_4h_bounded_whale_no_4h_tier1`, and `baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay`.
+- Config-driven feature profiles for ablation runs such as `baseline_40`, `baseline_plus_bounded_v2`, `baseline_plus_4h_bounded_whale_no_4h_tier1`, `baseline_no_4h_tier1_4h_large_trade_pressure_long`, and targeted champion-pruning variants.
 - Correct 4H-to-1H alignment by shifting 4H bars forward before merge.
 - Long-only binary triple-barrier labels.
 - Binary TCN+GRU sequence model with focal and rank-correlation losses.
@@ -63,13 +63,11 @@ Proceed only when diagnostics show:
 - Calibration separation between actual long and non-long outcomes
 - No leakage alerts
 
-Notebook `05` writes a shareable diagnostics archive under `Drive/yeniBot/reports/`.
-Send that `phase1_diagnostics_*.zip` when a run needs review.
-The archive includes raw and validation-calibrated reports, threshold diagnostics,
-threshold summaries, global and fold-level score-lift tables, recent-fold
-health summaries, score-band lift tables, MTF alignment sentinels, regime
-metrics, model feature columns, active feature-profile diagnostics,
-feature-family inventories, stationarity policy checks, good/bad fold feature
-audit tables, bad-fold forensic tables, selected-fold permutation importance,
-group-level permutation importance, and an `experiment_ledger` snapshot for
+Notebook `05` writes one shareable archive under `Drive/yeniBot/reports/`:
+`phase1_latest_experiment_bundle.zip`. Send that single bundle when a run needs
+review. It contains the profile comparison, decision report, best candidate,
+and profile-specific diagnostics zips with threshold diagnostics, score-lift
+tables, recent-fold health summaries, MTF alignment sentinels, regime metrics,
+model feature columns, feature-profile diagnostics, stationarity checks,
+good/bad fold forensic tables, and an `experiment_ledger` snapshot for
 run-over-run comparisons.

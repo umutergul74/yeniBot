@@ -16,6 +16,7 @@ from yenibot.diagnostics.model_analysis import (
     tsne_embeddings,
 )
 from yenibot.diagnostics.reporting import (
+    attach_threshold_summary_to_phase1_report,
     best_f1_threshold,
     bad_fold_feature_forensics,
     bad_fold_group_forensics,
@@ -44,6 +45,7 @@ from yenibot.diagnostics.reporting import (
 
 __all__ = [
     "best_f1_threshold",
+    "attach_threshold_summary_to_phase1_report",
     "bad_fold_feature_forensics",
     "bad_fold_group_forensics",
     "calibrate_test_probabilities_from_val",

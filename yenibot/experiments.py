@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from yenibot.diagnostics import (
+    attach_threshold_summary_to_phase1_report,
     calibration_table,
     experiment_ledger_diagnostics,
     feature_group_diagnostics,
@@ -264,6 +265,7 @@ def summarize_profile_predictions(
     regime_metrics = regime_diagnostics(test_predictions)
     threshold_metrics = threshold_diagnostics(predictions)
     threshold_summary = threshold_summary_diagnostics(threshold_metrics)
+    report = attach_threshold_summary_to_phase1_report(report, threshold_summary, profile_cfg)
     score_bins = int(_cfg(profile_cfg, ["validation", "score_lift_bins"], _cfg(profile_cfg, ["validation", "calibration_bins"], 10)))
     score_bands = _cfg(profile_cfg, ["validation", "score_bands"], None)
     score_lift = score_lift_diagnostics(test_predictions, bins=score_bins)
@@ -537,6 +539,7 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "mtf_leakage_passed",
         "stationarity_policy_passed",
         "passed_phase1",
+        "passed_phase1_selected_threshold",
         "promotable",
         "reject_reason",
         "data_start",
@@ -581,6 +584,7 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "mean_long_f1",
             "test_f1_at_selected_threshold",
             "top_10_lift_global",
+            "passed_phase1_selected_threshold",
             "promotable",
             "reject_reason",
         ]

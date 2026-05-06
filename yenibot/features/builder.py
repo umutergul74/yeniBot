@@ -489,6 +489,7 @@ def resolve_feature_profile(config: object) -> dict[str, object]:
             exclude_patterns = list(current.get("exclude_patterns", []) or [])
         else:
             exclude_patterns = list(parent.get("exclude_patterns", []) or [])
+        exclude_patterns.extend(list(current.get("append_exclude_patterns", []) or []))
         return {
             "name": name,
             "description": current.get("description", ""),
