@@ -301,6 +301,204 @@ features:
         - "4h_vwap_dist_atr_stable_*"
         - "4h_volume_log_zscore_stable_*"
         - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_no_4h_tier1_4h_large_trade_pressure_stable_pruned_whale:
+      description: Stable 4H large-trade pressure, but remove raw 4H large_trade_ratio to reduce whale-context regime drift.
+      inherit: baseline_no_4h_tier1_pruned_whale
+      include_patterns:
+        - "4h_signed_large_trade_pressure_stable_zscore"
+        - "4h_signed_large_trade_pressure_stable_rank"
+        - "4h_large_trade_pressure_3_stable_zscore"
+        - "4h_large_trade_pressure_3_stable_rank"
+        - "4h_large_trade_pressure_6_stable_zscore"
+        - "4h_large_trade_pressure_6_stable_rank"
+        - "4h_large_trade_pressure_12_stable_zscore"
+        - "4h_large_trade_pressure_12_stable_rank"
+        - "4h_large_trade_pressure_24_stable_zscore"
+        - "4h_large_trade_pressure_24_stable_rank"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "4h_large_trade_ratio"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_no_4h_tier1_4h_large_trade_pressure_rank_only:
+      description: Stable 4H large-trade pressure rank-only overlay; tests whether bounded ordering is more robust than z-scores.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
+      include_patterns:
+        - "4h_signed_large_trade_pressure_stable_rank"
+        - "4h_large_trade_pressure_3_stable_rank"
+        - "4h_large_trade_pressure_6_stable_rank"
+        - "4h_large_trade_pressure_12_stable_rank"
+        - "4h_large_trade_pressure_24_stable_rank"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_no_4h_tier1_4h_large_trade_pressure_zscore_only:
+      description: Stable 4H large-trade pressure z-score-only overlay; isolates magnitude shocks from rank ordering.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
+      include_patterns:
+        - "4h_signed_large_trade_pressure_stable_zscore"
+        - "4h_large_trade_pressure_3_stable_zscore"
+        - "4h_large_trade_pressure_6_stable_zscore"
+        - "4h_large_trade_pressure_12_stable_zscore"
+        - "4h_large_trade_pressure_24_stable_zscore"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_no_4h_tier1_4h_large_trade_pressure_short:
+      description: Stable 4H large-trade pressure short-horizon overlay using 3/6-bar pressure plus signed pressure.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
+      include_patterns:
+        - "4h_signed_large_trade_pressure_stable_zscore"
+        - "4h_signed_large_trade_pressure_stable_rank"
+        - "4h_large_trade_pressure_3_stable_zscore"
+        - "4h_large_trade_pressure_3_stable_rank"
+        - "4h_large_trade_pressure_6_stable_zscore"
+        - "4h_large_trade_pressure_6_stable_rank"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long:
+      description: Stable 4H large-trade pressure long-horizon overlay using 12/24-bar pressure plus signed pressure.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
+      include_patterns:
+        - "4h_signed_large_trade_pressure_stable_zscore"
+        - "4h_signed_large_trade_pressure_stable_rank"
+        - "4h_large_trade_pressure_12_stable_zscore"
+        - "4h_large_trade_pressure_12_stable_rank"
+        - "4h_large_trade_pressure_24_stable_zscore"
+        - "4h_large_trade_pressure_24_stable_rank"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "*cvd_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
     baseline_no_4h_tier1_flow_stable_combo:
       description: Baseline control plus stable 4H CVD pressure and large-trade pressure families.
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
@@ -504,17 +702,19 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1
   candidate_profiles:
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay
-    - baseline_no_4h_tier1_pruned_whale
-    - baseline_no_4h_tier1_4h_cvd_pressure_stable
     - baseline_no_4h_tier1_4h_large_trade_pressure_stable
-    - baseline_no_4h_tier1_flow_stable_combo
+    - baseline_no_4h_tier1_4h_large_trade_pressure_stable_pruned_whale
+    - baseline_no_4h_tier1_4h_large_trade_pressure_rank_only
+    - baseline_no_4h_tier1_4h_large_trade_pressure_zscore_only
+    - baseline_no_4h_tier1_4h_large_trade_pressure_short
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long
+    - baseline_no_4h_tier1_4h_cvd_pressure_stable
   triage_fold_ids: [0, 5, 9, 13, 17, 22, 24, 28, 32, 37, 38, 41]
-  full_cv_profiles:
+  full_cv_profiles: auto
+  always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1
     - baseline_no_4h_tier1_4h_large_trade_pressure_stable
-    - baseline_no_4h_tier1_flow_stable_combo
-    - baseline_no_4h_tier1_4h_cvd_pressure_stable
+  max_auto_full_candidates: 3
   resume_existing: true
   force_retrain: false
   promotion_gates:

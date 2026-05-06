@@ -109,6 +109,8 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments["profiles"] = profiles
     experiments.setdefault("triage_fold_ids", [])
     experiments.setdefault("full_cv_profiles", "auto")
+    experiments.setdefault("always_full_profiles", [control])
+    experiments.setdefault("max_auto_full_candidates", None)
     experiments.setdefault("resume_existing", True)
     experiments.setdefault("force_retrain", False)
     return experiments
@@ -457,6 +459,39 @@ def _decision_rows(rows: list[dict[str, Any]], config: dict[str, Any], *, scope:
     return decided
 
 
+def _auto_full_profiles(settings: dict[str, Any], triage_rows: list[dict[str, Any]]) -> list[str]:
+    control_profile = str(settings["control_profile"])
+    profiles = [control_profile]
+    for profile in settings.get("always_full_profiles", []) or []:
+        profile = str(profile)
+        if profile not in profiles:
+            profiles.append(profile)
+
+    passed_candidates = [
+        row
+        for row in triage_rows
+        if row["profile"] != control_profile and bool(row.get("promotable"))
+    ]
+    passed_candidates = sorted(
+        passed_candidates,
+        key=lambda row: (
+            _float(row, "mean_rank_ic", -np.inf),
+            _float(row, "top_10_lift_global", -np.inf),
+            _float(row, "top_10_positive_lift_fold_rate", -np.inf),
+        ),
+        reverse=True,
+    )
+    max_auto = settings.get("max_auto_full_candidates", None)
+    if max_auto is not None:
+        passed_candidates = passed_candidates[: max(0, int(max_auto))]
+
+    for row in passed_candidates:
+        profile = str(row["profile"])
+        if profile not in profiles:
+            profiles.append(profile)
+    return profiles
+
+
 def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     columns = [
         "profile",
@@ -616,12 +651,7 @@ def run_experiment_matrix(
     triage_rows = _decision_rows(rows, config, scope="triage")
     full_profiles_setting = settings.get("full_cv_profiles", "auto")
     if full_profiles_setting == "auto":
-        passed_candidates = [
-            row["profile"]
-            for row in triage_rows
-            if row["profile"] != settings["control_profile"] and bool(row.get("promotable"))
-        ]
-        full_profiles = [settings["control_profile"], *passed_candidates] if passed_candidates else []
+        full_profiles = _auto_full_profiles(settings, triage_rows)
     else:
         full_profiles = [str(profile) for profile in full_profiles_setting]
 

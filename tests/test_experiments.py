@@ -7,6 +7,7 @@ import pandas as pd
 
 from yenibot.config import load_config
 from yenibot.experiments import (
+    _auto_full_profiles,
     experiment_settings,
     profile_config,
     resolve_experiment_run_id,
@@ -58,15 +59,31 @@ def test_experiment_settings_resolves_control_and_candidates() -> None:
     assert settings["candidate_profiles"] == ["candidate_a", "candidate_b"]
 
 
+def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() -> None:
+    settings = {
+        "control_profile": "control",
+        "always_full_profiles": ["control", "champion"],
+        "max_auto_full_candidates": 1,
+    }
+    triage_rows = [
+        {"profile": "control", "promotable": False, "mean_rank_ic": 0.03, "top_10_lift_global": 1.0},
+        {"profile": "weak", "promotable": False, "mean_rank_ic": 0.09, "top_10_lift_global": 1.2},
+        {"profile": "candidate_a", "promotable": True, "mean_rank_ic": 0.05, "top_10_lift_global": 1.4},
+        {"profile": "candidate_b", "promotable": True, "mean_rank_ic": 0.07, "top_10_lift_global": 1.1},
+    ]
+
+    assert _auto_full_profiles(settings, triage_rows) == ["control", "champion", "candidate_b"]
+
+
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
     assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
-    assert config["experiments"]["full_cv_profiles"] == [
+    assert config["experiments"]["full_cv_profiles"] == "auto"
+    assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_stable",
-        "baseline_no_4h_tier1_flow_stable_combo",
-        "baseline_no_4h_tier1_4h_cvd_pressure_stable",
     ]
+    assert config["experiments"]["max_auto_full_candidates"] == 3
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -74,8 +91,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_cvd_pressure_3",
         "4h_cvd_pressure_3_stable_rank",
         "4h_cvd_pressure_24_stable_zscore",
+        "4h_signed_large_trade_pressure_stable_zscore",
         "4h_signed_large_trade_pressure_stable_rank",
+        "4h_large_trade_pressure_3_stable_zscore",
+        "4h_large_trade_pressure_3_stable_rank",
+        "4h_large_trade_pressure_6_stable_zscore",
+        "4h_large_trade_pressure_6_stable_rank",
         "4h_large_trade_pressure_12_stable_zscore",
+        "4h_large_trade_pressure_12_stable_rank",
+        "4h_large_trade_pressure_24_stable_zscore",
+        "4h_large_trade_pressure_24_stable_rank",
         "4h_gk_vol_14_stable_rank",
         "4h_vwap_dist_atr_stable_zscore",
         "taker_buy_ratio",
@@ -96,6 +121,31 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_signed_large_trade_pressure_stable_rank" in large_columns
     assert "4h_large_trade_pressure_12_stable_zscore" in large_columns
     assert "4h_cvd_pressure_3_stable_rank" not in large_columns
+
+    pruned_large = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_stable_pruned_whale")
+    pruned_large_columns = filter_feature_columns(columns, pruned_large)
+    assert "4h_large_trade_ratio" not in pruned_large_columns
+    assert "4h_signed_large_trade_pressure_stable_rank" in pruned_large_columns
+
+    rank_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_rank_only")
+    rank_columns = filter_feature_columns(columns, rank_only)
+    assert "4h_large_trade_pressure_12_stable_rank" in rank_columns
+    assert "4h_large_trade_pressure_12_stable_zscore" not in rank_columns
+
+    zscore_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_zscore_only")
+    zscore_columns = filter_feature_columns(columns, zscore_only)
+    assert "4h_large_trade_pressure_12_stable_zscore" in zscore_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in zscore_columns
+
+    short = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_short")
+    short_columns = filter_feature_columns(columns, short)
+    assert "4h_large_trade_pressure_3_stable_rank" in short_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in short_columns
+
+    long = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long")
+    long_columns = filter_feature_columns(columns, long)
+    assert "4h_large_trade_pressure_24_stable_rank" in long_columns
+    assert "4h_large_trade_pressure_6_stable_rank" not in long_columns
 
 
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:
