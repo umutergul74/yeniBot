@@ -635,6 +635,108 @@ def _write_decision_files(run_dir: Path, comparison: pd.DataFrame, decision: dic
     _write_json(run_dir / "best_candidate.json", decision.get("best_candidate") or {})
 
 
+def _fold_delta_frame(entry: dict[str, Any]) -> pd.DataFrame:
+    diagnostics = entry["diagnostics"]
+    fold_metrics = diagnostics["fold_metrics"].copy()
+    columns = ["fold", "rank_ic", "long_f1", "prauc"]
+    optional = [column for column in ("start", "end") if column in fold_metrics.columns]
+    frame = fold_metrics[["fold", *optional, *columns[1:]]].copy()
+    score_lift = diagnostics["score_lift_by_fold"]
+    if score_lift is not None and not score_lift.empty:
+        lift_columns = [column for column in ("top_lift_vs_base", "top_minus_bottom_forward_return") if column in score_lift.columns]
+        if lift_columns:
+            frame = frame.merge(score_lift[["fold", *lift_columns]], on="fold", how="left")
+    thresholds = diagnostics["threshold_metrics"]
+    if thresholds is not None and not thresholds.empty and "test_f1_at_selected_threshold" in thresholds.columns:
+        frame = frame.merge(thresholds[["fold", "test_f1_at_selected_threshold"]], on="fold", how="left")
+    return frame
+
+
+def _profile_delta_vs_control(entries: list[dict[str, Any]], control_profile: str) -> pd.DataFrame:
+    columns = [
+        "profile",
+        "fold_scope",
+        "fold",
+        "start",
+        "end",
+        "control_rank_ic",
+        "candidate_rank_ic",
+        "rank_ic_delta",
+        "control_top_10_lift",
+        "candidate_top_10_lift",
+        "top_10_lift_delta",
+        "control_threshold_f1",
+        "candidate_threshold_f1",
+        "threshold_f1_delta",
+        "control_prauc",
+        "candidate_prauc",
+        "prauc_delta",
+        "control_long_f1",
+        "candidate_long_f1",
+        "long_f1_delta",
+    ]
+    controls = {
+        str(entry["fold_scope"]): _fold_delta_frame(entry)
+        for entry in entries
+        if str(entry["profile"]) == control_profile
+    }
+    rows = []
+    for entry in entries:
+        profile = str(entry["profile"])
+        fold_scope = str(entry["fold_scope"])
+        if profile == control_profile or fold_scope not in controls:
+            continue
+        control = controls[fold_scope].copy()
+        candidate = _fold_delta_frame(entry).copy()
+        merged = control.merge(candidate, on="fold", how="inner", suffixes=("_control", "_candidate"))
+        for _, row in merged.iterrows():
+            start = row.get("start_candidate", row.get("start_control", ""))
+            end = row.get("end_candidate", row.get("end_control", ""))
+            control_top = _float(row.to_dict(), "top_lift_vs_base_control")
+            candidate_top = _float(row.to_dict(), "top_lift_vs_base_candidate")
+            control_threshold_f1 = _float(row.to_dict(), "test_f1_at_selected_threshold_control")
+            candidate_threshold_f1 = _float(row.to_dict(), "test_f1_at_selected_threshold_candidate")
+            control_prauc = _float(row.to_dict(), "prauc_control")
+            candidate_prauc = _float(row.to_dict(), "prauc_candidate")
+            control_long_f1 = _float(row.to_dict(), "long_f1_control")
+            candidate_long_f1 = _float(row.to_dict(), "long_f1_candidate")
+            control_rank_ic = _float(row.to_dict(), "rank_ic_control")
+            candidate_rank_ic = _float(row.to_dict(), "rank_ic_candidate")
+            rows.append(
+                {
+                    "profile": profile,
+                    "fold_scope": fold_scope,
+                    "fold": int(row["fold"]),
+                    "start": start,
+                    "end": end,
+                    "control_rank_ic": control_rank_ic,
+                    "candidate_rank_ic": candidate_rank_ic,
+                    "rank_ic_delta": candidate_rank_ic - control_rank_ic,
+                    "control_top_10_lift": control_top,
+                    "candidate_top_10_lift": candidate_top,
+                    "top_10_lift_delta": candidate_top - control_top,
+                    "control_threshold_f1": control_threshold_f1,
+                    "candidate_threshold_f1": candidate_threshold_f1,
+                    "threshold_f1_delta": candidate_threshold_f1 - control_threshold_f1,
+                    "control_prauc": control_prauc,
+                    "candidate_prauc": candidate_prauc,
+                    "prauc_delta": candidate_prauc - control_prauc,
+                    "control_long_f1": control_long_f1,
+                    "candidate_long_f1": candidate_long_f1,
+                    "long_f1_delta": candidate_long_f1 - control_long_f1,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(["fold_scope", "profile", "fold"]).reset_index(drop=True)
+
+
+def _write_profile_delta(path: Path, profile_delta: pd.DataFrame | None) -> None:
+    if profile_delta is None:
+        return
+    profile_delta.to_csv(path / "profile_delta_vs_control.csv", index=False)
+
+
 def _write_experiment_bundle(
     *,
     output_dir: Path,
@@ -647,6 +749,7 @@ def _write_experiment_bundle(
     summary_files = [
         "profile_comparison.csv",
         "profile_comparison.md",
+        "profile_delta_vs_control.csv",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -735,6 +838,7 @@ def run_experiment_matrix(
 
     full_rows = _decision_rows(full_rows, config, scope="full") if full_rows else []
     comparison = _comparison_frame([*triage_rows, *full_rows])
+    profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     decision = {
         "run_id": run_id,
@@ -744,11 +848,13 @@ def run_experiment_matrix(
         "recommendation": "promote_best_candidate" if best else "keep_control_profile",
     }
     _write_decision_files(run_dir, comparison, decision)
+    _write_profile_delta(run_dir, profile_delta)
     return {
         "run_id": run_id,
         "run_dir": run_dir,
         "profile_results": profile_results,
         "comparison": comparison,
+        "profile_delta": profile_delta,
         "decision": decision,
     }
 
@@ -802,6 +908,7 @@ def write_experiment_diagnostics(
     triage_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "triage"], config, scope="triage")
     full_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "full"], config, scope="full")
     comparison = _comparison_frame([*triage_rows, *full_rows])
+    profile_delta = _profile_delta_vs_control(entries, settings["control_profile"])
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -860,7 +967,9 @@ def write_experiment_diagnostics(
     decision["bundle_zip"] = str(bundle_path)
     decision["latest_bundle_zip"] = str(latest_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
+    _write_profile_delta(report_dir, profile_delta)
     _write_decision_files(run_dir, comparison, decision)
+    _write_profile_delta(run_dir, profile_delta)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -871,6 +980,7 @@ def write_experiment_diagnostics(
         "run_id": run_dir.name,
         "run_dir": run_dir,
         "comparison": comparison,
+        "profile_delta": profile_delta,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),

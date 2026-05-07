@@ -688,6 +688,32 @@ features:
       append_exclude_patterns:
         - "4h_vpt_zscore"
         - "4h_vol_per_trade_log_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore:
+      description: Champion profile with only the 12-bar 4H pressure z-score removed; keeps the 12-bar rank and full 24-bar pressure pair.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_large_trade_pressure_12_stable_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_rank:
+      description: Champion profile with only the 12-bar 4H pressure rank removed; keeps the 12-bar z-score and full 24-bar pressure pair.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_large_trade_pressure_12_stable_rank"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow:
+      description: Champion profile removing only slower 12/24-bar 4H taker-imbalance means while keeping fast bounded flow context.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_taker_imbalance_mean_12"
+        - "4h_taker_imbalance_mean_24"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only:
+      description: Champion profile isolating the 4H VPT z-score by removing it while keeping 4H vol-per-trade log z-score and whale flags.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_vpt_zscore"
+    baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vol_per_trade_log_zscore_only:
+      description: Champion profile isolating the 4H vol-per-trade log z-score by removing it while keeping VPT z-score and whale flags.
+      inherit: baseline_no_4h_tier1_4h_large_trade_pressure_long
+      append_exclude_patterns:
+        - "4h_vol_per_trade_log_zscore"
     baseline_no_4h_tier1_flow_stable_combo:
       description: Baseline control plus stable 4H CVD pressure and large-trade pressure families.
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
@@ -892,16 +918,16 @@ experiments:
   run_id: null
   control_profile: baseline_no_4h_tier1_4h_large_trade_pressure_long
   candidate_profiles:
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_4h_stable_vol_overlay
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores
     - baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_no_4h_whale_zscores
-  triage_fold_ids: [2, 4, 8, 13, 16, 17, 20, 22, 23, 29, 35, 36, 38, 39, 40, 41]
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_rank
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only
+    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vol_per_trade_log_zscore_only
+  triage_fold_ids: [0, 2, 4, 8, 13, 16, 17, 20, 21, 22, 23, 29, 32, 35, 36, 38, 39, 40, 41]
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false

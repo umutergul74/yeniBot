@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -84,17 +85,17 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_4h_stable_vol_overlay",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_no_4h_whale_zscores",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_rank",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vol_per_trade_log_zscore_only",
     ]
-    assert {2, 4, 8, 17, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
+    assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -134,6 +135,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_buy_ratio_zscore",
         "4h_taker_buy_ratio_delta",
         "4h_taker_imbalance_slope",
+        "4h_taker_imbalance_mean_12",
         "4h_taker_imbalance_mean_24",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
@@ -267,6 +269,40 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     pressure_24_columns = filter_feature_columns(columns, pressure_24)
     assert "4h_large_trade_pressure_12_stable_rank" not in pressure_24_columns
     assert "4h_large_trade_pressure_24_stable_rank" in pressure_24_columns
+
+    no_12_zscore = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore")
+    no_12_zscore_columns = filter_feature_columns(columns, no_12_zscore)
+    assert "4h_large_trade_pressure_12_stable_zscore" not in no_12_zscore_columns
+    assert "4h_large_trade_pressure_12_stable_rank" in no_12_zscore_columns
+    assert "4h_large_trade_pressure_24_stable_zscore" in no_12_zscore_columns
+
+    no_12_rank = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_rank")
+    no_12_rank_columns = filter_feature_columns(columns, no_12_rank)
+    assert "4h_large_trade_pressure_12_stable_rank" not in no_12_rank_columns
+    assert "4h_large_trade_pressure_12_stable_zscore" in no_12_rank_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_12_rank_columns
+
+    no_slow_flow = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow")
+    no_slow_flow_columns = filter_feature_columns(columns, no_slow_flow)
+    assert "4h_taker_imbalance_mean_12" not in no_slow_flow_columns
+    assert "4h_taker_imbalance_mean_24" not in no_slow_flow_columns
+    assert "4h_taker_imbalance" in no_slow_flow_columns
+    assert "4h_taker_imbalance_slope" in no_slow_flow_columns
+
+    no_vpt_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only")
+    no_vpt_only_columns = filter_feature_columns(columns, no_vpt_only)
+    assert "4h_vpt_zscore" not in no_vpt_only_columns
+    assert "4h_vol_per_trade_log_zscore" in no_vpt_only_columns
+    assert "4h_whale_buy_flag" in no_vpt_only_columns
+
+    no_vpt_log_only = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vol_per_trade_log_zscore_only",
+    )
+    no_vpt_log_only_columns = filter_feature_columns(columns, no_vpt_log_only)
+    assert "4h_vol_per_trade_log_zscore" not in no_vpt_log_only_columns
+    assert "4h_vpt_zscore" in no_vpt_log_only_columns
+    assert "4h_whale_sell_flag" in no_vpt_log_only_columns
 
     no_vol_pressure_24 = profile_config(
         config,
@@ -434,14 +470,21 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     )
 
     assert set(result["comparison"]["profile"]) == {"control", "candidate"}
+    assert not result["profile_delta"].empty
+    assert {"rank_ic_delta", "top_10_lift_delta", "threshold_f1_delta"}.issubset(result["profile_delta"].columns)
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert diagnostics["zip_paths"]
+    assert not diagnostics["profile_delta"].empty
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
     assert diagnostics["latest_bundle_zip"].endswith("phase1_latest_experiment_bundle.zip")
     assert diagnostics["decision"]["recommendation"] in {"keep_control_profile", "promote_best_candidate"}
+    with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
+        assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:
