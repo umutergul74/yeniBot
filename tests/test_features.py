@@ -144,11 +144,13 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "ratio_delta_periods": 1,
         "imbalance_slope_window": 4,
         "pressure_windows": [3, 4],
+        "pressure_spread_pairs": [[4, 3]],
         "efficiency_epsilon": 0.001,
         "stable_only": True,
         "stable_window": 4,
         "stable_clip_abs": 3.0,
-        "stable_transforms": ["zscore", "rank"],
+        "stable_tanh_scale": 2.0,
+        "stable_transforms": ["zscore", "rank", "tanh"],
     }
     primary = synthetic_klines(96, "1h")
     htf = synthetic_klines(30, "4h")
@@ -165,6 +167,10 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "signed_large_trade_pressure",
         "signed_large_trade_pressure_stable_zscore",
         "signed_large_trade_pressure_stable_rank",
+        "signed_large_trade_pressure_stable_tanh",
+        "large_trade_pressure_4_minus_3",
+        "large_trade_pressure_4_minus_3_stable_rank",
+        "large_trade_pressure_4_minus_3_stable_tanh",
         "orderflow_efficiency",
         "absorption_pressure_3",
         "absorption_pressure_3_stable_rank",
@@ -173,6 +179,7 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "4h_taker_imbalance",
         "4h_cvd_pressure_3",
         "4h_cvd_pressure_3_stable_rank",
+        "4h_large_trade_pressure_4_minus_3_stable_tanh",
     ]
 
     assert set(columns).issubset(base.columns)
@@ -182,3 +189,5 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
 
     assert "signed_large_trade_pressure" not in build_feature_matrix(primary, htf, config).feature_columns
     assert "signed_large_trade_pressure_stable_zscore" in build_feature_matrix(primary, htf, config).feature_columns
+    assert "large_trade_pressure_4_minus_3" not in build_feature_matrix(primary, htf, config).feature_columns
+    assert "large_trade_pressure_4_minus_3_stable_tanh" in build_feature_matrix(primary, htf, config).feature_columns

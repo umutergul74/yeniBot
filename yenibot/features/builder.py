@@ -259,6 +259,7 @@ def _add_structure_stability_features(df: pd.DataFrame, config: object, default_
     stable_window = int(_config_get(cfg, ["stable_window"], default_window))
     stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
     stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
     source_columns = list(
         _config_get(
             cfg,
@@ -285,6 +286,7 @@ def _add_structure_stability_features(df: pd.DataFrame, config: object, default_
         stable_transforms,
         error_context="features.structure_stability.stable_window",
         missing_ok=True,
+        tanh_scale=stable_tanh_scale,
     )
     if stable_scores.empty:
         return df
@@ -304,6 +306,8 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
     stable_window = int(_config_get(cfg, ["stable_window"], default_window))
     stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
     stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
+    pressure_spread_pairs = list(_config_get(cfg, ["pressure_spread_pairs"], [[24, 12]]) or [])
 
     taker_imbalance = (df["taker_buy_ratio"] - df["taker_sell_ratio"]).clip(-1.0, 1.0)
     large_trade_intensity = (df["vpt_zscore"] - df["vpt_zscore"].rolling(default_window, min_periods=default_window).median()).clip(lower=0.0)
@@ -340,6 +344,7 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
             stable_clip_abs,
             stable_transforms,
             error_context="features.order_flow_v2.stable_window",
+            tanh_scale=stable_tanh_scale,
         )
     ]
 
@@ -365,6 +370,33 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
                 stable_clip_abs,
                 stable_transforms,
                 error_context="features.order_flow_v2.stable_window",
+                tanh_scale=stable_tanh_scale,
+            )
+        )
+    for pair in pressure_spread_pairs:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError("features.order_flow_v2.pressure_spread_pairs values must be [slow, fast] pairs")
+        slow, fast = int(pair[0]), int(pair[1])
+        if slow <= 1 or fast <= 1:
+            raise ValueError("features.order_flow_v2.pressure_spread_pairs values must be greater than 1")
+        slow_column = f"large_trade_pressure_{slow}"
+        fast_column = f"large_trade_pressure_{fast}"
+        if slow_column not in df.columns or fast_column not in df.columns:
+            raise ValueError(
+                "features.order_flow_v2.pressure_spread_pairs must reference configured pressure_windows; "
+                f"missing {slow_column!r} or {fast_column!r}"
+            )
+        spread_column = f"large_trade_pressure_{slow}_minus_{fast}"
+        df[spread_column] = df[slow_column] - df[fast_column]
+        stable_frames.append(
+            _stable_rolling_score_frame(
+                df,
+                [spread_column],
+                stable_window,
+                stable_clip_abs,
+                stable_transforms,
+                error_context="features.order_flow_v2.stable_window",
+                tanh_scale=stable_tanh_scale,
             )
         )
     stable_frames = [frame for frame in stable_frames if not frame.empty]
@@ -382,9 +414,12 @@ def _stable_rolling_score_frame(
     *,
     error_context: str,
     missing_ok: bool = False,
-) -> None:
+    tanh_scale: float = 2.0,
+) -> pd.DataFrame:
     if window <= 1:
         raise ValueError(f"{error_context} must be greater than 1")
+    if tanh_scale <= 0:
+        raise ValueError(f"{error_context} tanh_scale must be greater than 0")
     additions: dict[str, pd.Series] = {}
     for column in columns:
         if column not in df.columns:
@@ -392,10 +427,15 @@ def _stable_rolling_score_frame(
                 continue
             raise KeyError(f"Stable source column is missing: {column}")
         series = df[column].replace([np.inf, -np.inf], np.nan)
+        zscore = None
+        if "zscore" in transforms or "tanh" in transforms:
+            zscore = _rolling_zscore(series, window).clip(-clip_abs, clip_abs)
         if "zscore" in transforms:
-            additions[f"{column}_stable_zscore"] = _rolling_zscore(series, window).clip(-clip_abs, clip_abs)
+            additions[f"{column}_stable_zscore"] = zscore
         if "rank" in transforms:
             additions[f"{column}_stable_rank"] = _rolling_rank_score(series, window)
+        if "tanh" in transforms:
+            additions[f"{column}_stable_tanh"] = np.tanh(zscore / tanh_scale)
     return pd.DataFrame(additions, index=df.index)
 
 
@@ -516,6 +556,7 @@ def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:
     if not bool(_config_get(cfg, ["stable_only"], False)):
         return set()
     pressure_windows = [int(item) for item in (list(_config_get(cfg, ["pressure_windows"], [3, 6, 12, 24]) or []))]
+    pressure_spread_pairs = list(_config_get(cfg, ["pressure_spread_pairs"], [[24, 12]]) or [])
     base = {
         "signed_large_trade_pressure",
         "orderflow_efficiency",
@@ -531,6 +572,9 @@ def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:
                 f"cvd_price_divergence_{window}",
             }
         )
+    for pair in pressure_spread_pairs:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            base.add(f"large_trade_pressure_{int(pair[0])}_minus_{int(pair[1])}")
     return base | {f"4h_{column}" for column in base}
 
 

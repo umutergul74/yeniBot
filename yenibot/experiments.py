@@ -114,6 +114,12 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments.setdefault("max_auto_full_candidates", None)
     experiments.setdefault("resume_existing", True)
     experiments.setdefault("force_retrain", False)
+    seed_audit = copy.deepcopy(experiments.get("seed_audit", {}) or {})
+    seed_audit.setdefault("enabled", False)
+    seed_audit.setdefault("profiles", [control])
+    seed_audit.setdefault("seeds", [])
+    seed_audit.setdefault("fold_ids", experiments.get("triage_fold_ids", []))
+    experiments["seed_audit"] = seed_audit
     return experiments
 
 
@@ -737,6 +743,123 @@ def _write_profile_delta(path: Path, profile_delta: pd.DataFrame | None) -> None
     profile_delta.to_csv(path / "profile_delta_vs_control.csv", index=False)
 
 
+def _seed_audit_scope(seed: int) -> str:
+    return f"seed_audit_seed_{int(seed):03d}"
+
+
+def _seed_audit_entries_to_frames(entries: list[dict[str, Any]]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rows = []
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not fold_scope.startswith("seed_audit_seed_"):
+            continue
+        seed_text = fold_scope.rsplit("_", 1)[-1]
+        try:
+            seed = int(seed_text)
+        except ValueError:
+            seed = np.nan
+        row = dict(entry["diagnostics"]["row"])
+        row["seed"] = seed
+        row["audit_scope"] = fold_scope
+        rows.append(row)
+    seed_audit = pd.DataFrame(rows).sort_values(["profile", "seed"]).reset_index(drop=True) if rows else pd.DataFrame()
+    return seed_audit, _seed_stability_frame(seed_audit)
+
+
+def _seed_stability_frame(seed_audit: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "profile",
+        "seed_count",
+        "feature_count",
+        "fold_count",
+        "mean_rank_ic_seed_mean",
+        "mean_rank_ic_seed_std",
+        "positive_ic_fraction_seed_mean",
+        "positive_ic_fraction_seed_std",
+        "std_rank_ic_seed_mean",
+        "top_10_lift_global_seed_mean",
+        "top_10_lift_global_seed_std",
+        "test_f1_at_selected_threshold_seed_mean",
+        "test_f1_at_selected_threshold_seed_std",
+        "worst_5_rank_ic_mean_seed_mean",
+        "worst_5_rank_ic_mean_seed_std",
+    ]
+    if seed_audit.empty:
+        return pd.DataFrame(columns=columns)
+
+    metric_columns = [
+        "mean_rank_ic",
+        "positive_ic_fraction",
+        "std_rank_ic",
+        "top_10_lift_global",
+        "test_f1_at_selected_threshold",
+        "worst_5_rank_ic_mean",
+    ]
+    frame = seed_audit.copy()
+    for column in metric_columns:
+        frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+    grouped = frame.groupby("profile", as_index=False).agg(
+        seed_count=("seed", "nunique"),
+        feature_count=("feature_count", "first"),
+        fold_count=("fold_count", "first"),
+        mean_rank_ic_seed_mean=("mean_rank_ic", "mean"),
+        mean_rank_ic_seed_std=("mean_rank_ic", "std"),
+        positive_ic_fraction_seed_mean=("positive_ic_fraction", "mean"),
+        positive_ic_fraction_seed_std=("positive_ic_fraction", "std"),
+        std_rank_ic_seed_mean=("std_rank_ic", "mean"),
+        top_10_lift_global_seed_mean=("top_10_lift_global", "mean"),
+        top_10_lift_global_seed_std=("top_10_lift_global", "std"),
+        test_f1_at_selected_threshold_seed_mean=("test_f1_at_selected_threshold", "mean"),
+        test_f1_at_selected_threshold_seed_std=("test_f1_at_selected_threshold", "std"),
+        worst_5_rank_ic_mean_seed_mean=("worst_5_rank_ic_mean", "mean"),
+        worst_5_rank_ic_mean_seed_std=("worst_5_rank_ic_mean", "std"),
+    )
+    return grouped[columns].reset_index(drop=True)
+
+
+def _seed_audit_markdown(seed_audit: pd.DataFrame, seed_stability: pd.DataFrame) -> str:
+    lines = ["# Seed Audit", ""]
+    if seed_audit.empty:
+        lines.append("Seed audit was disabled or produced no completed runs.")
+    else:
+        display_cols = [
+            "profile",
+            "seed",
+            "fold_count",
+            "mean_rank_ic",
+            "std_rank_ic",
+            "positive_ic_fraction",
+            "top_10_lift_global",
+            "test_f1_at_selected_threshold",
+            "worst_5_rank_ic_mean",
+        ]
+        lines.extend(["## Per Seed", ""])
+        visible = seed_audit[[column for column in display_cols if column in seed_audit.columns]].copy()
+        lines.append("| " + " | ".join(visible.columns) + " |")
+        lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+        for _, row in visible.iterrows():
+            lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+
+    lines.extend(["", "## Stability", ""])
+    if seed_stability.empty:
+        lines.append("No stability summary available.")
+    else:
+        lines.append("| " + " | ".join(seed_stability.columns) + " |")
+        lines.append("| " + " | ".join(["---"] * len(seed_stability.columns)) + " |")
+        for _, row in seed_stability.iterrows():
+            lines.append("| " + " | ".join(str(row[column]) for column in seed_stability.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_seed_audit_files(path: Path, seed_audit: pd.DataFrame, seed_stability: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    seed_audit.to_csv(path / "seed_audit.csv", index=False)
+    seed_stability.to_csv(path / "seed_stability.csv", index=False)
+    (path / "seed_audit.md").write_text(_seed_audit_markdown(seed_audit, seed_stability), encoding="utf-8")
+    _write_json(path / "seed_audit.json", {"rows": seed_audit.to_dict(orient="records")})
+    _write_json(path / "seed_stability.json", {"rows": seed_stability.to_dict(orient="records")})
+
+
 def _write_experiment_bundle(
     *,
     output_dir: Path,
@@ -750,6 +873,11 @@ def _write_experiment_bundle(
         "profile_comparison.csv",
         "profile_comparison.md",
         "profile_delta_vs_control.csv",
+        "seed_audit.csv",
+        "seed_audit.md",
+        "seed_audit.json",
+        "seed_stability.csv",
+        "seed_stability.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -838,6 +966,34 @@ def run_experiment_matrix(
 
     full_rows = _decision_rows(full_rows, config, scope="full") if full_rows else []
     comparison = _comparison_frame([*triage_rows, *full_rows])
+    seed_results: list[dict[str, Any]] = []
+    seed_audit_cfg = settings.get("seed_audit", {}) or {}
+    if bool(seed_audit_cfg.get("enabled", False)):
+        audit_profiles = [str(profile) for profile in seed_audit_cfg.get("profiles", []) or [settings["control_profile"]]]
+        audit_seeds = [int(seed) for seed in seed_audit_cfg.get("seeds", []) or []]
+        audit_fold_ids = seed_audit_cfg.get("fold_ids", triage_fold_ids)
+        audit_fold_ids = [int(fold_id) for fold_id in audit_fold_ids] if audit_fold_ids else None
+        for profile in audit_profiles:
+            for seed in audit_seeds:
+                seed_cfg = copy.deepcopy(config)
+                _set_cfg(seed_cfg, ["project", "random_seed"], seed)
+                result = run_profile_experiment(
+                    frame,
+                    seed_cfg,
+                    profile=profile,
+                    checkpoint_dir=checkpoint_dir,
+                    run_id=run_id,
+                    fold_scope=_seed_audit_scope(seed),
+                    fold_ids=audit_fold_ids,
+                    resume_existing=resume_existing,
+                    force_retrain=force_retrain,
+                    device=device,
+                )
+                result["summary"]["seed"] = seed
+                seed_results.append(result)
+    all_results = [*profile_results, *seed_results]
+    seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
+    _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     decision = {
@@ -845,6 +1001,8 @@ def run_experiment_matrix(
         "control_profile": settings["control_profile"],
         "best_candidate": best,
         "full_profiles": full_profiles,
+        "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
+        "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
         "recommendation": "promote_best_candidate" if best else "keep_control_profile",
     }
     _write_decision_files(run_dir, comparison, decision)
@@ -852,9 +1010,11 @@ def run_experiment_matrix(
     return {
         "run_id": run_id,
         "run_dir": run_dir,
-        "profile_results": profile_results,
+        "profile_results": all_results,
         "comparison": comparison,
         "profile_delta": profile_delta,
+        "seed_audit": seed_audit,
+        "seed_stability": seed_stability,
         "decision": decision,
     }
 
@@ -909,6 +1069,7 @@ def write_experiment_diagnostics(
     full_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "full"], config, scope="full")
     comparison = _comparison_frame([*triage_rows, *full_rows])
     profile_delta = _profile_delta_vs_control(entries, settings["control_profile"])
+    seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -968,8 +1129,10 @@ def write_experiment_diagnostics(
     decision["latest_bundle_zip"] = str(latest_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
     _write_profile_delta(report_dir, profile_delta)
+    _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
+    _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -981,6 +1144,8 @@ def write_experiment_diagnostics(
         "run_dir": run_dir,
         "comparison": comparison,
         "profile_delta": profile_delta,
+        "seed_audit": seed_audit,
+        "seed_stability": seed_stability,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),

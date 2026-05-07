@@ -88,13 +88,14 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_rank",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vol_per_trade_log_zscore_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_pressure_tanh_replacement",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_tanh_pair",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_spread_overlay",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_tanh_spread_overlay",
     ]
+    assert config["experiments"]["seed_audit"]["enabled"] is True
+    assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -111,8 +112,14 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_large_trade_pressure_6_stable_rank",
         "4h_large_trade_pressure_12_stable_zscore",
         "4h_large_trade_pressure_12_stable_rank",
+        "4h_large_trade_pressure_12_stable_tanh",
         "4h_large_trade_pressure_24_stable_zscore",
         "4h_large_trade_pressure_24_stable_rank",
+        "4h_large_trade_pressure_24_stable_tanh",
+        "4h_large_trade_pressure_24_minus_12_stable_zscore",
+        "4h_large_trade_pressure_24_minus_12_stable_rank",
+        "4h_large_trade_pressure_24_minus_12_stable_tanh",
+        "4h_signed_large_trade_pressure_stable_tanh",
         "4h_gk_vol_14_stable_rank",
         "4h_gk_vol_14_stable_zscore",
         "4h_realized_vol_14_stable_rank",
@@ -281,6 +288,34 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_large_trade_pressure_12_stable_rank" not in no_12_rank_columns
     assert "4h_large_trade_pressure_12_stable_zscore" in no_12_rank_columns
     assert "4h_large_trade_pressure_24_stable_rank" in no_12_rank_columns
+
+    tanh_replacement = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_pressure_tanh_replacement",
+    )
+    tanh_replacement_columns = filter_feature_columns(columns, tanh_replacement)
+    assert "4h_large_trade_pressure_12_stable_zscore" not in tanh_replacement_columns
+    assert "4h_large_trade_pressure_12_stable_tanh" in tanh_replacement_columns
+    assert "4h_large_trade_pressure_12_stable_rank" in tanh_replacement_columns
+    assert "4h_large_trade_pressure_24_stable_zscore" in tanh_replacement_columns
+
+    tanh_pair = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_tanh_pair")
+    tanh_pair_columns = filter_feature_columns(columns, tanh_pair)
+    assert "4h_signed_large_trade_pressure_stable_tanh" in tanh_pair_columns
+    assert "4h_large_trade_pressure_12_stable_tanh" in tanh_pair_columns
+    assert "4h_large_trade_pressure_24_stable_tanh" in tanh_pair_columns
+    assert "4h_large_trade_pressure_12_stable_zscore" not in tanh_pair_columns
+
+    spread_overlay = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_spread_overlay")
+    spread_overlay_columns = filter_feature_columns(columns, spread_overlay)
+    assert "4h_large_trade_pressure_24_minus_12_stable_rank" in spread_overlay_columns
+    assert "4h_large_trade_pressure_12_stable_zscore" in spread_overlay_columns
+
+    tanh_spread = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_tanh_spread_overlay")
+    tanh_spread_columns = filter_feature_columns(columns, tanh_spread)
+    assert "4h_large_trade_pressure_12_stable_zscore" not in tanh_spread_columns
+    assert "4h_large_trade_pressure_12_stable_tanh" in tanh_spread_columns
+    assert "4h_large_trade_pressure_24_minus_12_stable_tanh" in tanh_spread_columns
 
     no_slow_flow = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow")
     no_slow_flow_columns = filter_feature_columns(columns, no_slow_flow)
@@ -485,6 +520,48 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert diagnostics["decision"]["recommendation"] in {"keep_control_profile", "promote_best_candidate"}
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
+
+
+def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": []},
+    }
+    config["experiments"] = {
+        "mode": "staged",
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "triage_fold_ids": [0],
+        "full_cv_profiles": [],
+        "resume_existing": True,
+        "force_retrain": False,
+        "seed_audit": {
+            "enabled": True,
+            "profiles": ["control"],
+            "seeds": [11, 12],
+            "fold_ids": [0],
+        },
+    }
+    frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
+
+    result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="seeded", device="cpu")
+    diagnostics = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=config,
+        output_dir=tmp_path / "reports",
+        run_id="seeded",
+    )
+
+    assert set(result["seed_audit"]["seed"]) == {11, 12}
+    assert result["seed_stability"].loc[0, "seed_count"] == 2
+    assert (tmp_path / "experiments" / "seeded" / "seed_audit.csv").exists()
+    assert (tmp_path / "experiments" / "seeded" / "seed_stability.csv").exists()
+    assert not diagnostics["seed_audit"].empty
+    assert not diagnostics["seed_stability"].empty
+    with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_seeded.zip") as archive:
+        names = set(archive.namelist())
+    assert "seeded/seed_audit.csv" in names
+    assert "seeded/seed_stability.csv" in names
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:
