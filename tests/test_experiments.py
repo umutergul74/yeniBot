@@ -556,12 +556,17 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert result["seed_stability"].loc[0, "seed_count"] == 2
     assert (tmp_path / "experiments" / "seeded" / "seed_audit.csv").exists()
     assert (tmp_path / "experiments" / "seeded" / "seed_stability.csv").exists()
+    assert (tmp_path / "experiments" / "seeded" / "seed_ensemble.csv").exists()
+    assert not result["seed_ensemble"].empty
+    assert result["seed_ensemble"].loc[0, "seed_count"] == 2
     assert not diagnostics["seed_audit"].empty
     assert not diagnostics["seed_stability"].empty
+    assert not diagnostics["seed_ensemble"].empty
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_seeded.zip") as archive:
         names = set(archive.namelist())
     assert "seeded/seed_audit.csv" in names
     assert "seeded/seed_stability.csv" in names
+    assert "seeded/seed_ensemble.csv" in names
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:

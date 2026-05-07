@@ -24,6 +24,8 @@ from yenibot.diagnostics import (
     score_lift_by_fold_diagnostics,
     mtf_leakage_diagnostics,
     recent_fold_diagnostics,
+    bad_fold_regime_diagnostics,
+    regime_by_fold_diagnostics,
     regime_diagnostics,
     stationarity_policy_diagnostics,
     threshold_diagnostics,
@@ -112,6 +114,8 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "calibration.csv" in names
         assert "fold_metrics.csv" in names
         assert "regime_metrics.csv" in names
+        assert "regime_by_fold.csv" in names
+        assert "bad_fold_regime_diagnostics.csv" in names
         assert "threshold_summary.csv" in names
         assert "score_lift.csv" in names
         assert "score_band_lift.csv" in names
@@ -164,6 +168,22 @@ def test_calibration_threshold_and_leakage_diagnostics() -> None:
     assert len(calibrated_table) == 4
     assert {"selected_threshold", "test_oracle_best_f1"}.issubset(thresholds.columns)
     assert leakage["passed"].all()
+
+
+def test_regime_by_fold_diagnostics_compares_bad_folds() -> None:
+    predictions = _predictions()
+    fold_metrics = fold_diagnostics(predictions)
+    fold_metrics.loc[fold_metrics["fold"] == 0, "rank_ic"] = 0.20
+    fold_metrics.loc[fold_metrics["fold"] == 1, "rank_ic"] = -0.20
+
+    by_fold = regime_by_fold_diagnostics(predictions, fold_metrics, bad_ic=-0.08)
+    bad_summary = bad_fold_regime_diagnostics(by_fold)
+
+    assert not by_fold.empty
+    assert {"fold", "regime", "is_bad_fold", "rank_ic", "long_f1_050"}.issubset(by_fold.columns)
+    assert by_fold.loc[by_fold["fold"] == 1, "is_bad_fold"].all()
+    assert not bad_summary.empty
+    assert {"rank_ic_gap_bad_minus_other", "pred_long_rate_gap_bad_minus_other"}.issubset(bad_summary.columns)
 
 
 def test_good_bad_feature_audit_returns_ranked_feature_differences() -> None:

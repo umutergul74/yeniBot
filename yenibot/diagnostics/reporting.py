@@ -84,6 +84,89 @@ def regime_diagnostics(predictions: pd.DataFrame, *, threshold: float = 0.5) -> 
     return pd.DataFrame(rows).sort_values("regime").reset_index(drop=True)
 
 
+def regime_by_fold_diagnostics(
+    predictions: pd.DataFrame,
+    fold_metrics: pd.DataFrame,
+    *,
+    threshold: float = 0.5,
+    bad_ic: float = -0.08,
+) -> pd.DataFrame:
+    regime_columns = [column for column in predictions.columns if column.startswith("regime_prob_")]
+    if not regime_columns or "fold" not in predictions.columns or fold_metrics.empty:
+        return pd.DataFrame()
+
+    fold_rank_ic = fold_metrics.set_index("fold")["rank_ic"].to_dict() if "rank_ic" in fold_metrics.columns else {}
+    frame = predictions.copy()
+    frame["regime"] = frame[regime_columns].idxmax(axis=1).str.rsplit("_", n=1).str[-1].astype(int)
+    rows = []
+    for (fold, regime), part in frame.groupby(["fold", "regime"]):
+        y_true = part["label"].astype(int)
+        y_pred = (part["prob_long"] >= threshold).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        fold_ic = float(fold_rank_ic.get(fold, np.nan))
+        rows.append(
+            {
+                "fold": int(fold),
+                "regime": int(regime),
+                "count": int(len(part)),
+                "fold_rank_ic": fold_ic,
+                "is_bad_fold": bool(pd.notna(fold_ic) and fold_ic <= bad_ic),
+                "rank_ic": rank_ic(part["prob_long"], part["forward_return"]),
+                "label_long_rate": float(part["label"].mean()),
+                "pred_long_rate_050": float(y_pred.mean()),
+                "prob_long_mean": float(part["prob_long"].mean()),
+                "forward_return_mean": float(part["forward_return"].mean()) if "forward_return" in part.columns else np.nan,
+                "precision_050": float(precision),
+                "recall_050": float(recall),
+                "long_f1_050": float(f1),
+                "tn": int(tn),
+                "fp": int(fp),
+                "fn": int(fn),
+                "tp": int(tp),
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["fold", "regime"]).reset_index(drop=True)
+
+
+def bad_fold_regime_diagnostics(regime_by_fold: pd.DataFrame) -> pd.DataFrame:
+    if regime_by_fold is None or regime_by_fold.empty or "is_bad_fold" not in regime_by_fold.columns:
+        return pd.DataFrame()
+
+    rows = []
+    for regime, part in regime_by_fold.groupby("regime"):
+        bad = part[part["is_bad_fold"].astype(bool)]
+        other = part[~part["is_bad_fold"].astype(bool)]
+        row = {
+            "regime": int(regime),
+            "bad_fold_rows": int(len(bad)),
+            "other_fold_rows": int(len(other)),
+            "bad_count": int(bad["count"].sum()) if not bad.empty else 0,
+            "other_count": int(other["count"].sum()) if not other.empty else 0,
+            "bad_mean_rank_ic": float(bad["rank_ic"].mean()) if not bad.empty else np.nan,
+            "other_mean_rank_ic": float(other["rank_ic"].mean()) if not other.empty else np.nan,
+            "bad_mean_long_f1_050": float(bad["long_f1_050"].mean()) if not bad.empty else np.nan,
+            "other_mean_long_f1_050": float(other["long_f1_050"].mean()) if not other.empty else np.nan,
+            "bad_mean_label_long_rate": float(bad["label_long_rate"].mean()) if not bad.empty else np.nan,
+            "other_mean_label_long_rate": float(other["label_long_rate"].mean()) if not other.empty else np.nan,
+            "bad_mean_pred_long_rate_050": float(bad["pred_long_rate_050"].mean()) if not bad.empty else np.nan,
+            "other_mean_pred_long_rate_050": float(other["pred_long_rate_050"].mean()) if not other.empty else np.nan,
+            "bad_mean_forward_return": float(bad["forward_return_mean"].mean()) if not bad.empty else np.nan,
+            "other_mean_forward_return": float(other["forward_return_mean"].mean()) if not other.empty else np.nan,
+        }
+        row["rank_ic_gap_bad_minus_other"] = row["bad_mean_rank_ic"] - row["other_mean_rank_ic"]
+        row["long_f1_gap_bad_minus_other"] = row["bad_mean_long_f1_050"] - row["other_mean_long_f1_050"]
+        row["pred_long_rate_gap_bad_minus_other"] = row["bad_mean_pred_long_rate_050"] - row["other_mean_pred_long_rate_050"]
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("rank_ic_gap_bad_minus_other").reset_index(drop=True)
+
+
 def good_bad_fold_summary(fold_metrics: pd.DataFrame, *, good_ic: float = 0.10, bad_ic: float = -0.08) -> dict[str, Any]:
     good = fold_metrics.loc[fold_metrics["rank_ic"] >= good_ic, "fold"].astype(int).tolist()
     bad = fold_metrics.loc[fold_metrics["rank_ic"] <= bad_ic, "fold"].astype(int).tolist()
@@ -950,6 +1033,8 @@ def write_phase1_diagnostic_bundle(
     threshold_metrics: pd.DataFrame | None = None,
     threshold_summary: pd.DataFrame | None = None,
     mtf_leakage: pd.DataFrame | None = None,
+    regime_by_fold: pd.DataFrame | None = None,
+    bad_fold_regime: pd.DataFrame | None = None,
     feature_audit: pd.DataFrame | None = None,
     stationarity_policy: pd.DataFrame | None = None,
     score_lift: pd.DataFrame | None = None,
@@ -1003,6 +1088,18 @@ def write_phase1_diagnostic_bundle(
             stationarity_policy = stationarity_policy_diagnostics(model_feature_columns, config)
     if regime_metrics is not None and not regime_metrics.empty:
         regime_metrics.to_csv(bundle_dir / "regime_metrics.csv", index=False)
+    if regime_by_fold is None and regime_metrics is not None:
+        regime_by_fold = regime_by_fold_diagnostics(
+            predictions,
+            fold_metrics,
+            bad_ic=float(_config_get(config or {}, ["validation", "bad_fold_ic_threshold"], -0.08)),
+        )
+    if regime_by_fold is not None and not regime_by_fold.empty:
+        regime_by_fold.to_csv(bundle_dir / "regime_by_fold.csv", index=False)
+        if bad_fold_regime is None:
+            bad_fold_regime = bad_fold_regime_diagnostics(regime_by_fold)
+    if bad_fold_regime is not None and not bad_fold_regime.empty:
+        bad_fold_regime.to_csv(bundle_dir / "bad_fold_regime_diagnostics.csv", index=False)
     if importance is not None and not importance.empty:
         importance.to_csv(bundle_dir / "permutation_importance.csv", index=False)
         if feature_group_importance is None:

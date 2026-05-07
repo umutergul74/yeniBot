@@ -16,6 +16,7 @@ import pandas as pd
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
     calibration_table,
+    bad_fold_regime_diagnostics,
     experiment_ledger_diagnostics,
     feature_group_diagnostics,
     feature_profile_diagnostics,
@@ -23,6 +24,7 @@ from yenibot.diagnostics import (
     mtf_leakage_diagnostics,
     phase1_report,
     recent_fold_diagnostics,
+    regime_by_fold_diagnostics,
     regime_diagnostics,
     score_band_by_fold_diagnostics,
     score_band_diagnostics,
@@ -269,6 +271,12 @@ def summarize_profile_predictions(
     )
     fold_metrics = fold_diagnostics(test_predictions)
     regime_metrics = regime_diagnostics(test_predictions)
+    regime_by_fold = regime_by_fold_diagnostics(
+        test_predictions,
+        fold_metrics,
+        bad_ic=float(_cfg(profile_cfg, ["validation", "bad_fold_ic_threshold"], -0.08)),
+    )
+    bad_fold_regime = bad_fold_regime_diagnostics(regime_by_fold)
     threshold_metrics = threshold_diagnostics(predictions)
     threshold_summary = threshold_summary_diagnostics(threshold_metrics)
     report = attach_threshold_summary_to_phase1_report(report, threshold_summary, profile_cfg)
@@ -311,6 +319,8 @@ def summarize_profile_predictions(
         "calibration": calibration,
         "fold_metrics": fold_metrics,
         "regime_metrics": regime_metrics,
+        "regime_by_fold": regime_by_fold,
+        "bad_fold_regime": bad_fold_regime,
         "threshold_metrics": threshold_metrics,
         "threshold_summary": threshold_summary,
         "score_lift": score_lift,
@@ -860,6 +870,155 @@ def _write_seed_audit_files(path: Path, seed_audit: pd.DataFrame, seed_stability
     _write_json(path / "seed_stability.json", {"rows": seed_stability.to_dict(orient="records")})
 
 
+def _seed_from_scope(fold_scope: str) -> int | None:
+    if not fold_scope.startswith("seed_audit_seed_"):
+        return None
+    seed_text = fold_scope.rsplit("_", 1)[-1]
+    try:
+        return int(seed_text)
+    except ValueError:
+        return None
+
+
+def _seed_ensemble_predictions(seed_entries: list[dict[str, Any]]) -> pd.DataFrame:
+    if len(seed_entries) < 2:
+        return pd.DataFrame()
+
+    frames = []
+    seeds = []
+    for entry in seed_entries:
+        seed = _seed_from_scope(str(entry.get("fold_scope", "")))
+        if seed is None:
+            continue
+        prediction = entry["predictions"].copy()
+        prediction["_ensemble_seed"] = seed
+        frames.append(prediction)
+        seeds.append(seed)
+    if len(frames) < 2:
+        return pd.DataFrame()
+
+    stacked = pd.concat(frames, ignore_index=True)
+    required_keys = ["fold", "timestamp"]
+    if "split" in stacked.columns:
+        required_keys.insert(0, "split")
+    if "source_row_position" in stacked.columns:
+        required_keys.append("source_row_position")
+    key_columns = [column for column in required_keys if column in stacked.columns]
+    if not {"fold", "timestamp"}.issubset(key_columns):
+        return pd.DataFrame()
+
+    seed_count = len(set(seeds))
+    grouped = stacked.groupby(key_columns, dropna=False)
+    stats = grouped["prob_long"].agg(
+        prob_long_ensemble="mean",
+        prob_long_seed_std="std",
+        prob_long_seed_min="min",
+        prob_long_seed_max="max",
+        ensemble_seed_count="count",
+    ).reset_index()
+    stats = stats.loc[stats["ensemble_seed_count"] == seed_count].copy()
+    if stats.empty:
+        return pd.DataFrame()
+
+    base = grouped.first().reset_index()
+    base = base.merge(stats, on=key_columns, how="inner")
+    base["prob_long"] = base["prob_long_ensemble"]
+    regime_columns = [column for column in stacked.columns if column.startswith("regime_prob_")]
+    if regime_columns:
+        regime_avg = grouped[regime_columns].mean().reset_index()
+        base = base.drop(columns=[column for column in regime_columns if column in base.columns]).merge(
+            regime_avg,
+            on=key_columns,
+            how="left",
+        )
+    base = base.drop(columns=["_ensemble_seed", "prob_long_ensemble"], errors="ignore")
+    base["ensemble_seeds"] = ",".join(str(seed) for seed in sorted(set(seeds)))
+    return base.sort_values(key_columns).reset_index(drop=True)
+
+
+def _seed_ensemble_entries(entries: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if _seed_from_scope(fold_scope) is None:
+            continue
+        grouped.setdefault(str(entry["profile"]), []).append(entry)
+
+    ensemble_entries = []
+    for profile, seed_entries in grouped.items():
+        predictions = _seed_ensemble_predictions(seed_entries)
+        if predictions.empty:
+            continue
+        feature_columns = list(seed_entries[0]["feature_columns"])
+        diagnostics = summarize_profile_predictions(
+            predictions,
+            config,
+            profile=profile,
+            feature_columns=feature_columns,
+            fold_scope="seed_ensemble",
+        )
+        ensemble_entries.append(
+            {
+                "profile": profile,
+                "fold_scope": "seed_ensemble",
+                "feature_columns": feature_columns,
+                "predictions": predictions,
+                "diagnostics": diagnostics,
+                "summary": diagnostics["row"],
+            }
+        )
+    return ensemble_entries
+
+
+def _seed_ensemble_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for entry in entries:
+        if str(entry.get("fold_scope", "")) != "seed_ensemble":
+            continue
+        row = dict(entry["diagnostics"]["row"])
+        predictions = entry.get("predictions", pd.DataFrame())
+        if isinstance(predictions, pd.DataFrame) and "ensemble_seed_count" in predictions.columns and not predictions.empty:
+            row["seed_count"] = int(predictions["ensemble_seed_count"].max())
+            row["prob_long_seed_std_mean"] = float(pd.to_numeric(predictions["prob_long_seed_std"], errors="coerce").mean())
+            row["prob_long_seed_std_p90"] = float(pd.to_numeric(predictions["prob_long_seed_std"], errors="coerce").quantile(0.90))
+            row["ensemble_seeds"] = str(predictions["ensemble_seeds"].iloc[0]) if "ensemble_seeds" in predictions.columns else ""
+        rows.append(row)
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
+
+
+def _seed_ensemble_markdown(seed_ensemble: pd.DataFrame) -> str:
+    lines = ["# Seed Ensemble", ""]
+    if seed_ensemble.empty:
+        lines.append("No seed ensemble was produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "profile",
+        "fold_scope",
+        "seed_count",
+        "fold_count",
+        "mean_rank_ic",
+        "std_rank_ic",
+        "positive_ic_fraction",
+        "top_10_lift_global",
+        "test_f1_at_selected_threshold",
+        "prob_long_seed_std_mean",
+        "prob_long_seed_std_p90",
+    ]
+    visible = seed_ensemble[[column for column in display_cols if column in seed_ensemble.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_seed_ensemble_files(path: Path, seed_ensemble: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    seed_ensemble.to_csv(path / "seed_ensemble.csv", index=False)
+    (path / "seed_ensemble.md").write_text(_seed_ensemble_markdown(seed_ensemble), encoding="utf-8")
+    _write_json(path / "seed_ensemble.json", {"rows": seed_ensemble.to_dict(orient="records")})
+
+
 def _write_experiment_bundle(
     *,
     output_dir: Path,
@@ -878,6 +1037,9 @@ def _write_experiment_bundle(
         "seed_audit.json",
         "seed_stability.csv",
         "seed_stability.json",
+        "seed_ensemble.csv",
+        "seed_ensemble.md",
+        "seed_ensemble.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -991,9 +1153,12 @@ def run_experiment_matrix(
                 )
                 result["summary"]["seed"] = seed
                 seed_results.append(result)
-    all_results = [*profile_results, *seed_results]
+    seed_ensemble_results = _seed_ensemble_entries(seed_results, config)
+    all_results = [*profile_results, *seed_results, *seed_ensemble_results]
     seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
+    seed_ensemble = _seed_ensemble_frame(all_results)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
+    _write_seed_ensemble_files(run_dir, seed_ensemble)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     decision = {
@@ -1015,6 +1180,7 @@ def run_experiment_matrix(
         "profile_delta": profile_delta,
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
+        "seed_ensemble": seed_ensemble,
         "decision": decision,
     }
 
@@ -1063,6 +1229,7 @@ def write_experiment_diagnostics(
                 "diagnostics": diagnostics,
             }
         )
+    entries.extend(_seed_ensemble_entries(entries, config))
 
     rows = [entry["diagnostics"]["row"] for entry in entries]
     triage_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "triage"], config, scope="triage")
@@ -1070,6 +1237,7 @@ def write_experiment_diagnostics(
     comparison = _comparison_frame([*triage_rows, *full_rows])
     profile_delta = _profile_delta_vs_control(entries, settings["control_profile"])
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
+    seed_ensemble = _seed_ensemble_frame(entries)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -1094,6 +1262,8 @@ def write_experiment_diagnostics(
             calibration=diagnostics["calibration"],
             fold_metrics=diagnostics["fold_metrics"],
             regime_metrics=diagnostics["regime_metrics"],
+            regime_by_fold=diagnostics["regime_by_fold"],
+            bad_fold_regime=diagnostics["bad_fold_regime"],
             threshold_metrics=diagnostics["threshold_metrics"],
             threshold_summary=diagnostics["threshold_summary"],
             mtf_leakage=diagnostics["mtf_leakage"],
@@ -1130,9 +1300,11 @@ def write_experiment_diagnostics(
     _write_decision_files(report_dir, comparison, decision)
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
+    _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
+    _write_seed_ensemble_files(run_dir, seed_ensemble)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -1146,6 +1318,7 @@ def write_experiment_diagnostics(
         "profile_delta": profile_delta,
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
+        "seed_ensemble": seed_ensemble,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),
