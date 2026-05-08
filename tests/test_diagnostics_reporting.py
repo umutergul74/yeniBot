@@ -8,7 +8,9 @@ import pandas as pd
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
     bad_fold_feature_forensics,
+    bad_fold_feature_forensics_summary,
     bad_fold_group_forensics,
+    bad_fold_group_forensics_summary,
     calibrate_test_probabilities_from_val,
     calibration_table,
     experiment_ledger_diagnostics,
@@ -128,7 +130,9 @@ def test_diagnostic_bundle_contains_shareable_outputs(tmp_path) -> None:
         assert "feature_groups.csv" in names
         assert "feature_profile.csv" in names
         assert "bad_fold_feature_forensics.csv" in names
+        assert "bad_fold_feature_forensics_summary.csv" in names
         assert "bad_fold_group_forensics.csv" in names
+        assert "bad_fold_group_forensics_summary.csv" in names
         assert "experiment_ledger.csv" in names
         assert "experiment_ledger.json" in names
         payload = json.loads(archive.read("phase1_report.json"))
@@ -470,3 +474,79 @@ def test_bad_fold_forensics_reports_group_signal_changes() -> None:
     assert {"timeframe", "family", "mean_abs_delta_feature_ic", "top_delta_features"}.issubset(
         group_forensics.columns
     )
+
+
+def test_bad_fold_forensics_summaries_flag_repeated_reversal_sources() -> None:
+    feature_forensics = pd.DataFrame(
+        [
+            {
+                "bad_fold": 21,
+                "feature": "4h_taker_imbalance_mean_24",
+                "timeframe": "4h",
+                "family": "order_flow_v2_bounded",
+                "good_feature_ic": 0.05,
+                "bad_feature_ic": -0.09,
+                "delta_feature_ic_bad_minus_good": -0.14,
+                "signal_reversal": True,
+                "abs_standardized_diff": 0.48,
+            },
+            {
+                "bad_fold": 32,
+                "feature": "4h_taker_imbalance_mean_24",
+                "timeframe": "4h",
+                "family": "order_flow_v2_bounded",
+                "good_feature_ic": 0.04,
+                "bad_feature_ic": -0.10,
+                "delta_feature_ic_bad_minus_good": -0.14,
+                "signal_reversal": True,
+                "abs_standardized_diff": 0.31,
+            },
+            {
+                "bad_fold": 21,
+                "feature": "4h_gk_vol_14",
+                "timeframe": "4h",
+                "family": "volatility_structure",
+                "good_feature_ic": 0.01,
+                "bad_feature_ic": 0.02,
+                "delta_feature_ic_bad_minus_good": 0.01,
+                "signal_reversal": False,
+                "abs_standardized_diff": 0.12,
+            },
+        ]
+    )
+    group_forensics = pd.DataFrame(
+        [
+            {
+                "bad_fold": 21,
+                "timeframe": "4h",
+                "family": "order_flow_v2_bounded",
+                "feature_count": 8,
+                "mean_delta_feature_ic_bad_minus_good": -0.08,
+                "mean_abs_delta_feature_ic": 0.08,
+                "signal_reversal_rate": 0.50,
+                "mean_abs_standardized_diff": 0.35,
+                "top_delta_features": "4h_taker_imbalance_mean_24",
+                "top_shifted_features": "4h_taker_imbalance_mean_24",
+            },
+            {
+                "bad_fold": 32,
+                "timeframe": "4h",
+                "family": "order_flow_v2_bounded",
+                "feature_count": 8,
+                "mean_delta_feature_ic_bad_minus_good": -0.07,
+                "mean_abs_delta_feature_ic": 0.07,
+                "signal_reversal_rate": 0.40,
+                "mean_abs_standardized_diff": 0.30,
+                "top_delta_features": "4h_taker_imbalance_mean_12",
+                "top_shifted_features": "4h_taker_imbalance_mean_12",
+            },
+        ]
+    )
+
+    feature_summary = bad_fold_feature_forensics_summary(feature_forensics)
+    group_summary = bad_fold_group_forensics_summary(group_forensics)
+
+    flagged = feature_summary[feature_summary["feature"] == "4h_taker_imbalance_mean_24"].iloc[0]
+    assert flagged["bad_fold_count"] == 2
+    assert flagged["recommended_action"] == "ablate_or_bound"
+    assert group_summary.iloc[0]["recommended_action"] == "ablate_or_split"

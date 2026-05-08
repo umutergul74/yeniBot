@@ -550,6 +550,149 @@ def bad_fold_group_forensics(
     ).reset_index(drop=True)
 
 
+def bad_fold_feature_forensics_summary(
+    feature_forensics: pd.DataFrame,
+    *,
+    min_bad_fold_count: int = 2,
+    min_signal_reversal_rate: float = 0.34,
+    min_mean_abs_delta_ic: float = 0.05,
+) -> pd.DataFrame:
+    """Aggregate repeated bad-fold feature failures into a stable pruning watchlist."""
+
+    columns = [
+        "feature",
+        "timeframe",
+        "family",
+        "bad_fold_count",
+        "bad_folds",
+        "mean_good_feature_ic",
+        "mean_bad_feature_ic",
+        "mean_delta_feature_ic_bad_minus_good",
+        "mean_abs_delta_feature_ic",
+        "signal_reversal_rate",
+        "mean_abs_standardized_diff",
+        "max_abs_standardized_diff",
+        "recommended_action",
+    ]
+    if feature_forensics is None or feature_forensics.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = feature_forensics.copy()
+    rows = []
+    for (feature, timeframe, family), part in frame.groupby(["feature", "timeframe", "family"], dropna=False):
+        bad_folds = sorted(pd.to_numeric(part["bad_fold"], errors="coerce").dropna().astype(int).unique().tolist())
+        mean_abs_delta = float(pd.to_numeric(part["delta_feature_ic_bad_minus_good"], errors="coerce").abs().mean())
+        reversal_rate = float(part["signal_reversal"].astype(bool).mean())
+        mean_shift = float(pd.to_numeric(part["abs_standardized_diff"], errors="coerce").mean())
+        recommended = (
+            len(bad_folds) >= min_bad_fold_count
+            and (reversal_rate >= min_signal_reversal_rate or mean_abs_delta >= min_mean_abs_delta_ic)
+        )
+        rows.append(
+            {
+                "feature": str(feature),
+                "timeframe": str(timeframe),
+                "family": str(family),
+                "bad_fold_count": int(len(bad_folds)),
+                "bad_folds": ",".join(map(str, bad_folds)),
+                "mean_good_feature_ic": float(pd.to_numeric(part["good_feature_ic"], errors="coerce").mean()),
+                "mean_bad_feature_ic": float(pd.to_numeric(part["bad_feature_ic"], errors="coerce").mean()),
+                "mean_delta_feature_ic_bad_minus_good": float(
+                    pd.to_numeric(part["delta_feature_ic_bad_minus_good"], errors="coerce").mean()
+                ),
+                "mean_abs_delta_feature_ic": mean_abs_delta,
+                "signal_reversal_rate": reversal_rate,
+                "mean_abs_standardized_diff": mean_shift,
+                "max_abs_standardized_diff": float(
+                    pd.to_numeric(part["abs_standardized_diff"], errors="coerce").max()
+                ),
+                "recommended_action": "ablate_or_bound" if recommended else "monitor",
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["recommended_action", "bad_fold_count", "signal_reversal_rate", "mean_abs_delta_feature_ic"],
+        ascending=[True, False, False, False],
+    ).reset_index(drop=True)
+
+
+def bad_fold_group_forensics_summary(
+    group_forensics: pd.DataFrame,
+    *,
+    min_bad_fold_count: int = 2,
+    min_signal_reversal_rate: float = 0.25,
+    min_mean_abs_delta_ic: float = 0.05,
+) -> pd.DataFrame:
+    """Aggregate repeated family-level bad-fold failures for experiment planning."""
+
+    columns = [
+        "timeframe",
+        "family",
+        "bad_fold_count",
+        "bad_folds",
+        "mean_feature_count",
+        "mean_delta_feature_ic_bad_minus_good",
+        "mean_abs_delta_feature_ic",
+        "signal_reversal_rate",
+        "mean_abs_standardized_diff",
+        "top_delta_features",
+        "top_shifted_features",
+        "recommended_action",
+    ]
+    if group_forensics is None or group_forensics.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = group_forensics.copy()
+    rows = []
+    for (timeframe, family), part in frame.groupby(["timeframe", "family"], dropna=False):
+        bad_folds = sorted(pd.to_numeric(part["bad_fold"], errors="coerce").dropna().astype(int).unique().tolist())
+        mean_abs_delta = float(pd.to_numeric(part["mean_abs_delta_feature_ic"], errors="coerce").mean())
+        reversal_rate = float(pd.to_numeric(part["signal_reversal_rate"], errors="coerce").mean())
+        recommended = (
+            len(bad_folds) >= min_bad_fold_count
+            and (reversal_rate >= min_signal_reversal_rate or mean_abs_delta >= min_mean_abs_delta_ic)
+        )
+        rows.append(
+            {
+                "timeframe": str(timeframe),
+                "family": str(family),
+                "bad_fold_count": int(len(bad_folds)),
+                "bad_folds": ",".join(map(str, bad_folds)),
+                "mean_feature_count": float(pd.to_numeric(part["feature_count"], errors="coerce").mean()),
+                "mean_delta_feature_ic_bad_minus_good": float(
+                    pd.to_numeric(part["mean_delta_feature_ic_bad_minus_good"], errors="coerce").mean()
+                ),
+                "mean_abs_delta_feature_ic": mean_abs_delta,
+                "signal_reversal_rate": reversal_rate,
+                "mean_abs_standardized_diff": float(
+                    pd.to_numeric(part["mean_abs_standardized_diff"], errors="coerce").mean()
+                ),
+                "top_delta_features": _top_joined_tokens(part.get("top_delta_features", pd.Series(dtype=str))),
+                "top_shifted_features": _top_joined_tokens(part.get("top_shifted_features", pd.Series(dtype=str))),
+                "recommended_action": "ablate_or_split" if recommended else "monitor",
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["recommended_action", "bad_fold_count", "signal_reversal_rate", "mean_abs_delta_feature_ic"],
+        ascending=[True, False, False, False],
+    ).reset_index(drop=True)
+
+
+def _top_joined_tokens(values: pd.Series, *, limit: int = 8) -> str:
+    seen: list[str] = []
+    for value in values.dropna().astype(str):
+        for token in value.split(","):
+            token = token.strip()
+            if token and token not in seen:
+                seen.append(token)
+            if len(seen) >= limit:
+                return ",".join(seen)
+    return ",".join(seen)
+
+
 def recent_fold_diagnostics(fold_metrics: pd.DataFrame, *, recent_folds: int = 5) -> pd.DataFrame:
     if fold_metrics.empty:
         return pd.DataFrame()
@@ -1173,6 +1316,10 @@ def write_phase1_diagnostic_bundle(
         )
     if bad_fold_feature_forensics_table is not None and not bad_fold_feature_forensics_table.empty:
         bad_fold_feature_forensics_table.to_csv(bundle_dir / "bad_fold_feature_forensics.csv", index=False)
+        bad_fold_feature_forensics_summary(bad_fold_feature_forensics_table).to_csv(
+            bundle_dir / "bad_fold_feature_forensics_summary.csv",
+            index=False,
+        )
     if bad_fold_group_forensics_table is None:
         bad_fold_group_forensics_table = bad_fold_group_forensics(
             predictions,
@@ -1181,6 +1328,10 @@ def write_phase1_diagnostic_bundle(
         )
     if bad_fold_group_forensics_table is not None and not bad_fold_group_forensics_table.empty:
         bad_fold_group_forensics_table.to_csv(bundle_dir / "bad_fold_group_forensics.csv", index=False)
+        bad_fold_group_forensics_summary(bad_fold_group_forensics_table).to_csv(
+            bundle_dir / "bad_fold_group_forensics_summary.csv",
+            index=False,
+        )
     if experiment_ledger is None:
         experiment_ledger = experiment_ledger_diagnostics(
             report=serializable_report,

@@ -85,14 +85,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_12_pressure_zscore",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_pressure_tanh_replacement",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_tanh_pair",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_spread_overlay",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_12_tanh_spread_overlay",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_cvd_rate",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow_no_1h_cvd_rate",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_bad_fold_guardrail_light",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
@@ -149,6 +154,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "volume_log_zscore",
         "volume_denoised_log_zscore",
         "taker_buy_ratio",
+        "cvd_cumulative_rate_norm",
     ]
 
     pruned = profile_config(config, "baseline_no_4h_tier1_pruned_whale")
@@ -323,6 +329,27 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_taker_imbalance_mean_24" not in no_slow_flow_columns
     assert "4h_taker_imbalance" in no_slow_flow_columns
     assert "4h_taker_imbalance_slope" in no_slow_flow_columns
+
+    no_cvd_rate = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_cvd_rate")
+    no_cvd_rate_columns = filter_feature_columns(columns, no_cvd_rate)
+    assert "cvd_cumulative_rate_norm" not in no_cvd_rate_columns
+    assert "4h_taker_imbalance_mean_24" in no_cvd_rate_columns
+
+    combined_cvd_flow = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow_no_1h_cvd_rate",
+    )
+    combined_cvd_flow_columns = filter_feature_columns(columns, combined_cvd_flow)
+    assert "cvd_cumulative_rate_norm" not in combined_cvd_flow_columns
+    assert "4h_taker_imbalance_mean_24" not in combined_cvd_flow_columns
+
+    guardrail = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_bad_fold_guardrail_light")
+    guardrail_columns = filter_feature_columns(columns, guardrail)
+    assert "cvd_cumulative_rate_norm" not in guardrail_columns
+    assert "4h_taker_imbalance_mean_12" not in guardrail_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in guardrail_columns
+    assert "4h_gk_vol_14" not in guardrail_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in guardrail_columns
 
     no_vpt_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_vpt_zscore_only")
     no_vpt_only_columns = filter_feature_columns(columns, no_vpt_only)
