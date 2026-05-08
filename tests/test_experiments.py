@@ -86,6 +86,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
@@ -583,11 +584,17 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
     assert set(diagnostics["profile_blend"]["blend_method"]) == {"prob_mean", "rank_mean"}
+    assert {"reviewable", "review_reason", "mean_rank_ic_delta_vs_control"}.issubset(diagnostics["profile_blend"].columns)
+    assert "best_profile_blend" in diagnostics["decision"]
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
     assert diagnostics["latest_bundle_zip"].endswith("phase1_latest_experiment_bundle.zip")
-    assert diagnostics["decision"]["recommendation"] in {"keep_control_profile", "promote_best_candidate"}
+    assert diagnostics["decision"]["recommendation"] in {
+        "keep_control_profile",
+        "promote_best_candidate",
+        "review_profile_blend",
+    }
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()

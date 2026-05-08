@@ -1184,6 +1184,88 @@ def _profile_blend_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
 
 
+def _profile_blend_review_frame(
+    profile_blend: pd.DataFrame,
+    comparison: pd.DataFrame,
+    config: dict[str, Any],
+    control_profile: str,
+) -> pd.DataFrame:
+    if profile_blend.empty:
+        return profile_blend
+    reviewed = profile_blend.copy()
+    control_rows = comparison[
+        (comparison["profile"] == control_profile)
+        & (comparison["fold_scope"] == "full")
+    ]
+    if control_rows.empty:
+        reviewed["control_profile"] = control_profile
+        reviewed["reviewable"] = False
+        reviewed["review_reason"] = "missing_full_control"
+        return reviewed
+
+    control = control_rows.iloc[0].to_dict()
+    gates = _cfg(config, ["experiments", "profile_blend_review_gates"], {}) or {}
+    min_mean_delta = float(gates.get("min_mean_rank_ic_delta", 0.005))
+    max_std_delta = float(gates.get("max_std_rank_ic_delta", 0.0))
+    min_positive = float(gates.get("min_positive_ic_fraction", 0.70))
+    min_top_delta = float(gates.get("min_top_10_lift_global_delta", 0.02))
+
+    rows = []
+    for _, item in reviewed.iterrows():
+        row = item.to_dict()
+        row["control_profile"] = control_profile
+        row["mean_rank_ic_delta_vs_control"] = _float(row, "mean_rank_ic") - _float(control, "mean_rank_ic")
+        row["std_rank_ic_delta_vs_control"] = _float(row, "std_rank_ic") - _float(control, "std_rank_ic")
+        row["positive_ic_fraction_delta_vs_control"] = _float(row, "positive_ic_fraction") - _float(control, "positive_ic_fraction")
+        row["top_10_lift_global_delta_vs_control"] = _float(row, "top_10_lift_global") - _float(control, "top_10_lift_global")
+        row["selected_threshold_f1_delta_vs_control"] = _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")) - _metric_or(
+            control,
+            "test_f1_at_selected_threshold",
+            _float(control, "mean_long_f1"),
+        )
+        row["worst_5_rank_ic_delta_vs_control"] = _float(row, "worst_5_rank_ic_mean") - _float(control, "worst_5_rank_ic_mean")
+        reasons = []
+        if row["mean_rank_ic_delta_vs_control"] < min_mean_delta:
+            reasons.append("mean_rank_ic_delta")
+        if row["std_rank_ic_delta_vs_control"] > max_std_delta:
+            reasons.append("std_rank_ic_delta")
+        if _float(row, "positive_ic_fraction") < min_positive:
+            reasons.append("positive_ic_fraction")
+        if row["top_10_lift_global_delta_vs_control"] < min_top_delta:
+            reasons.append("top_10_lift_global_delta")
+        if not bool(row.get("mtf_leakage_passed", False)):
+            reasons.append("mtf_leakage")
+        if not bool(row.get("stationarity_policy_passed", False)):
+            reasons.append("stationarity_policy")
+        row["reviewable"] = not reasons
+        row["review_reason"] = ";".join(reasons)
+        rows.append(row)
+
+    if not rows:
+        return reviewed
+    return (
+        pd.DataFrame(rows)
+        .sort_values(
+            ["reviewable", "mean_rank_ic", "top_10_lift_global", "worst_5_rank_ic_mean"],
+            ascending=[False, False, False, False],
+        )
+        .reset_index(drop=True)
+    )
+
+
+def _best_profile_blend(profile_blend: pd.DataFrame) -> dict[str, Any]:
+    if profile_blend.empty or "reviewable" not in profile_blend.columns:
+        return {}
+    candidates = profile_blend[profile_blend["reviewable"].astype(bool)].copy()
+    if candidates.empty:
+        return {}
+    candidates = candidates.sort_values(
+        ["mean_rank_ic", "top_10_lift_global", "worst_5_rank_ic_mean"],
+        ascending=[False, False, False],
+    )
+    return candidates.iloc[0].to_dict()
+
+
 def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
     lines = ["# Profile Blend Diagnostics", ""]
     if profile_blend.empty:
@@ -1197,8 +1279,14 @@ def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
         "mean_rank_ic",
         "std_rank_ic",
         "positive_ic_fraction",
+        "mean_rank_ic_delta_vs_control",
+        "std_rank_ic_delta_vs_control",
+        "positive_ic_fraction_delta_vs_control",
         "top_10_lift_global",
+        "top_10_lift_global_delta_vs_control",
         "test_f1_at_selected_threshold",
+        "reviewable",
+        "review_reason",
         "prob_long_profile_std_mean",
         "prob_long_profile_std_p90",
         "blend_profiles",
@@ -1361,19 +1449,24 @@ def run_experiment_matrix(
     seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
     seed_ensemble = _seed_ensemble_frame(all_results)
     profile_blend = _profile_blend_frame(all_results)
+    profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
+    best_blend = _best_profile_blend(profile_blend)
     decision = {
         "run_id": run_id,
         "control_profile": settings["control_profile"],
         "best_candidate": best,
+        "best_profile_blend": best_blend,
         "full_profiles": full_profiles,
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
-        "recommendation": "promote_best_candidate" if best else "keep_control_profile",
+        "recommendation": "promote_best_candidate"
+        if best
+        else ("review_profile_blend" if best_blend else "keep_control_profile"),
     }
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
@@ -1448,6 +1541,7 @@ def write_experiment_diagnostics(
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
     seed_ensemble = _seed_ensemble_frame(entries)
     profile_blend = _profile_blend_frame(entries)
+    profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -1495,11 +1589,15 @@ def write_experiment_diagnostics(
         zip_paths.append(str(zip_path))
 
     best = _best_candidate(comparison, settings["control_profile"])
+    best_blend = _best_profile_blend(profile_blend)
     decision = {
         "run_id": run_dir.name,
         "control_profile": settings["control_profile"],
         "best_candidate": best,
-        "recommendation": "promote_best_candidate" if best else "keep_control_profile",
+        "best_profile_blend": best_blend,
+        "recommendation": "promote_best_candidate"
+        if best
+        else ("review_profile_blend" if best_blend else "keep_control_profile"),
         "diagnostic_zips": zip_paths,
     }
     report_dir = Path(output_dir) / "experiments" / run_dir.name

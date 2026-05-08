@@ -1033,6 +1033,7 @@ experiments:
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
+    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
@@ -1062,3 +1063,8 @@ experiments:
       min_worst_5_rank_ic_delta: 0.0
       max_negative_ic_fraction_delta: 0.0
       min_top_10_bad_fold_lift_mean_delta: 0.0
+  profile_blend_review_gates:
+    min_mean_rank_ic_delta: 0.005
+    max_std_rank_ic_delta: 0.0
+    min_positive_ic_fraction: 0.70
+    min_top_10_lift_global_delta: 0.02
