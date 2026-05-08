@@ -225,10 +225,10 @@ def test_filter_feature_columns_can_replace_raw_structure_with_stable_structure(
     ]
 
 
-def test_repo_default_active_profile_is_current_champion() -> None:
+def test_repo_default_active_profile_is_stability_control() -> None:
     config = load_config("config.yaml")
 
-    assert config["features"]["active_profile"] == "baseline_no_4h_tier1_4h_large_trade_pressure_long"
+    assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
 
 
 def test_overlay_profile_keeps_raw_structure_and_only_allowed_4h_stable_overlay() -> None:

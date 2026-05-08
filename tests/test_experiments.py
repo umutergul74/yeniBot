@@ -80,26 +80,28 @@ def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() 
 
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
-    assert config["features"]["active_profile"] == "baseline_no_4h_tier1_4h_large_trade_pressure_long"
-    assert config["experiments"]["control_profile"] == "baseline_no_4h_tier1_4h_large_trade_pressure_long"
+    assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+    assert config["experiments"]["control_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_slow_4h_bounded_flow",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_bounded_flow",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_large_trade_ratio",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_whale_zscores",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_1h_cvd_rate",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_bad_fold_guardrail_light",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_pressure_24_only",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_pure_volatility_pressure_24_only",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_whale_zscores",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_1h_cvd_rate",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_slow_4h_bounded_flow_no_1h_cvd_rate",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_bad_fold_guardrail_light",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
+    assert config["experiments"]["seed_audit"]["profiles"] == ["baseline_plus_4h_bounded_whale_no_4h_tier1"]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
@@ -160,6 +162,43 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     pruned = profile_config(config, "baseline_no_4h_tier1_pruned_whale")
     assert "4h_large_trade_ratio" not in filter_feature_columns(columns, pruned)
     assert "4h_vpt_zscore" in filter_feature_columns(columns, pruned)
+
+    base_no_slow = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_slow_4h_bounded_flow")
+    base_no_slow_columns = filter_feature_columns(columns, base_no_slow)
+    assert "4h_taker_imbalance_mean_12" not in base_no_slow_columns
+    assert "4h_taker_imbalance_mean_24" not in base_no_slow_columns
+    assert "4h_taker_imbalance" in base_no_slow_columns
+
+    base_no_bounded = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_bounded_flow")
+    base_no_bounded_columns = filter_feature_columns(columns, base_no_bounded)
+    assert "4h_taker_imbalance" not in base_no_bounded_columns
+    assert "4h_taker_imbalance_mean_24" not in base_no_bounded_columns
+    assert "4h_large_trade_ratio" in base_no_bounded_columns
+
+    base_no_ratio = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_large_trade_ratio")
+    assert "4h_large_trade_ratio" not in filter_feature_columns(columns, base_no_ratio)
+
+    base_no_whale_zscores = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_whale_zscores")
+    base_no_whale_zscore_columns = filter_feature_columns(columns, base_no_whale_zscores)
+    assert "4h_vpt_zscore" not in base_no_whale_zscore_columns
+    assert "4h_vol_per_trade_log_zscore" not in base_no_whale_zscore_columns
+    assert "4h_large_trade_ratio" in base_no_whale_zscore_columns
+
+    base_no_volatility = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility")
+    base_no_volatility_columns = filter_feature_columns(columns, base_no_volatility)
+    assert "4h_gk_vol_14" not in base_no_volatility_columns
+    assert "4h_atr_14_pct" not in base_no_volatility_columns
+
+    base_no_cvd_rate = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_1h_cvd_rate")
+    base_no_cvd_rate_columns = filter_feature_columns(columns, base_no_cvd_rate)
+    assert "cvd_cumulative_rate_norm" not in base_no_cvd_rate_columns
+
+    base_guardrail = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_bad_fold_guardrail_light")
+    base_guardrail_columns = filter_feature_columns(columns, base_guardrail)
+    assert "4h_taker_imbalance_mean_24" not in base_guardrail_columns
+    assert "4h_large_trade_ratio" not in base_guardrail_columns
+    assert "4h_gk_vol_14" not in base_guardrail_columns
+    assert "cvd_cumulative_rate_norm" not in base_guardrail_columns
 
     cvd = profile_config(config, "baseline_no_4h_tier1_4h_cvd_pressure_stable")
     cvd_columns = filter_feature_columns(columns, cvd)
@@ -517,7 +556,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "control_profile": "control",
         "candidate_profiles": ["candidate"],
         "triage_fold_ids": [0],
-        "full_cv_profiles": [],
+        "full_cv_profiles": ["control", "candidate"],
         "resume_existing": True,
         "force_retrain": False,
     }
@@ -536,10 +575,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert {"rank_ic_delta", "top_10_lift_delta", "threshold_f1_delta"}.issubset(result["profile_delta"].columns)
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert diagnostics["zip_paths"]
     assert not diagnostics["profile_delta"].empty
+    assert not diagnostics["profile_blend"].empty
+    assert set(diagnostics["profile_blend"]["blend_method"]) == {"prob_mean", "rank_mean"}
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
@@ -547,6 +590,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert diagnostics["decision"]["recommendation"] in {"keep_control_profile", "promote_best_candidate"}
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
+        assert "matrix/profile_blend.csv" in archive.namelist()
 
 
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:

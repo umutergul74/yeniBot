@@ -7,6 +7,7 @@ import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -1019,6 +1020,204 @@ def _write_seed_ensemble_files(path: Path, seed_ensemble: pd.DataFrame) -> None:
     _write_json(path / "seed_ensemble.json", {"rows": seed_ensemble.to_dict(orient="records")})
 
 
+def _prediction_key_columns(frame: pd.DataFrame) -> list[str]:
+    keys = []
+    if "split" in frame.columns:
+        keys.append("split")
+    for column in ("fold", "timestamp", "source_row_position"):
+        if column in frame.columns:
+            keys.append(column)
+    return keys
+
+
+def _rank_score_by_fold(frame: pd.DataFrame) -> pd.Series:
+    group_keys = [column for column in ("split", "fold") if column in frame.columns]
+    if not group_keys:
+        return frame["prob_long"].rank(method="average", pct=True)
+    return frame.groupby(group_keys, dropna=False)["prob_long"].rank(method="average", pct=True)
+
+
+def _profile_blend_predictions(entries: list[dict[str, Any]], *, method: str) -> pd.DataFrame:
+    if len(entries) < 2:
+        return pd.DataFrame()
+
+    frames = []
+    profiles = []
+    for entry in entries:
+        prediction = entry["predictions"].copy()
+        profile = str(entry["profile"])
+        prediction["_blend_profile"] = profile
+        if method == "rank_mean":
+            prediction["_blend_score"] = _rank_score_by_fold(prediction)
+        elif method == "prob_mean":
+            prediction["_blend_score"] = prediction["prob_long"].astype(float)
+        else:
+            raise ValueError(f"Unknown profile blend method: {method}")
+        frames.append(prediction)
+        profiles.append(profile)
+    if len(frames) < 2:
+        return pd.DataFrame()
+
+    stacked = pd.concat(frames, ignore_index=True)
+    key_columns = _prediction_key_columns(stacked)
+    if not {"fold", "timestamp"}.issubset(key_columns):
+        return pd.DataFrame()
+
+    profile_count = len(set(profiles))
+    grouped = stacked.groupby(key_columns, dropna=False)
+    stats = grouped["_blend_score"].agg(
+        prob_long_blend="mean",
+        prob_long_profile_std="std",
+        prob_long_profile_min="min",
+        prob_long_profile_max="max",
+        blend_profile_count="count",
+    ).reset_index()
+    stats = stats.loc[stats["blend_profile_count"] == profile_count].copy()
+    if stats.empty:
+        return pd.DataFrame()
+
+    base = grouped.first().reset_index()
+    drop_columns = ["_blend_profile", "_blend_score", "prob_long_blend"]
+    base = base.drop(columns=[column for column in drop_columns if column in base.columns], errors="ignore")
+    base = base.merge(stats, on=key_columns, how="inner")
+    base["prob_long"] = base["prob_long_blend"]
+    regime_columns = [column for column in stacked.columns if column.startswith("regime_prob_")]
+    if regime_columns:
+        regime_avg = grouped[regime_columns].mean().reset_index()
+        base = base.drop(columns=[column for column in regime_columns if column in base.columns]).merge(
+            regime_avg,
+            on=key_columns,
+            how="left",
+        )
+    base = base.drop(columns=["prob_long_blend"], errors="ignore")
+    base["blend_method"] = method
+    base["blend_profiles"] = ",".join(sorted(set(profiles)))
+    return base.sort_values(key_columns).reset_index(drop=True)
+
+
+def _blend_entry_config(config: dict[str, Any], profile: str, feature_columns: list[str], *, description: str) -> dict[str, Any]:
+    blend_cfg = copy.deepcopy(config)
+    profiles = copy.deepcopy(_cfg(blend_cfg, ["features", "profiles"], {}) or {})
+    profiles[profile] = {
+        "description": description,
+        "include_patterns": list(feature_columns),
+        "exclude_patterns": [],
+    }
+    _set_cfg(blend_cfg, ["features", "profiles"], profiles)
+    return blend_cfg
+
+
+def _profile_blend_entries(entries: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+    full_entries = [
+        entry
+        for entry in entries
+        if str(entry.get("fold_scope", "")) == "full"
+        and not str(entry.get("profile", "")).startswith("blend_")
+    ]
+    if len(full_entries) < 2:
+        return []
+
+    combos = list(combinations(full_entries, 2))
+    if len(full_entries) > 2:
+        combos.append(tuple(full_entries))
+
+    blend_entries = []
+    for combo in combos:
+        profiles = [str(entry["profile"]) for entry in combo]
+        feature_columns = sorted({column for entry in combo for column in entry.get("feature_columns", [])})
+        combo_hash = _hash_payload({"profiles": profiles})[:10]
+        for method in ("prob_mean", "rank_mean"):
+            predictions = _profile_blend_predictions(list(combo), method=method)
+            if predictions.empty:
+                continue
+            profile = f"blend_{method}_{combo_hash}"
+            blend_cfg = _blend_entry_config(
+                config,
+                profile,
+                feature_columns,
+                description=f"Diagnostic {method} blend of: {', '.join(profiles)}",
+            )
+            diagnostics = summarize_profile_predictions(
+                predictions,
+                blend_cfg,
+                profile=profile,
+                feature_columns=feature_columns,
+                fold_scope=f"blend_{method}",
+            )
+            diagnostics["row"]["blend_profiles"] = ",".join(profiles)
+            diagnostics["row"]["blend_method"] = method
+            diagnostics["row"]["profile_count"] = len(profiles)
+            diagnostics["row"]["prob_long_profile_std_mean"] = float(
+                pd.to_numeric(predictions["prob_long_profile_std"], errors="coerce").mean()
+            )
+            diagnostics["row"]["prob_long_profile_std_p90"] = float(
+                pd.to_numeric(predictions["prob_long_profile_std"], errors="coerce").quantile(0.90)
+            )
+            blend_entries.append(
+                {
+                    "profile": profile,
+                    "fold_scope": f"blend_{method}",
+                    "feature_columns": feature_columns,
+                    "predictions": predictions,
+                    "diagnostics": diagnostics,
+                    "summary": diagnostics["row"],
+                    "config": blend_cfg,
+                }
+            )
+    return blend_entries
+
+
+def _profile_blend_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for entry in entries:
+        if not str(entry.get("fold_scope", "")).startswith("blend_"):
+            continue
+        row = dict(entry["diagnostics"]["row"])
+        predictions = entry.get("predictions", pd.DataFrame())
+        if isinstance(predictions, pd.DataFrame) and not predictions.empty:
+            row["blend_profiles"] = str(predictions["blend_profiles"].iloc[0]) if "blend_profiles" in predictions.columns else row.get("blend_profiles", "")
+            row["blend_method"] = str(predictions["blend_method"].iloc[0]) if "blend_method" in predictions.columns else row.get("blend_method", "")
+            row["profile_count"] = int(predictions["blend_profile_count"].max()) if "blend_profile_count" in predictions.columns else row.get("profile_count", 0)
+            row["prob_long_profile_std_mean"] = float(pd.to_numeric(predictions["prob_long_profile_std"], errors="coerce").mean())
+            row["prob_long_profile_std_p90"] = float(pd.to_numeric(predictions["prob_long_profile_std"], errors="coerce").quantile(0.90))
+        rows.append(row)
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
+
+
+def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
+    lines = ["# Profile Blend Diagnostics", ""]
+    if profile_blend.empty:
+        lines.append("No full-profile blends were produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "profile",
+        "blend_method",
+        "profile_count",
+        "fold_count",
+        "mean_rank_ic",
+        "std_rank_ic",
+        "positive_ic_fraction",
+        "top_10_lift_global",
+        "test_f1_at_selected_threshold",
+        "prob_long_profile_std_mean",
+        "prob_long_profile_std_p90",
+        "blend_profiles",
+    ]
+    visible = profile_blend[[column for column in display_cols if column in profile_blend.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_profile_blend_files(path: Path, profile_blend: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    profile_blend.to_csv(path / "profile_blend.csv", index=False)
+    (path / "profile_blend.md").write_text(_profile_blend_markdown(profile_blend), encoding="utf-8")
+    _write_json(path / "profile_blend.json", {"rows": profile_blend.to_dict(orient="records")})
+
+
 def _write_experiment_bundle(
     *,
     output_dir: Path,
@@ -1040,6 +1239,9 @@ def _write_experiment_bundle(
         "seed_ensemble.csv",
         "seed_ensemble.md",
         "seed_ensemble.json",
+        "profile_blend.csv",
+        "profile_blend.md",
+        "profile_blend.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -1154,11 +1356,14 @@ def run_experiment_matrix(
                 result["summary"]["seed"] = seed
                 seed_results.append(result)
     seed_ensemble_results = _seed_ensemble_entries(seed_results, config)
-    all_results = [*profile_results, *seed_results, *seed_ensemble_results]
+    profile_blend_results = _profile_blend_entries(profile_results, config)
+    all_results = [*profile_results, *seed_results, *seed_ensemble_results, *profile_blend_results]
     seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
     seed_ensemble = _seed_ensemble_frame(all_results)
+    profile_blend = _profile_blend_frame(all_results)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
+    _write_profile_blend_files(run_dir, profile_blend)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     decision = {
@@ -1181,6 +1386,7 @@ def run_experiment_matrix(
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
+        "profile_blend": profile_blend,
         "decision": decision,
     }
 
@@ -1229,15 +1435,19 @@ def write_experiment_diagnostics(
                 "diagnostics": diagnostics,
             }
         )
-    entries.extend(_seed_ensemble_entries(entries, config))
+    profile_entries = list(entries)
+    seed_ensemble_entries = _seed_ensemble_entries(profile_entries, config)
+    profile_blend_entries = _profile_blend_entries(profile_entries, config)
+    entries = [*profile_entries, *seed_ensemble_entries, *profile_blend_entries]
 
     rows = [entry["diagnostics"]["row"] for entry in entries]
     triage_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "triage"], config, scope="triage")
     full_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "full"], config, scope="full")
     comparison = _comparison_frame([*triage_rows, *full_rows])
-    profile_delta = _profile_delta_vs_control(entries, settings["control_profile"])
+    profile_delta = _profile_delta_vs_control(profile_entries, settings["control_profile"])
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
     seed_ensemble = _seed_ensemble_frame(entries)
+    profile_blend = _profile_blend_frame(entries)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -1250,6 +1460,7 @@ def write_experiment_diagnostics(
         feature_columns = list(entry["feature_columns"])
         predictions = entry["predictions"]
         diagnostics = entry["diagnostics"]
+        entry_config = entry.get("config", config)
         decided = decision_lookup.get((profile, fold_scope), {})
         ledger = diagnostics["ledger"].copy()
         for column in ("promotable", "reject_reason"):
@@ -1278,7 +1489,7 @@ def write_experiment_diagnostics(
             feature_profile=diagnostics["feature_profile"],
             experiment_ledger=ledger,
             model_feature_columns=feature_columns,
-            config=profile_config(config, profile),
+            config=profile_config(entry_config, profile),
             prefix=f"phase1_diagnostics_{_slug(profile)}_{fold_scope}",
         )
         zip_paths.append(str(zip_path))
@@ -1301,10 +1512,12 @@ def write_experiment_diagnostics(
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
+    _write_profile_blend_files(report_dir, profile_blend)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
+    _write_profile_blend_files(run_dir, profile_blend)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -1319,6 +1532,7 @@ def write_experiment_diagnostics(
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
+        "profile_blend": profile_blend,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),
