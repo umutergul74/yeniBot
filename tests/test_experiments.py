@@ -5,6 +5,7 @@ import zipfile
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from yenibot.config import load_config
 from yenibot.experiments import (
@@ -669,3 +670,29 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
     assert first["run_id"] == "stable_run"
     assert run_id == "stable_run"
     assert source == "matching_existing"
+
+
+def test_write_experiment_diagnostics_raises_when_run_has_no_completed_profiles(tmp_path, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["profiles"] = {"control": {"include_patterns": ["*"], "exclude_patterns": []}}
+    config["experiments"] = {
+        "mode": "staged",
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "triage_fold_ids": [0],
+        "full_cv_profiles": [],
+        "resume_existing": True,
+        "force_retrain": False,
+    }
+
+    # Create an empty run directory (e.g. interrupted training that wrote no manifests/predictions).
+    run_dir = tmp_path / "experiments" / "empty_run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(FileNotFoundError, match="No completed profile runs found"):
+        write_experiment_diagnostics(
+            checkpoint_dir=tmp_path,
+            config=config,
+            output_dir=tmp_path / "reports",
+            run_id="empty_run",
+        )

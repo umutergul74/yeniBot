@@ -1504,8 +1504,20 @@ def write_experiment_diagnostics(
 ) -> dict[str, Any]:
     run_dir = experiment_root(checkpoint_dir) / run_id if run_id else latest_experiment_run(checkpoint_dir)
     settings = experiment_settings(config)
+    scope_dirs = _profile_dirs(run_dir)
+    if not scope_dirs:
+        root = experiment_root(checkpoint_dir)
+        recent_runs = sorted([path.name for path in root.glob("*") if path.is_dir()], reverse=True)[:8]
+        hint = (
+            f"No completed profile runs found under {run_dir}.\n"
+            "This usually means notebook `04_training_walk_forward.ipynb` has not finished (or wrote to a different CHECKPT_DIR).\n"
+            f"Expected files like: {run_dir}/<profile>/<fold_scope>/training_manifest.json and predictions_all.parquet.\n"
+            f"Recent experiment run directories: {recent_runs}"
+        )
+        raise FileNotFoundError(hint)
+
     entries = []
-    for scope_dir in _profile_dirs(run_dir):
+    for scope_dir in scope_dirs:
         manifest = _read_json(scope_dir / "training_manifest.json")
         profile = str(manifest["profile"])
         fold_scope = str(manifest["fold_scope"])
