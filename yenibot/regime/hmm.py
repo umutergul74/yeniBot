@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,6 +30,7 @@ class OnlineGaussianHMM:
         gamma_floor: float = 0.02,
         state_weight_floor: float = 0.08,
         n_ratio_alarm: float = 15.0,
+        suppress_convergence_warnings: bool = True,
     ) -> None:
         self.n_states = n_states
         self.covariance_type = covariance_type
@@ -36,6 +39,7 @@ class OnlineGaussianHMM:
         self.gamma_floor = gamma_floor
         self.state_weight_floor = state_weight_floor
         self.n_ratio_alarm = n_ratio_alarm
+        self.suppress_convergence_warnings = suppress_convergence_warnings
         self.model: GaussianHMM | None = None
         self._snapshot: dict[str, np.ndarray] | None = None
         self._online_stats: OnlineStats | None = None
@@ -49,7 +53,8 @@ class OnlineGaussianHMM:
             random_state=self.random_state,
             min_covar=1e-6,
         )
-        self.model.fit(x)
+        with _hmmlearn_convergence_warning_scope(self.suppress_convergence_warnings):
+            self.model.fit(x)
         self._snapshot = {
             "means": self.model.means_.copy(),
             "covars": self.model.covars_.copy(),
@@ -181,3 +186,16 @@ def _multivariate_normal_pdf(x: np.ndarray, mean: np.ndarray, cov: np.ndarray) -
     exponent = -0.5 * np.sum(diff @ inv * diff, axis=1)
     normalizer = np.sqrt(((2.0 * np.pi) ** dim) * det)
     return np.exp(exponent) / normalizer
+
+
+@contextmanager
+def _hmmlearn_convergence_warning_scope(enabled: bool):
+    logger = logging.getLogger("hmmlearn.base")
+    previous_level = logger.level
+    if enabled:
+        logger.setLevel(max(previous_level, logging.ERROR))
+    try:
+        yield
+    finally:
+        if enabled:
+            logger.setLevel(previous_level)

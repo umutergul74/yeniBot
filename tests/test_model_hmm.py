@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
+from yenibot.regime.hmm import _hmmlearn_convergence_warning_scope
 
 
 def test_hybrid_encoder_returns_binary_probability_shape() -> None:
@@ -37,3 +40,18 @@ def test_hmm_online_probability_is_forward_only() -> None:
     full = hmm.predict_proba_online(x[:30], update_stats=False)
     np.testing.assert_allclose(short[0], full[0])
     np.testing.assert_allclose(full.sum(axis=1), np.ones(len(full)))
+
+
+def test_hmmlearn_convergence_warning_scope_suppresses_warning(caplog) -> None:
+    logger = logging.getLogger("hmmlearn.base")
+    caplog.set_level(logging.WARNING, logger="hmmlearn.base")
+
+    with _hmmlearn_convergence_warning_scope(True):
+        logger.warning("Model is not converging.")
+
+    assert "Model is not converging" not in caplog.text
+
+    with _hmmlearn_convergence_warning_scope(False):
+        logger.warning("Model is not converging.")
+
+    assert "Model is not converging" in caplog.text

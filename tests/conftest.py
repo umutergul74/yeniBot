@@ -106,6 +106,7 @@ def tiny_config() -> dict:
             "gamma_floor": 0.02,
             "state_weight_floor": 0.08,
             "n_ratio_alarm": 15.0,
+            "suppress_convergence_warnings": True,
             "features": ["log_return", "gk_vol_14", "adx_14", "true_cvd_zscore", "vwap_dist_atr"],
         },
         "validation": {

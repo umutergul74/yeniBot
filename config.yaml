@@ -1014,6 +1014,7 @@ hmm:
   gamma_floor: 0.02
   state_weight_floor: 0.08
   n_ratio_alarm: 15.0
+  suppress_convergence_warnings: true
   features:
     - log_return
     - gk_vol_14

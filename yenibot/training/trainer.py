@@ -166,6 +166,7 @@ def _fit_hmm(train_part: pd.DataFrame, config: Any, *, random_state: int | None 
         gamma_floor=float(_cfg(hmm_cfg, ["gamma_floor"], 0.02)),
         state_weight_floor=float(_cfg(hmm_cfg, ["state_weight_floor"], 0.08)),
         n_ratio_alarm=float(_cfg(hmm_cfg, ["n_ratio_alarm"], 15.0)),
+        suppress_convergence_warnings=bool(_cfg(hmm_cfg, ["suppress_convergence_warnings"], True)),
     )
     hmm.fit(train_part[hmm_features].to_numpy(dtype=float))
     return hmm
