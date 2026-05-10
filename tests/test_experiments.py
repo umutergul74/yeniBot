@@ -65,6 +65,34 @@ def test_experiment_settings_resolves_control_and_candidates() -> None:
     assert settings["candidate_profiles"] == ["candidate_a", "candidate_b"]
 
 
+def test_experiment_settings_skips_historically_rejected_candidates() -> None:
+    config = {
+        "features": {"active_profile": "fallback"},
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["candidate_a", "rejected", "candidate_b"],
+            "always_full_profiles": ["control", "rejected", "candidate_a"],
+            "seed_audit": {"enabled": True, "profiles": ["control", "rejected", "candidate_b"]},
+            "experiment_memory": {
+                "enabled": True,
+                "reject_retests": True,
+                "rejected_profiles": {"rejected": {"reason": "known_bad_run"}},
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+
+    assert settings["candidate_profiles"] == ["candidate_a", "candidate_b"]
+    assert settings["always_full_profiles"] == ["control", "candidate_a"]
+    assert settings["seed_audit"]["profiles"] == ["control", "candidate_b"]
+    assert settings["skipped_profiles"] == [
+        {"profile": "rejected", "role": "candidate_profile", "skip_reason": "known_bad_run"},
+        {"profile": "rejected", "role": "always_full_profile", "skip_reason": "known_bad_run"},
+        {"profile": "rejected", "role": "seed_audit_profile", "skip_reason": "known_bad_run"},
+    ]
+
+
 def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() -> None:
     settings = {
         "control_profile": "control",
@@ -90,20 +118,22 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_slow_4h_bounded_flow",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_bounded_flow",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_volume_context",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_bad_fold_guardrail_light",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility",
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility_pressure_24_only",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_1h_pure_volatility_plus_4h_stable_vol_overlay",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
-    assert config["experiments"]["seed_audit"]["profiles"] == ["baseline_plus_4h_bounded_whale_no_4h_tier1"]
+    assert config["experiments"]["seed_audit"]["profiles"] == [
+        "baseline_plus_4h_bounded_whale_no_4h_tier1",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+    ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
@@ -221,6 +251,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "4h_taker_imbalance_mean_24" in base_no_vol_no_1h_vol_columns
 
+    base_no_raw_vol_4h_stable_overlay = profile_config(
+        config,
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_1h_pure_volatility_plus_4h_stable_vol_overlay",
+    )
+    base_no_raw_vol_4h_stable_overlay_columns = filter_feature_columns(columns, base_no_raw_vol_4h_stable_overlay)
+    assert "4h_gk_vol_14" not in base_no_raw_vol_4h_stable_overlay_columns
+    assert "gk_vol_14" not in base_no_raw_vol_4h_stable_overlay_columns
+    assert "4h_gk_vol_14_stable_rank" in base_no_raw_vol_4h_stable_overlay_columns
+    assert "4h_vwap_dist_atr_stable_zscore" in base_no_raw_vol_4h_stable_overlay_columns
+
     base_no_vol_no_4h_volume = profile_config(
         config,
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_volume_context",
@@ -326,6 +366,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in no_4h_volatility_columns
     assert "4h_atr_14_pct" not in no_4h_volatility_columns
     assert "4h_vwap_dist_atr" in no_4h_volatility_columns
+
+    pressure_no_raw_volatility = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility",
+    )
+    pressure_no_raw_volatility_columns = filter_feature_columns(columns, pressure_no_raw_volatility)
+    assert "4h_gk_vol_14" not in pressure_no_raw_volatility_columns
+    assert "gk_vol_14" not in pressure_no_raw_volatility_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in pressure_no_raw_volatility_columns
+    assert "4h_large_trade_pressure_12_stable_rank" in pressure_no_raw_volatility_columns
 
     vwap_only = profile_config(config, "baseline_no_4h_tier1_4h_large_trade_pressure_long_4h_vwap_only_structure")
     vwap_only_columns = filter_feature_columns(columns, vwap_only)
@@ -454,6 +504,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in no_vol_pressure_24_columns
     assert "4h_large_trade_pressure_12_stable_rank" not in no_vol_pressure_24_columns
     assert "4h_large_trade_pressure_24_stable_rank" in no_vol_pressure_24_columns
+
+    no_raw_vol_pressure_24 = profile_config(
+        config,
+        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility_pressure_24_only",
+    )
+    no_raw_vol_pressure_24_columns = filter_feature_columns(columns, no_raw_vol_pressure_24)
+    assert "4h_gk_vol_14" not in no_raw_vol_pressure_24_columns
+    assert "gk_vol_14" not in no_raw_vol_pressure_24_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in no_raw_vol_pressure_24_columns
+    assert "4h_large_trade_pressure_24_stable_rank" in no_raw_vol_pressure_24_columns
 
     no_vol_no_whale_zscores = profile_config(
         config,
@@ -697,9 +757,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert diagnostics["zip_paths"]
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
@@ -714,6 +776,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     }.issubset(diagnostics["profile_blend"].columns)
     assert "best_profile_blend" in diagnostics["decision"]
     assert "profile_blend_leaders" in diagnostics["decision"]
+    assert not diagnostics["experiment_selection"].empty
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
@@ -726,6 +789,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()
+        assert "matrix/experiment_selection.csv" in archive.namelist()
 
 
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:

@@ -7,6 +7,7 @@ import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
+from fnmatch import fnmatch
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -99,10 +100,66 @@ def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:
     return updated
 
 
+def _profile_rejection_reason(profile: str, experiments: dict[str, Any]) -> str:
+    memory = experiments.get("experiment_memory", {}) or {}
+    if not bool(memory.get("enabled", False)) or not bool(memory.get("reject_retests", True)):
+        return ""
+    if profile in {str(item) for item in memory.get("allow_retest_profiles", []) or []}:
+        return ""
+
+    rejected_profiles = memory.get("rejected_profiles", {}) or {}
+    if isinstance(rejected_profiles, dict) and profile in rejected_profiles:
+        value = rejected_profiles[profile]
+        if isinstance(value, dict):
+            return str(value.get("reason") or "historically_rejected_profile")
+        return str(value or "historically_rejected_profile")
+
+    for item in memory.get("rejected_profile_patterns", []) or []:
+        if isinstance(item, str):
+            pattern = item
+            reason = "historically_rejected_profile_pattern"
+        elif isinstance(item, dict):
+            pattern = str(item.get("pattern", ""))
+            reason = str(item.get("reason") or "historically_rejected_profile_pattern")
+        else:
+            continue
+        if pattern and fnmatch(profile, pattern):
+            return reason
+    return ""
+
+
+def _filter_memory_rejected_profiles(
+    profiles: list[str],
+    experiments: dict[str, Any],
+    *,
+    role: str,
+    protected_profiles: set[str] | None = None,
+) -> tuple[list[str], list[dict[str, str]]]:
+    protected = set() if protected_profiles is None else {str(profile) for profile in protected_profiles}
+    selected: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for profile in profiles:
+        profile = str(profile)
+        if profile in selected:
+            continue
+        reason = "" if profile in protected else _profile_rejection_reason(profile, experiments)
+        if reason:
+            skipped.append({"profile": profile, "role": role, "skip_reason": reason})
+            continue
+        selected.append(profile)
+    return selected, skipped
+
+
 def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments = copy.deepcopy(_cfg(config, ["experiments"], {}) or {})
     control = str(experiments.get("control_profile") or _cfg(config, ["features", "active_profile"]))
-    candidates = [str(profile) for profile in experiments.get("candidate_profiles", [])]
+    raw_candidates = [str(profile) for profile in experiments.get("candidate_profiles", [])]
+    candidates, skipped_candidates = _filter_memory_rejected_profiles(
+        raw_candidates,
+        experiments,
+        role="candidate_profile",
+        protected_profiles={control},
+    )
     profiles = []
     for profile in [control, *candidates]:
         if profile not in profiles:
@@ -114,15 +171,32 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments.setdefault("triage_fold_ids", [])
     experiments.setdefault("full_cv_profiles", "auto")
     experiments.setdefault("always_full_profiles", [control])
+    always_full, skipped_always_full = _filter_memory_rejected_profiles(
+        [str(profile) for profile in experiments.get("always_full_profiles", []) or []],
+        experiments,
+        role="always_full_profile",
+        protected_profiles={control},
+    )
+    if control not in always_full:
+        always_full.insert(0, control)
+    experiments["always_full_profiles"] = always_full
     experiments.setdefault("max_auto_full_candidates", None)
     experiments.setdefault("resume_existing", True)
     experiments.setdefault("force_retrain", False)
     seed_audit = copy.deepcopy(experiments.get("seed_audit", {}) or {})
     seed_audit.setdefault("enabled", False)
     seed_audit.setdefault("profiles", [control])
+    seed_profiles, skipped_seed_profiles = _filter_memory_rejected_profiles(
+        [str(profile) for profile in seed_audit.get("profiles", []) or [control]],
+        experiments,
+        role="seed_audit_profile",
+        protected_profiles={control},
+    )
+    seed_audit["profiles"] = seed_profiles or [control]
     seed_audit.setdefault("seeds", [])
     seed_audit.setdefault("fold_ids", experiments.get("triage_fold_ids", []))
     experiments["seed_audit"] = seed_audit
+    experiments["skipped_profiles"] = [*skipped_candidates, *skipped_always_full, *skipped_seed_profiles]
     return experiments
 
 
@@ -650,6 +724,80 @@ def _write_decision_files(run_dir: Path, comparison: pd.DataFrame, decision: dic
     (run_dir / "profile_comparison.md").write_text(_comparison_markdown(comparison, decision), encoding="utf-8")
     _write_json(run_dir / "decision_report.json", decision)
     _write_json(run_dir / "best_candidate.json", decision.get("best_candidate") or {})
+
+
+def _experiment_selection_frame(settings: dict[str, Any]) -> pd.DataFrame:
+    columns = ["profile", "role", "selected", "skip_reason"]
+    rows: list[dict[str, Any]] = [
+        {
+            "profile": str(settings["control_profile"]),
+            "role": "control_profile",
+            "selected": True,
+            "skip_reason": "",
+        }
+    ]
+    for role, key in (
+        ("candidate_profile", "candidate_profiles"),
+        ("always_full_profile", "always_full_profiles"),
+        ("seed_audit_profile", "seed_audit_profiles"),
+    ):
+        values = settings.get(key, [])
+        if key == "seed_audit_profiles":
+            values = (settings.get("seed_audit", {}) or {}).get("profiles", [])
+        for profile in values or []:
+            rows.append({"profile": str(profile), "role": role, "selected": True, "skip_reason": ""})
+    for skipped in settings.get("skipped_profiles", []) or []:
+        rows.append(
+            {
+                "profile": str(skipped.get("profile", "")),
+                "role": str(skipped.get("role", "skipped_profile")),
+                "selected": False,
+                "skip_reason": str(skipped.get("skip_reason", "")),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).drop_duplicates().reset_index(drop=True)
+
+
+def _experiment_selection_markdown(selection: pd.DataFrame) -> str:
+    lines = ["# Experiment Selection", ""]
+    if selection.empty:
+        lines.append("No profile selection metadata was produced.")
+        return "\n".join(lines)
+    lines.append("| profile | role | selected | skip_reason |")
+    lines.append("| --- | --- | --- | --- |")
+    for _, row in selection.iterrows():
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row["profile"]),
+                    str(row["role"]),
+                    str(bool(row["selected"])),
+                    str(row.get("skip_reason", "")),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def _write_experiment_selection(path: Path, settings: dict[str, Any]) -> pd.DataFrame:
+    path.mkdir(parents=True, exist_ok=True)
+    selection = _experiment_selection_frame(settings)
+    selection.to_csv(path / "experiment_selection.csv", index=False)
+    (path / "experiment_selection.md").write_text(_experiment_selection_markdown(selection), encoding="utf-8")
+    _write_json(
+        path / "experiment_selection.json",
+        {
+            "control_profile": settings.get("control_profile", ""),
+            "selected_profiles": selection.loc[selection["selected"].astype(bool), "profile"].drop_duplicates().tolist(),
+            "skipped_profiles": settings.get("skipped_profiles", []) or [],
+            "rows": selection.to_dict(orient="records"),
+        },
+    )
+    return selection
 
 
 def _fold_delta_frame(entry: dict[str, Any]) -> pd.DataFrame:
@@ -1418,6 +1566,9 @@ def _write_experiment_bundle(
         "profile_blend.csv",
         "profile_blend.md",
         "profile_blend.json",
+        "experiment_selection.csv",
+        "experiment_selection.md",
+        "experiment_selection.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -1458,6 +1609,7 @@ def run_experiment_matrix(
             "settings": settings,
         },
     )
+    experiment_selection = _write_experiment_selection(run_dir, settings)
 
     triage_fold_ids = [int(fold_id) for fold_id in settings.get("triage_fold_ids", [])]
     resume_existing = bool(settings.get("resume_existing", True))
@@ -1554,6 +1706,7 @@ def run_experiment_matrix(
         "full_profiles": full_profiles,
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
+        "skipped_profiles": settings.get("skipped_profiles", []) or [],
         "recommendation": "promote_best_candidate"
         if best
         else ("review_profile_blend" if best_blend else "keep_control_profile"),
@@ -1570,6 +1723,7 @@ def run_experiment_matrix(
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
+        "experiment_selection": experiment_selection,
         "decision": decision,
     }
 
@@ -1710,16 +1864,19 @@ def write_experiment_diagnostics(
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
     decision["bundle_zip"] = str(bundle_path)
     decision["latest_bundle_zip"] = str(latest_bundle_path)
+    decision["skipped_profiles"] = settings.get("skipped_profiles", []) or []
     _write_decision_files(report_dir, comparison, decision)
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
+    experiment_selection = _write_experiment_selection(report_dir, settings)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
+    _write_experiment_selection(run_dir, settings)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -1735,6 +1892,7 @@ def write_experiment_diagnostics(
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
+        "experiment_selection": experiment_selection,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),
