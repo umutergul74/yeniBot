@@ -12,6 +12,8 @@ from yenibot.experiments import (
     _auto_full_profiles,
     _passes_full,
     _passes_triage,
+    _profile_blend_leaders,
+    _profile_blend_review_frame,
     experiment_settings,
     profile_config,
     resolve_experiment_run_id,
@@ -92,13 +94,11 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_slow_4h_bounded_flow",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_bounded_flow",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_large_trade_ratio",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_whale_zscores",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_1h_cvd_rate",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_bad_fold_guardrail_light",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_slow_4h_bounded_flow",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_bounded_flow",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_volume_context",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_bounded_flow",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long_bad_fold_guardrail_light",
     ]
@@ -155,6 +155,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_imbalance_mean_24",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
+        "gk_vol_14",
+        "realized_vol_14",
+        "atr_14_pct",
         "volume_log_zscore",
         "volume_denoised_log_zscore",
         "taker_buy_ratio",
@@ -190,6 +193,42 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     base_no_volatility_columns = filter_feature_columns(columns, base_no_volatility)
     assert "4h_gk_vol_14" not in base_no_volatility_columns
     assert "4h_atr_14_pct" not in base_no_volatility_columns
+
+    base_no_vol_no_slow = profile_config(
+        config,
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_slow_4h_bounded_flow",
+    )
+    base_no_vol_no_slow_columns = filter_feature_columns(columns, base_no_vol_no_slow)
+    assert "4h_gk_vol_14" not in base_no_vol_no_slow_columns
+    assert "4h_taker_imbalance_mean_12" not in base_no_vol_no_slow_columns
+    assert "4h_taker_imbalance" in base_no_vol_no_slow_columns
+
+    base_no_vol_no_bounded = profile_config(
+        config,
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_bounded_flow",
+    )
+    base_no_vol_no_bounded_columns = filter_feature_columns(columns, base_no_vol_no_bounded)
+    assert "4h_gk_vol_14" not in base_no_vol_no_bounded_columns
+    assert "4h_taker_imbalance" not in base_no_vol_no_bounded_columns
+    assert "4h_taker_imbalance_mean_24" not in base_no_vol_no_bounded_columns
+
+    base_no_vol_no_1h_vol = profile_config(
+        config,
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+    )
+    base_no_vol_no_1h_vol_columns = filter_feature_columns(columns, base_no_vol_no_1h_vol)
+    assert "4h_gk_vol_14" not in base_no_vol_no_1h_vol_columns
+    assert "gk_vol_14" not in base_no_vol_no_1h_vol_columns
+    assert "4h_taker_imbalance_mean_24" in base_no_vol_no_1h_vol_columns
+
+    base_no_vol_no_4h_volume = profile_config(
+        config,
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_4h_volume_context",
+    )
+    base_no_vol_no_4h_volume_columns = filter_feature_columns(columns, base_no_vol_no_4h_volume)
+    assert "4h_gk_vol_14" not in base_no_vol_no_4h_volume_columns
+    assert "4h_volume_log_zscore" not in base_no_vol_no_4h_volume_columns
+    assert "volume_log_zscore" in base_no_vol_no_4h_volume_columns
 
     base_no_cvd_rate = profile_config(config, "baseline_plus_4h_bounded_whale_no_4h_tier1_no_1h_cvd_rate")
     base_no_cvd_rate_columns = filter_feature_columns(columns, base_no_cvd_rate)
@@ -512,6 +551,86 @@ def test_triage_promotion_gate_uses_downside_metrics() -> None:
     assert _passes_triage(weaker_downside, control, config) == (False, "worst_5_rank_ic_delta")
 
 
+def test_profile_blend_review_separates_tail_lift_and_stability_leaders() -> None:
+    config = {
+        "experiments": {
+            "profile_blend_review_gates": {
+                "min_mean_rank_ic_delta": 0.005,
+                "max_std_rank_ic_delta": 0.0,
+                "min_positive_ic_fraction": 0.70,
+                "min_top_10_lift_global_delta": 0.02,
+            },
+            "profile_blend_leader_gates": {
+                "tail_lift": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "max_std_rank_ic_delta": 0.0,
+                    "min_positive_ic_fraction": 0.70,
+                    "min_top_10_lift_global_delta": 0.02,
+                },
+                "stability": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "max_std_rank_ic_delta": 0.0,
+                    "min_positive_ic_fraction": 0.70,
+                    "min_worst_5_rank_ic_delta": 0.02,
+                },
+            },
+        }
+    }
+    comparison = pd.DataFrame(
+        [
+            {
+                "profile": "control",
+                "fold_scope": "full",
+                "mean_rank_ic": 0.057,
+                "std_rank_ic": 0.101,
+                "positive_ic_fraction": 0.786,
+                "test_f1_at_selected_threshold": 0.467,
+                "mean_long_f1": 0.270,
+                "worst_5_rank_ic_mean": -0.113,
+                "top_10_lift_global": 1.139,
+            }
+        ]
+    )
+    profile_blend = pd.DataFrame(
+        [
+            {
+                "profile": "tail",
+                "mean_rank_ic": 0.065,
+                "std_rank_ic": 0.093,
+                "positive_ic_fraction": 0.714,
+                "test_f1_at_selected_threshold": 0.464,
+                "mean_long_f1": 0.267,
+                "worst_5_rank_ic_mean": -0.077,
+                "top_10_lift_global": 1.172,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
+            },
+            {
+                "profile": "stable",
+                "mean_rank_ic": 0.068,
+                "std_rank_ic": 0.085,
+                "positive_ic_fraction": 0.738,
+                "test_f1_at_selected_threshold": 0.465,
+                "mean_long_f1": 0.270,
+                "worst_5_rank_ic_mean": -0.063,
+                "top_10_lift_global": 1.119,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
+            },
+        ]
+    )
+
+    reviewed = _profile_blend_review_frame(profile_blend, comparison, config, "control")
+    leaders = _profile_blend_leaders(reviewed)
+
+    assert leaders["tail_lift_leader"]["profile"] == "tail"
+    assert leaders["stability_leader"]["profile"] == "stable"
+    assert bool(reviewed.loc[reviewed["profile"] == "tail", "tail_lift_leader"].item()) is True
+    assert bool(reviewed.loc[reviewed["profile"] == "stable", "stability_leader"].item()) is True
+    assert bool(reviewed.loc[reviewed["profile"] == "stable", "tail_lift_eligible"].item()) is False
+    assert bool(reviewed.loc[reviewed["profile"] == "stable", "stability_eligible"].item()) is True
+
+
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["active_profile"] = "base"
@@ -585,8 +704,16 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
     assert set(diagnostics["profile_blend"]["blend_method"]) == {"prob_mean", "rank_mean"}
-    assert {"reviewable", "review_reason", "mean_rank_ic_delta_vs_control"}.issubset(diagnostics["profile_blend"].columns)
+    assert {
+        "reviewable",
+        "review_reason",
+        "mean_rank_ic_delta_vs_control",
+        "tail_lift_eligible",
+        "stability_eligible",
+        "leader_roles",
+    }.issubset(diagnostics["profile_blend"].columns)
     assert "best_profile_blend" in diagnostics["decision"]
+    assert "profile_blend_leaders" in diagnostics["decision"]
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")

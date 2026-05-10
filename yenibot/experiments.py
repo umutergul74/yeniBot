@@ -1209,6 +1209,9 @@ def _profile_blend_review_frame(
     max_std_delta = float(gates.get("max_std_rank_ic_delta", 0.0))
     min_positive = float(gates.get("min_positive_ic_fraction", 0.70))
     min_top_delta = float(gates.get("min_top_10_lift_global_delta", 0.02))
+    leader_gates = _cfg(config, ["experiments", "profile_blend_leader_gates"], {}) or {}
+    tail_lift_gates = leader_gates.get("tail_lift", gates) or gates
+    stability_gates = leader_gates.get("stability", {}) or {}
 
     rows = []
     for _, item in reviewed.iterrows():
@@ -1239,11 +1242,17 @@ def _profile_blend_review_frame(
             reasons.append("stationarity_policy")
         row["reviewable"] = not reasons
         row["review_reason"] = ";".join(reasons)
+        tail_lift_reasons = _profile_blend_gate_reasons(row, tail_lift_gates)
+        stability_reasons = _profile_blend_gate_reasons(row, stability_gates)
+        row["tail_lift_eligible"] = not tail_lift_reasons
+        row["tail_lift_reason"] = ";".join(tail_lift_reasons)
+        row["stability_eligible"] = not stability_reasons
+        row["stability_reason"] = ";".join(stability_reasons)
         rows.append(row)
 
     if not rows:
         return reviewed
-    return (
+    frame = (
         pd.DataFrame(rows)
         .sort_values(
             ["reviewable", "mean_rank_ic", "top_10_lift_global", "worst_5_rank_ic_mean"],
@@ -1251,19 +1260,93 @@ def _profile_blend_review_frame(
         )
         .reset_index(drop=True)
     )
+    return _mark_profile_blend_leaders(frame)
+
+
+def _profile_blend_gate_reasons(row: dict[str, Any], gates: dict[str, Any]) -> list[str]:
+    reasons = []
+    if not gates:
+        return reasons
+    checks = [
+        ("min_mean_rank_ic_delta", "mean_rank_ic_delta_vs_control", "mean_rank_ic_delta", "min"),
+        ("max_std_rank_ic_delta", "std_rank_ic_delta_vs_control", "std_rank_ic_delta", "max"),
+        ("min_positive_ic_fraction", "positive_ic_fraction", "positive_ic_fraction", "min"),
+        ("min_top_10_lift_global_delta", "top_10_lift_global_delta_vs_control", "top_10_lift_global_delta", "min"),
+        ("min_worst_5_rank_ic_delta", "worst_5_rank_ic_delta_vs_control", "worst_5_rank_ic_delta", "min"),
+    ]
+    for gate_key, metric_key, reason, direction in checks:
+        if gate_key not in gates:
+            continue
+        value = _float(row, metric_key)
+        gate = float(gates[gate_key])
+        if direction == "min" and value < gate:
+            reasons.append(reason)
+        if direction == "max" and value > gate:
+            reasons.append(reason)
+    if not bool(row.get("mtf_leakage_passed", False)):
+        reasons.append("mtf_leakage")
+    if not bool(row.get("stationarity_policy_passed", False)):
+        reasons.append("stationarity_policy")
+    return reasons
+
+
+def _select_profile_blend_leader(profile_blend: pd.DataFrame, role: str) -> dict[str, Any]:
+    if profile_blend.empty:
+        return {}
+    if role == "tail_lift":
+        eligible_column = "tail_lift_eligible"
+        sort_columns = ["top_10_lift_global", "mean_rank_ic", "worst_5_rank_ic_mean"]
+        ascending = [False, False, False]
+    elif role == "stability":
+        eligible_column = "stability_eligible"
+        sort_columns = ["mean_rank_ic", "worst_5_rank_ic_mean", "std_rank_ic", "positive_ic_fraction"]
+        ascending = [False, False, True, False]
+    else:
+        raise ValueError(f"Unknown profile blend leader role: {role}")
+    if eligible_column not in profile_blend.columns:
+        return {}
+    candidates = profile_blend[profile_blend[eligible_column].astype(bool)].copy()
+    if candidates.empty:
+        return {}
+    candidates = candidates.sort_values(sort_columns, ascending=ascending)
+    return candidates.iloc[0].to_dict()
+
+
+def _profile_blend_leaders(profile_blend: pd.DataFrame) -> dict[str, Any]:
+    leaders = {
+        "tail_lift_leader": _select_profile_blend_leader(profile_blend, "tail_lift"),
+        "stability_leader": _select_profile_blend_leader(profile_blend, "stability"),
+    }
+    return {key: value for key, value in leaders.items() if value}
+
+
+def _mark_profile_blend_leaders(profile_blend: pd.DataFrame) -> pd.DataFrame:
+    if profile_blend.empty:
+        return profile_blend
+    marked = profile_blend.copy()
+    marked["tail_lift_leader"] = False
+    marked["stability_leader"] = False
+    leaders = _profile_blend_leaders(marked)
+    for role, leader in leaders.items():
+        profile = str(leader.get("profile", ""))
+        if not profile:
+            continue
+        marked.loc[marked["profile"] == profile, role] = True
+    roles = []
+    for _, row in marked.iterrows():
+        item_roles = []
+        if bool(row.get("tail_lift_leader", False)):
+            item_roles.append("tail_lift")
+        if bool(row.get("stability_leader", False)):
+            item_roles.append("stability")
+        roles.append(",".join(item_roles))
+    marked["leader_roles"] = roles
+    return marked
 
 
 def _best_profile_blend(profile_blend: pd.DataFrame) -> dict[str, Any]:
-    if profile_blend.empty or "reviewable" not in profile_blend.columns:
-        return {}
-    candidates = profile_blend[profile_blend["reviewable"].astype(bool)].copy()
-    if candidates.empty:
-        return {}
-    candidates = candidates.sort_values(
-        ["mean_rank_ic", "top_10_lift_global", "worst_5_rank_ic_mean"],
-        ascending=[False, False, False],
-    )
-    return candidates.iloc[0].to_dict()
+    leaders = _profile_blend_leaders(profile_blend)
+    return leaders.get("tail_lift_leader") or leaders.get("stability_leader") or {}
 
 
 def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
@@ -1287,6 +1370,11 @@ def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
         "test_f1_at_selected_threshold",
         "reviewable",
         "review_reason",
+        "tail_lift_eligible",
+        "tail_lift_reason",
+        "stability_eligible",
+        "stability_reason",
+        "leader_roles",
         "prob_long_profile_std_mean",
         "prob_long_profile_std_p90",
         "blend_profiles",
@@ -1455,12 +1543,14 @@ def run_experiment_matrix(
     _write_profile_blend_files(run_dir, profile_blend)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
+    blend_leaders = _profile_blend_leaders(profile_blend)
     best_blend = _best_profile_blend(profile_blend)
     decision = {
         "run_id": run_id,
         "control_profile": settings["control_profile"],
         "best_candidate": best,
         "best_profile_blend": best_blend,
+        "profile_blend_leaders": blend_leaders,
         "full_profiles": full_profiles,
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
@@ -1601,12 +1691,14 @@ def write_experiment_diagnostics(
         zip_paths.append(str(zip_path))
 
     best = _best_candidate(comparison, settings["control_profile"])
+    blend_leaders = _profile_blend_leaders(profile_blend)
     best_blend = _best_profile_blend(profile_blend)
     decision = {
         "run_id": run_dir.name,
         "control_profile": settings["control_profile"],
         "best_candidate": best,
         "best_profile_blend": best_blend,
+        "profile_blend_leaders": blend_leaders,
         "recommendation": "promote_best_candidate"
         if best
         else ("review_profile_blend" if best_blend else "keep_control_profile"),
