@@ -152,6 +152,23 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "stable_tanh_scale": 2.0,
         "stable_transforms": ["zscore", "rank", "tanh"],
     }
+    config["features"]["structure_stability"] = {
+        "enabled": True,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
+        "source_columns": ["realized_vol_14", "gk_vol_14", "atr_14_pct"],
+    }
+    config["features"]["order_flow_volatility_interactions"] = {
+        "enabled": True,
+        "flow_columns": [
+            "taker_imbalance",
+            "signed_large_trade_pressure_stable_rank",
+            "large_trade_pressure_4_stable_rank",
+        ],
+        "volatility_columns": ["realized_vol_14_stable_rank", "gk_vol_14_stable_rank"],
+        "modes": ["signed", "high", "low"],
+    }
     primary = synthetic_klines(96, "1h")
     htf = synthetic_klines(30, "4h")
     extended_primary = synthetic_klines(112, "1h")
@@ -171,6 +188,9 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "large_trade_pressure_4_minus_3",
         "large_trade_pressure_4_minus_3_stable_rank",
         "large_trade_pressure_4_minus_3_stable_tanh",
+        "taker_imbalance_x_rv14_rank_signed",
+        "signed_ltp_x_rv14_rank_high",
+        "ltp4_rank_x_gk14_rank_low",
         "orderflow_efficiency",
         "absorption_pressure_3",
         "absorption_pressure_3_stable_rank",
@@ -179,6 +199,8 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "4h_taker_imbalance",
         "4h_cvd_pressure_3",
         "4h_cvd_pressure_3_stable_rank",
+        "4h_taker_imbalance_x_rv14_rank_signed",
+        "4h_ltp4_rank_x_gk14_rank_high",
         "4h_large_trade_pressure_4_minus_3_stable_tanh",
     ]
 
@@ -191,3 +213,4 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
     assert "signed_large_trade_pressure_stable_zscore" in build_feature_matrix(primary, htf, config).feature_columns
     assert "large_trade_pressure_4_minus_3" not in build_feature_matrix(primary, htf, config).feature_columns
     assert "large_trade_pressure_4_minus_3_stable_tanh" in build_feature_matrix(primary, htf, config).feature_columns
+    assert "ltp4_rank_x_gk14_rank_low" in build_feature_matrix(primary, htf, config).feature_columns

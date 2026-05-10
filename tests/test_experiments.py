@@ -125,12 +125,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_gk",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_realized",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_atr",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_gk",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_realized",
+        "baseline_stable_plus_1h_flow_rv_interactions",
+        "baseline_stable_plus_1h_flow_gk_interactions",
+        "baseline_stable_plus_1h_flow_atr_interactions",
+        "baseline_stable_plus_4h_flow_rv_interactions",
+        "baseline_stable_plus_4h_flow_gk_interactions",
+        "baseline_stable_plus_4h_flow_atr_interactions",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
@@ -188,6 +188,36 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_imbalance_mean_24",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
+        "4h_taker_imbalance_x_rv14_rank_signed",
+        "4h_taker_imbalance_slope_x_rv14_rank_high",
+        "4h_signed_ltp_x_rv14_rank_low",
+        "4h_ltp12_rank_x_rv14_rank_signed",
+        "4h_ltp24_rank_x_rv14_rank_high",
+        "4h_taker_imbalance_x_gk14_rank_signed",
+        "4h_taker_imbalance_slope_x_gk14_rank_high",
+        "4h_signed_ltp_x_gk14_rank_low",
+        "4h_ltp12_rank_x_gk14_rank_signed",
+        "4h_ltp24_rank_x_gk14_rank_high",
+        "4h_taker_imbalance_x_atr14_rank_signed",
+        "4h_taker_imbalance_slope_x_atr14_rank_high",
+        "4h_signed_ltp_x_atr14_rank_low",
+        "4h_ltp12_rank_x_atr14_rank_signed",
+        "4h_ltp24_rank_x_atr14_rank_high",
+        "taker_imbalance_x_rv14_rank_signed",
+        "taker_imbalance_slope_x_rv14_rank_high",
+        "signed_ltp_x_rv14_rank_low",
+        "ltp12_rank_x_rv14_rank_signed",
+        "ltp24_rank_x_rv14_rank_high",
+        "taker_imbalance_x_gk14_rank_signed",
+        "taker_imbalance_slope_x_gk14_rank_high",
+        "signed_ltp_x_gk14_rank_low",
+        "ltp12_rank_x_gk14_rank_signed",
+        "ltp24_rank_x_gk14_rank_high",
+        "taker_imbalance_x_atr14_rank_signed",
+        "taker_imbalance_slope_x_atr14_rank_high",
+        "signed_ltp_x_atr14_rank_low",
+        "ltp12_rank_x_atr14_rank_signed",
+        "ltp24_rank_x_atr14_rank_high",
         "gk_vol_14",
         "realized_vol_14",
         "atr_14_pct",
@@ -276,6 +306,46 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         assert retained_column in readd_columns
         assert not (pure_volatility_columns - {retained_column}).intersection(readd_columns)
         assert "4h_taker_imbalance_mean_24" in readd_columns
+        assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
+
+    interaction_expectations = {
+        "baseline_stable_plus_1h_flow_rv_interactions": (
+            "taker_imbalance_x_rv14_rank_signed",
+            "4h_taker_imbalance_x_rv14_rank_signed",
+            "gk_vol_14",
+        ),
+        "baseline_stable_plus_1h_flow_gk_interactions": (
+            "signed_ltp_x_gk14_rank_low",
+            "4h_signed_ltp_x_gk14_rank_low",
+            "gk_vol_14",
+        ),
+        "baseline_stable_plus_1h_flow_atr_interactions": (
+            "ltp24_rank_x_atr14_rank_high",
+            "4h_ltp24_rank_x_atr14_rank_high",
+            "atr_14_pct",
+        ),
+        "baseline_stable_plus_4h_flow_rv_interactions": (
+            "4h_ltp12_rank_x_rv14_rank_signed",
+            "ltp12_rank_x_rv14_rank_signed",
+            "4h_realized_vol_14",
+        ),
+        "baseline_stable_plus_4h_flow_gk_interactions": (
+            "4h_taker_imbalance_slope_x_gk14_rank_high",
+            "taker_imbalance_slope_x_gk14_rank_high",
+            "4h_gk_vol_14",
+        ),
+        "baseline_stable_plus_4h_flow_atr_interactions": (
+            "4h_signed_ltp_x_atr14_rank_low",
+            "signed_ltp_x_atr14_rank_low",
+            "4h_atr_14_pct",
+        ),
+    }
+    for profile_name, (included, excluded_interaction, excluded_raw_volatility) in interaction_expectations.items():
+        profile_columns = set(filter_feature_columns(columns, profile_config(config, profile_name)))
+        assert included in profile_columns
+        assert excluded_interaction not in profile_columns
+        assert excluded_raw_volatility not in profile_columns
+        assert "4h_taker_imbalance_mean_24" in profile_columns
 
     base_no_raw_vol_4h_stable_overlay = profile_config(
         config,

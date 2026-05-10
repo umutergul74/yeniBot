@@ -967,6 +967,60 @@ features:
         - "4h_vwap_dist_atr_stable_*"
         - "4h_volume_log_zscore_stable_*"
         - "4h_volume_denoised_log_zscore_stable_*"
+    baseline_stable_plus_1h_flow_rv_interactions:
+      description: Stability control plus bounded 1H order-flow interactions with local realized-volatility regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "taker_imbalance_x_rv14_rank_*"
+        - "taker_imbalance_slope_x_rv14_rank_*"
+        - "signed_ltp_x_rv14_rank_*"
+        - "ltp12_rank_x_rv14_rank_*"
+        - "ltp24_rank_x_rv14_rank_*"
+    baseline_stable_plus_1h_flow_gk_interactions:
+      description: Stability control plus bounded 1H order-flow interactions with local Garman-Klass volatility regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "taker_imbalance_x_gk14_rank_*"
+        - "taker_imbalance_slope_x_gk14_rank_*"
+        - "signed_ltp_x_gk14_rank_*"
+        - "ltp12_rank_x_gk14_rank_*"
+        - "ltp24_rank_x_gk14_rank_*"
+    baseline_stable_plus_1h_flow_atr_interactions:
+      description: Stability control plus bounded 1H order-flow interactions with local ATR-percent regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "taker_imbalance_x_atr14_rank_*"
+        - "taker_imbalance_slope_x_atr14_rank_*"
+        - "signed_ltp_x_atr14_rank_*"
+        - "ltp12_rank_x_atr14_rank_*"
+        - "ltp24_rank_x_atr14_rank_*"
+    baseline_stable_plus_4h_flow_rv_interactions:
+      description: Stability control plus aligned 4H order-flow interactions with realized-volatility regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "4h_taker_imbalance_x_rv14_rank_*"
+        - "4h_taker_imbalance_slope_x_rv14_rank_*"
+        - "4h_signed_ltp_x_rv14_rank_*"
+        - "4h_ltp12_rank_x_rv14_rank_*"
+        - "4h_ltp24_rank_x_rv14_rank_*"
+    baseline_stable_plus_4h_flow_gk_interactions:
+      description: Stability control plus aligned 4H order-flow interactions with Garman-Klass volatility regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "4h_taker_imbalance_x_gk14_rank_*"
+        - "4h_taker_imbalance_slope_x_gk14_rank_*"
+        - "4h_signed_ltp_x_gk14_rank_*"
+        - "4h_ltp12_rank_x_gk14_rank_*"
+        - "4h_ltp24_rank_x_gk14_rank_*"
+    baseline_stable_plus_4h_flow_atr_interactions:
+      description: Stability control plus aligned 4H order-flow interactions with ATR-percent regime rank.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "4h_taker_imbalance_x_atr14_rank_*"
+        - "4h_taker_imbalance_slope_x_atr14_rank_*"
+        - "4h_signed_ltp_x_atr14_rank_*"
+        - "4h_ltp12_rank_x_atr14_rank_*"
+        - "4h_ltp24_rank_x_atr14_rank_*"
     baseline_plus_stable_v2:
       description: Baseline plus stable v2 pressure/divergence features for explicit comparison.
       inherit: baseline_40
@@ -1010,6 +1064,19 @@ features:
     stable_clip_abs: 5.0
     stable_tanh_scale: 2.0
     stable_transforms: [zscore, rank, tanh]
+  order_flow_volatility_interactions:
+    enabled: true
+    flow_columns:
+      - taker_imbalance
+      - taker_imbalance_slope
+      - signed_large_trade_pressure_stable_rank
+      - large_trade_pressure_12_stable_rank
+      - large_trade_pressure_24_stable_rank
+    volatility_columns:
+      - realized_vol_14_stable_rank
+      - gk_vol_14_stable_rank
+      - atr_14_pct_stable_rank
+    modes: [signed, high, low]
   structure_stability:
     enabled: true
     stable_window: 100
@@ -1125,12 +1192,12 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_gk
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_realized
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_atr
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_gk
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_realized
+    - baseline_stable_plus_1h_flow_rv_interactions
+    - baseline_stable_plus_1h_flow_gk_interactions
+    - baseline_stable_plus_1h_flow_atr_interactions
+    - baseline_stable_plus_4h_flow_rv_interactions
+    - baseline_stable_plus_4h_flow_gk_interactions
+    - baseline_stable_plus_4h_flow_atr_interactions
   triage_fold_ids: [0, 2, 4, 8, 13, 16, 17, 20, 21, 22, 23, 29, 32, 35, 36, 38, 39, 40, 41]
   full_cv_profiles: auto
   always_full_profiles:
@@ -1182,6 +1249,18 @@ experiments:
         reason: "Bundle 20260510_124744 triage had weak mean IC and unstable positive-fold coverage."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_1h_pure_volatility_plus_4h_stable_vol_overlay:
         reason: "Bundle 20260510_124744 triage improved volatility stability but damaged top-10 lift below 1.0."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr:
+        reason: "Bundle 20260510_145746 raw-volatility re-add failed to beat the stability control; volatility should be context, not standalone signal."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_gk:
+        reason: "Bundle 20260510_145746 raw-volatility re-add failed to beat the stability control; top-10 lift fell below the control."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_realized:
+        reason: "Bundle 20260510_145746 raw-volatility re-add improved some folds but worsened instability versus the control."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_atr:
+        reason: "Bundle 20260510_145746 raw 4H ATR re-add weakened triage mean IC and fold stability."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_gk:
+        reason: "Bundle 20260510_145746 raw 4H GK volatility re-add weakened triage mean IC and fold stability."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_realized:
+        reason: "Bundle 20260510_145746 raw 4H realized-volatility re-add weakened triage mean IC and fold stability."
   seed_audit:
     enabled: true
     profiles:

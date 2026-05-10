@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import Iterable
@@ -248,7 +249,8 @@ def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> p
         df["volume_denoised_log_zscore"] = _rolling_zscore(np.log1p(volume_denoised), window)
 
     df = _add_structure_stability_features(df, config, window)
-    return _add_order_flow_v2_features(df, config, window)
+    df = _add_order_flow_v2_features(df, config, window)
+    return _add_order_flow_volatility_interaction_features(df, config)
 
 
 def _add_structure_stability_features(df: pd.DataFrame, config: object, default_window: int) -> pd.DataFrame:
@@ -403,6 +405,60 @@ def _add_order_flow_v2_features(df: pd.DataFrame, config: object, default_window
     if stable_frames:
         return pd.concat([df, *stable_frames], axis=1)
     return df
+
+
+def _feature_alias(column: str) -> str:
+    aliases = {
+        "signed_large_trade_pressure_stable_rank": "signed_ltp",
+        "realized_vol_14_stable_rank": "rv14_rank",
+        "gk_vol_14_stable_rank": "gk14_rank",
+        "atr_14_pct_stable_rank": "atr14_rank",
+    }
+    if column in aliases:
+        return aliases[column]
+    match = re.fullmatch(r"large_trade_pressure_(\d+)_stable_(rank|zscore|tanh)", column)
+    if match:
+        return f"ltp{match.group(1)}_{match.group(2)}"
+    return column.replace("_stable_rank", "_rank").replace("_stable_zscore", "_zscore")
+
+
+def _bounded_interaction_source(series: pd.Series) -> pd.Series:
+    return series.replace([np.inf, -np.inf], np.nan).clip(-1.0, 1.0)
+
+
+def _add_order_flow_volatility_interaction_features(df: pd.DataFrame, config: object) -> pd.DataFrame:
+    cfg = _config_get(config, ["features", "order_flow_volatility_interactions"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        return df
+
+    flow_columns = [str(column) for column in (_config_get(cfg, ["flow_columns"], []) or [])]
+    volatility_columns = [str(column) for column in (_config_get(cfg, ["volatility_columns"], []) or [])]
+    modes = {str(mode) for mode in (_config_get(cfg, ["modes"], ["signed", "high", "low"]) or [])}
+    if not flow_columns or not volatility_columns or not modes:
+        return df
+
+    additions: dict[str, pd.Series] = {}
+    for flow_column in flow_columns:
+        if flow_column not in df.columns:
+            continue
+        flow = _bounded_interaction_source(df[flow_column])
+        flow_name = _feature_alias(flow_column)
+        for volatility_column in volatility_columns:
+            if volatility_column not in df.columns:
+                continue
+            volatility = _bounded_interaction_source(df[volatility_column])
+            volatility_name = _feature_alias(volatility_column)
+            base_name = f"{flow_name}_x_{volatility_name}"
+            if "signed" in modes:
+                additions[f"{base_name}_signed"] = flow * volatility
+            if "high" in modes:
+                additions[f"{base_name}_high"] = flow * volatility.clip(lower=0.0)
+            if "low" in modes:
+                additions[f"{base_name}_low"] = flow * (-volatility.clip(upper=0.0))
+
+    if not additions:
+        return df
+    return pd.concat([df, pd.DataFrame(additions, index=df.index)], axis=1)
 
 
 def _stable_rolling_score_frame(
