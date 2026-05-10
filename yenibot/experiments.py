@@ -556,6 +556,9 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("mean_long_f1_delta")
     if _float(row, "top_10_lift_global") < _float(control, "top_10_lift_global") + float(gates.get("min_top_10_lift_global_delta", 0.05)):
         reasons.append("top_10_lift_global_delta")
+    top_lift_floor = _optional_gate_float(gates, "min_top_10_lift_global", None)
+    if top_lift_floor is not None and _float(row, "top_10_lift_global") < top_lift_floor:
+        reasons.append("top_10_lift_global")
     worst_5_delta = _optional_gate_float(gates, "min_worst_5_rank_ic_delta", None)
     if worst_5_delta is not None and _float(row, "worst_5_rank_ic_mean") < _float(control, "worst_5_rank_ic_mean") + worst_5_delta:
         reasons.append("worst_5_rank_ic_delta")
@@ -1419,6 +1422,7 @@ def _profile_blend_gate_reasons(row: dict[str, Any], gates: dict[str, Any]) -> l
         ("min_mean_rank_ic_delta", "mean_rank_ic_delta_vs_control", "mean_rank_ic_delta", "min"),
         ("max_std_rank_ic_delta", "std_rank_ic_delta_vs_control", "std_rank_ic_delta", "max"),
         ("min_positive_ic_fraction", "positive_ic_fraction", "positive_ic_fraction", "min"),
+        ("min_top_10_lift_global", "top_10_lift_global", "top_10_lift_global", "min"),
         ("min_top_10_lift_global_delta", "top_10_lift_global_delta_vs_control", "top_10_lift_global_delta", "min"),
         ("min_worst_5_rank_ic_delta", "worst_5_rank_ic_delta_vs_control", "worst_5_rank_ic_delta", "min"),
     ]

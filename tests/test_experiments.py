@@ -112,27 +112,30 @@ def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() 
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
     assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
-    assert config["experiments"]["control_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+    assert (
+        config["experiments"]["control_profile"]
+        == "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility"
+    )
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long_no_4h_1h_pure_volatility_pressure_24_only",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_1h_pure_volatility_plus_4h_stable_vol_overlay",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_gk",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_realized",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_atr",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_gk",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_realized",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
-        "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1",
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
@@ -250,6 +253,29 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "4h_taker_imbalance_mean_24" in base_no_vol_no_1h_vol_columns
+
+    pure_volatility_columns = {
+        "realized_vol_14",
+        "gk_vol_14",
+        "atr_14_pct",
+        "4h_realized_vol_14",
+        "4h_gk_vol_14",
+        "4h_atr_14_pct",
+    }
+    readd_profiles = {
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr": "atr_14_pct",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_gk": "gk_vol_14",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_realized": "realized_vol_14",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_atr": "4h_atr_14_pct",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_gk": "4h_gk_vol_14",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_4h_realized": "4h_realized_vol_14",
+    }
+    for profile_name, retained_column in readd_profiles.items():
+        readd = profile_config(config, profile_name)
+        readd_columns = set(filter_feature_columns(columns, readd))
+        assert retained_column in readd_columns
+        assert not (pure_volatility_columns - {retained_column}).intersection(readd_columns)
+        assert "4h_taker_imbalance_mean_24" in readd_columns
 
     base_no_raw_vol_4h_stable_overlay = profile_config(
         config,
@@ -537,6 +563,7 @@ def test_full_promotion_gate_uses_threshold_selected_f1() -> None:
                     "min_selected_threshold_f1_delta": 0.0,
                     "min_long_f1_delta": None,
                     "min_top_10_lift_global_delta": 0.05,
+                    "min_top_10_lift_global": 1.0,
                 }
             }
         }
@@ -563,6 +590,11 @@ def test_full_promotion_gate_uses_threshold_selected_f1() -> None:
     }
 
     assert _passes_full(candidate, control, config) == (True, "")
+    weak_top_lift = dict(candidate, top_10_lift_global=0.99)
+    assert _passes_full(weak_top_lift, control, config) == (
+        False,
+        "top_10_lift_global_delta;top_10_lift_global",
+    )
 
 
 def test_triage_promotion_gate_uses_downside_metrics() -> None:
