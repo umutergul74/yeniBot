@@ -89,6 +89,20 @@ def _rolling_slope(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window, min_periods=window).apply(slope, raw=True)
 
 
+def _array_slope(values: np.ndarray) -> float:
+    valid = np.asarray(values, dtype=float)
+    valid = valid[~np.isnan(valid)]
+    if len(valid) < 2:
+        return np.nan
+    x = np.arange(len(valid), dtype=float)
+    x = x - x.mean()
+    y = valid - valid.mean()
+    denom = float(np.dot(x, x))
+    if denom == 0.0:
+        return np.nan
+    return float(np.dot(x, y) / denom)
+
+
 def _atr(df: pd.DataFrame, period: int) -> pd.Series:
     prev_close = df["close"].shift(1)
     true_range = pd.concat(
@@ -229,6 +243,111 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
 
     feature_columns = select_feature_columns(df)
     return FeatureResult(df, feature_columns)
+
+
+def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: object) -> FeatureResult:
+    """Aggregate lower-timeframe full-klines into causal 1H order-flow shape features."""
+
+    cfg = _config_get(config, ["features", "intrahour_order_flow"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        empty = pd.DataFrame({"timestamp": pd.Series(dtype="datetime64[ns, UTC]")})
+        return FeatureResult(empty, [])
+
+    interval = str(_config_get(cfg, ["interval"], "15m")).lower()
+    prefix = str(_config_get(cfg, ["prefix"], f"ih{interval}")).replace("-", "_")
+    expected_bars = int(_config_get(cfg, ["expected_bars_per_hour"], 4))
+    min_bars = int(_config_get(cfg, ["min_bars_per_hour"], expected_bars))
+    stable_window = int(_config_get(cfg, ["stable_window"], _config_get(config, ["features", "stationarity", "normalization_window"], 100)))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
+
+    df = intrabar_frame.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["hour_timestamp"] = df["timestamp"].dt.floor("h")
+    df["taker_buy_ratio"] = _safe_divide(df["taker_buy_base_vol"], df["volume"], default=0.5).clip(0.0, 1.0)
+    df["taker_imbalance"] = (2.0 * df["taker_buy_ratio"] - 1.0).clip(-1.0, 1.0)
+    df["taker_sell_base_vol"] = (df["volume"] - df["taker_buy_base_vol"]).clip(lower=0.0)
+    df["true_cvd_delta"] = df["taker_buy_base_vol"] - df["taker_sell_base_vol"]
+    df["vol_per_trade"] = _safe_divide(df["volume"], df["num_trades"], default=np.nan)
+
+    rows: list[dict[str, float | pd.Timestamp]] = []
+    for hour, part in df.groupby("hour_timestamp", sort=True):
+        part = part.sort_values("timestamp")
+        count = int(len(part))
+        if count < min_bars:
+            continue
+        volume = part["volume"].astype(float)
+        trades = part["num_trades"].astype(float)
+        taker_buy = part["taker_buy_base_vol"].astype(float)
+        imbalance = part["taker_imbalance"].astype(float)
+        buy_ratio = part["taker_buy_ratio"].astype(float)
+        cvd = part["true_cvd_delta"].astype(float)
+        vpt = part["vol_per_trade"].astype(float)
+        total_volume = float(volume.sum())
+        total_trades = float(trades.sum())
+        total_buy = float(taker_buy.sum())
+        first_half = part.iloc[: max(1, count // 2)]
+        second_half = part.iloc[max(1, count // 2) :]
+        early_volume = float(first_half["volume"].sum())
+        late_volume = float(second_half["volume"].sum())
+        early_cvd = float(first_half["true_cvd_delta"].sum())
+        late_cvd = float(second_half["true_cvd_delta"].sum())
+        early_vpt = float(first_half["volume"].sum() / first_half["num_trades"].replace(0, np.nan).sum())
+        late_vpt = float(second_half["volume"].sum() / second_half["num_trades"].replace(0, np.nan).sum())
+        hour_vpt = total_volume / total_trades if total_trades > 0 else np.nan
+        last_volume = float(volume.iloc[-1])
+        last_trades = float(trades.iloc[-1])
+        last_buy = float(taker_buy.iloc[-1])
+        last_imbalance = float(imbalance.iloc[-1])
+
+        row = {
+            "timestamp": hour,
+            f"{prefix}_bar_count": float(count),
+            f"{prefix}_coverage": float(count / expected_bars) if expected_bars > 0 else np.nan,
+            f"{prefix}_taker_imbalance_mean": float(imbalance.mean()),
+            f"{prefix}_taker_imbalance_last": last_imbalance,
+            f"{prefix}_taker_imbalance_late_minus_early": float(second_half["taker_imbalance"].mean() - first_half["taker_imbalance"].mean()),
+            f"{prefix}_taker_imbalance_slope": _array_slope(imbalance.to_numpy()),
+            f"{prefix}_buy_ratio_range": float(buy_ratio.max() - buy_ratio.min()),
+            f"{prefix}_cvd_pressure_norm": float(cvd.sum() / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_cvd_pressure_late_minus_early_norm": float((late_cvd - early_cvd) / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_cvd_slope_norm": float(_array_slope(cvd.cumsum().to_numpy()) / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_volume_share_last": float(last_volume / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_volume_share_late": float(late_volume / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_trade_share_last": float(last_trades / total_trades) if total_trades > 0 else np.nan,
+            f"{prefix}_vpt_last_vs_hour": float(vpt.iloc[-1] / hour_vpt - 1.0) if hour_vpt and np.isfinite(hour_vpt) else np.nan,
+            f"{prefix}_vpt_late_vs_early": float(late_vpt / early_vpt - 1.0) if early_vpt and np.isfinite(early_vpt) else np.nan,
+            f"{prefix}_large_trade_concentration": float(vpt.max() / vpt.mean() - 1.0) if float(vpt.mean()) > 0 else np.nan,
+            f"{prefix}_buy_volume_share_last": float(last_buy / total_buy) if total_buy > 0 else np.nan,
+            f"{prefix}_aggressive_buy_burst": float(max(last_imbalance, 0.0) * last_volume / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_aggressive_sell_burst": float(max(-last_imbalance, 0.0) * last_volume / total_volume) if total_volume > 0 else np.nan,
+        }
+        rows.append(row)
+
+    if not rows:
+        empty = pd.DataFrame({"timestamp": pd.Series(dtype="datetime64[ns, UTC]")})
+        return FeatureResult(empty, [])
+
+    out = pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
+    stable_columns = [str(column) for column in (_config_get(cfg, ["stable_columns"], []) or [])]
+    if stable_columns:
+        stable_scores = _stable_rolling_score_frame(
+            out,
+            stable_columns,
+            stable_window,
+            stable_clip_abs,
+            stable_transforms,
+            error_context="features.intrahour_order_flow.stable_window",
+            missing_ok=True,
+            tanh_scale=stable_tanh_scale,
+        )
+        if not stable_scores.empty:
+            out = pd.concat([out, stable_scores], axis=1)
+
+    feature_columns = [column for column in select_feature_columns(out) if column.startswith(f"{prefix}_")]
+    return FeatureResult(out, feature_columns)
 
 
 def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> pd.DataFrame:
@@ -634,8 +753,13 @@ def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:
     return base | {f"4h_{column}" for column in base}
 
 
-def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, config: object) -> FeatureResult:
-    """Build 1H features plus correctly delayed 4H features."""
+def build_feature_matrix(
+    primary_frame: pd.DataFrame,
+    htf_frame: pd.DataFrame,
+    config: object,
+    intrabar_frame: pd.DataFrame | None = None,
+) -> FeatureResult:
+    """Build 1H features, correctly delayed 4H features, and optional intrahour flow features."""
 
     primary = compute_bar_features(primary_frame, config).frame
     htf_result = compute_bar_features(htf_frame, config)
@@ -656,6 +780,12 @@ def build_feature_matrix(primary_frame: pd.DataFrame, htf_frame: pd.DataFrame, c
         on="timestamp",
         direction="backward",
     )
+
+    if intrabar_frame is not None and bool(_config_get(config, ["features", "intrahour_order_flow", "enabled"], False)):
+        intrahour_result = compute_intrahour_order_flow_features(intrabar_frame, config)
+        if intrahour_result.feature_columns:
+            intrahour_features = intrahour_result.frame[["timestamp", *intrahour_result.feature_columns]].copy()
+            merged = merged.merge(intrahour_features, on="timestamp", how="left")
 
     warmup_rows = int(_config_get(config, ["features", "warmup_rows"], 300))
     if warmup_rows > 0:

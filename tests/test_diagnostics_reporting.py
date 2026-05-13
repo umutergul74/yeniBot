@@ -476,6 +476,13 @@ def test_bad_fold_forensics_reports_group_signal_changes() -> None:
     )
 
 
+def test_feature_group_diagnostics_classifies_intrahour_flow() -> None:
+    groups = feature_group_diagnostics(["ih15_cvd_pressure_norm", "ih15_aggressive_buy_burst_stable_rank"])
+
+    assert set(groups["timeframe"]) == {"intrahour"}
+    assert set(groups["family"]) == {"order_flow_intrahour"}
+
+
 def test_bad_fold_forensics_summaries_flag_repeated_reversal_sources() -> None:
     feature_forensics = pd.DataFrame(
         [

@@ -201,6 +201,75 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     return experiments
 
 
+def _profile_requires_intrahour_features(config: dict[str, Any], profile: str) -> bool:
+    profile_cfg = profile_config(config, profile)
+    resolved = resolve_feature_profile(profile_cfg)
+    return any("ih15" in str(pattern) for pattern in resolved.get("include_patterns", []) or [])
+
+
+def _preflight_experiment_profiles(
+    settings: dict[str, Any],
+    frame: pd.DataFrame,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Skip candidate profiles that cannot change the current feature matrix."""
+
+    updated = copy.deepcopy(settings)
+    base_columns = select_feature_columns(frame)
+    control = str(updated["control_profile"])
+    selected_profiles: list[str] = []
+    skipped_profiles = list(updated.get("skipped_profiles", []) or [])
+    seen_signatures: dict[tuple[str, ...], str] = {}
+
+    for profile in [str(item) for item in updated.get("profiles", [])]:
+        cfg = profile_config(config, profile)
+        feature_columns = tuple(filter_feature_columns(base_columns, cfg))
+        has_intrahour = any(column.startswith("ih15_") for column in feature_columns)
+        if profile != control and _profile_requires_intrahour_features(config, profile) and not has_intrahour:
+            skipped_profiles.append(
+                {
+                    "profile": profile,
+                    "role": "candidate_profile",
+                    "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+                }
+            )
+            continue
+        duplicate_of = seen_signatures.get(feature_columns)
+        if profile != control and duplicate_of:
+            skipped_profiles.append(
+                {
+                    "profile": profile,
+                    "role": "candidate_profile",
+                    "skip_reason": f"duplicate_feature_signature:{duplicate_of}",
+                }
+            )
+            continue
+        selected_profiles.append(profile)
+        seen_signatures[feature_columns] = profile
+
+    if control not in selected_profiles:
+        raise ValueError(f"Control profile was removed during experiment preflight: {control}")
+
+    selected_set = set(selected_profiles)
+    updated["profiles"] = selected_profiles
+    updated["candidate_profiles"] = [profile for profile in selected_profiles if profile != control]
+    updated["always_full_profiles"] = [
+        str(profile)
+        for profile in updated.get("always_full_profiles", []) or []
+        if str(profile) == control or str(profile) in selected_set or not _profile_requires_intrahour_features(config, str(profile))
+    ]
+    seed_audit = copy.deepcopy(updated.get("seed_audit", {}) or {})
+    if seed_audit:
+        seed_audit["profiles"] = [
+            str(profile)
+            for profile in seed_audit.get("profiles", []) or []
+            if str(profile) == control or str(profile) in selected_set or not _profile_requires_intrahour_features(config, str(profile))
+        ]
+        updated["seed_audit"] = seed_audit
+    updated["skipped_profiles"] = skipped_profiles
+    return updated
+
+
 def experiment_root(checkpoint_dir: str | Path) -> Path:
     return Path(checkpoint_dir) / "experiments"
 
@@ -1588,6 +1657,30 @@ def _write_profile_blend_files(path: Path, profile_blend: pd.DataFrame) -> None:
     _write_json(path / "profile_blend.json", {"rows": profile_blend.to_dict(orient="records")})
 
 
+def _write_profile_diagnostic_summaries(path: Path, entries: list[dict[str, Any]]) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+    def tagged_frame(entry: dict[str, Any], key: str) -> pd.DataFrame:
+        frame = entry["diagnostics"].get(key)
+        if frame is None or frame.empty:
+            return pd.DataFrame()
+        out = frame.copy()
+        out.insert(0, "fold_scope", str(entry["fold_scope"]))
+        out.insert(0, "profile", str(entry["profile"]))
+        return out
+
+    for key, filename in [
+        ("fold_metrics", "profile_fold_metrics.csv"),
+        ("threshold_summary", "profile_threshold_summary.csv"),
+        ("score_band_summary", "profile_score_band_summary.csv"),
+        ("feature_groups", "profile_feature_groups.csv"),
+    ]:
+        frames = [tagged_frame(entry, key) for entry in entries]
+        frames = [frame for frame in frames if not frame.empty]
+        if frames:
+            pd.concat(frames, ignore_index=True).to_csv(path / filename, index=False)
+
+
 def _write_experiment_bundle(
     *,
     output_dir: Path,
@@ -1612,6 +1705,10 @@ def _write_experiment_bundle(
         "profile_blend.csv",
         "profile_blend.md",
         "profile_blend.json",
+        "profile_fold_metrics.csv",
+        "profile_threshold_summary.csv",
+        "profile_score_band_summary.csv",
+        "profile_feature_groups.csv",
         "experiment_selection.csv",
         "experiment_selection.md",
         "experiment_selection.json",
@@ -1631,6 +1728,17 @@ def _write_experiment_bundle(
     return bundle_path, latest_path
 
 
+def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: Path) -> tuple[Path, Path]:
+    slim_path = output_dir / f"phase1_experiment_slim_bundle_{run_id}.zip"
+    latest_slim_path = output_dir / "phase1_latest_experiment_slim_bundle.zip"
+    with zipfile.ZipFile(slim_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(report_dir.glob("*")):
+            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".md"}:
+                archive.write(path, f"{run_id}/{path.name}")
+    shutil.copyfile(slim_path, latest_slim_path)
+    return slim_path, latest_slim_path
+
+
 def run_experiment_matrix(
     frame: pd.DataFrame,
     config: dict[str, Any],
@@ -1640,6 +1748,7 @@ def run_experiment_matrix(
     device: str | None = None,
 ) -> dict[str, Any]:
     settings = experiment_settings(config)
+    settings = _preflight_experiment_profiles(settings, frame, config)
     signature = _experiment_signature(config, settings)
     signature_hash = _hash_payload(signature)
     run_id, run_id_source = resolve_experiment_run_id(checkpoint_dir, config, settings, run_id)
@@ -1911,26 +2020,37 @@ def write_experiment_diagnostics(
     report_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
+    slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
+    latest_slim_bundle_path = Path(output_dir) / "phase1_latest_experiment_slim_bundle.zip"
     decision["bundle_zip"] = str(bundle_path)
     decision["latest_bundle_zip"] = str(latest_bundle_path)
+    decision["slim_bundle_zip"] = str(slim_bundle_path)
+    decision["latest_slim_bundle_zip"] = str(latest_slim_bundle_path)
     decision["skipped_profiles"] = settings.get("skipped_profiles", []) or []
     _write_decision_files(report_dir, comparison, decision)
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
+    _write_profile_diagnostic_summaries(report_dir, entries)
     experiment_selection = _write_experiment_selection(report_dir, settings)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
+    _write_profile_diagnostic_summaries(run_dir, entries)
     _write_experiment_selection(run_dir, settings)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
         report_dir=report_dir,
         zip_paths=zip_paths,
+    )
+    slim_bundle_path, latest_slim_bundle_path = _write_experiment_slim_bundle(
+        output_dir=Path(output_dir),
+        run_id=run_dir.name,
+        report_dir=report_dir,
     )
     return {
         "run_id": run_dir.name,
@@ -1946,4 +2066,6 @@ def write_experiment_diagnostics(
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),
         "latest_bundle_zip": str(latest_bundle_path),
+        "slim_bundle_zip": str(slim_bundle_path),
+        "latest_slim_bundle_zip": str(latest_slim_bundle_path),
     }

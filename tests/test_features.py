@@ -5,7 +5,7 @@ import copy
 import pandas as pd
 import pytest
 
-from yenibot.features import build_feature_matrix
+from yenibot.features import build_feature_matrix, compute_intrahour_order_flow_features
 from yenibot.features.wavelet import causal_wavelet_denoise
 
 
@@ -214,3 +214,57 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
     assert "large_trade_pressure_4_minus_3" not in build_feature_matrix(primary, htf, config).feature_columns
     assert "large_trade_pressure_4_minus_3_stable_tanh" in build_feature_matrix(primary, htf, config).feature_columns
     assert "ltp4_rank_x_gk14_rank_low" in build_feature_matrix(primary, htf, config).feature_columns
+
+
+def test_intrahour_order_flow_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["intrahour_order_flow"] = {
+        "enabled": True,
+        "interval": "15m",
+        "prefix": "ih15",
+        "expected_bars_per_hour": 4,
+        "min_bars_per_hour": 4,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
+        "stable_columns": [
+            "ih15_cvd_pressure_norm",
+            "ih15_cvd_slope_norm",
+            "ih15_vpt_last_vs_hour",
+            "ih15_aggressive_buy_burst",
+        ],
+    }
+    primary = synthetic_klines(96, "1h")
+    htf = synthetic_klines(30, "4h")
+    intrabar = synthetic_klines(96 * 4, "15m")
+    extended_primary = synthetic_klines(112, "1h")
+    extended_htf = synthetic_klines(34, "4h")
+    extended_intrabar = synthetic_klines(112 * 4, "15m")
+
+    intrahour = compute_intrahour_order_flow_features(intrabar, config)
+    assert {
+        "ih15_taker_imbalance_late_minus_early",
+        "ih15_cvd_pressure_norm",
+        "ih15_cvd_pressure_norm_stable_rank",
+        "ih15_aggressive_buy_burst_stable_zscore",
+    }.issubset(set(intrahour.feature_columns))
+
+    base = build_feature_matrix(primary, htf, config, intrabar_frame=intrabar).frame
+    extended = build_feature_matrix(extended_primary, extended_htf, config, intrabar_frame=extended_intrabar).frame
+    timestamp = pd.Timestamp("2022-01-03 12:00", tz="UTC")
+    columns = [
+        "ih15_taker_imbalance_mean",
+        "ih15_taker_imbalance_late_minus_early",
+        "ih15_cvd_pressure_norm",
+        "ih15_cvd_slope_norm",
+        "ih15_volume_share_last",
+        "ih15_vpt_last_vs_hour",
+        "ih15_aggressive_buy_burst",
+        "ih15_cvd_pressure_norm_stable_rank",
+        "ih15_aggressive_buy_burst_stable_zscore",
+    ]
+
+    assert set(columns).issubset(base.columns)
+    base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
+    extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
+    pd.testing.assert_series_equal(base_row, extended_row, check_names=False)

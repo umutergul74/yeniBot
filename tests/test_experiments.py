@@ -11,6 +11,7 @@ from yenibot.config import load_config
 from yenibot.experiments import (
     _auto_full_profiles,
     _best_profile_blend,
+    _preflight_experiment_profiles,
     _passes_full,
     _passes_triage,
     _profile_blend_leaders,
@@ -94,6 +95,44 @@ def test_experiment_settings_skips_historically_rejected_candidates() -> None:
     ]
 
 
+def test_experiment_preflight_skips_intrahour_candidates_until_features_exist() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["base_feature"], "exclude_patterns": []},
+                "same": {"include_patterns": ["base_feature"], "exclude_patterns": []},
+                "intrahour": {"inherit": "control", "include_patterns": ["ih15_*"], "exclude_patterns": []},
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["same", "intrahour"],
+            "always_full_profiles": ["control", "intrahour"],
+        },
+    }
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+            "base_feature": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+
+    settings = _preflight_experiment_profiles(experiment_settings(config), frame, config)
+
+    assert settings["profiles"] == ["control"]
+    assert settings["candidate_profiles"] == []
+    assert settings["always_full_profiles"] == ["control"]
+    assert settings["skipped_profiles"] == [
+        {"profile": "same", "role": "candidate_profile", "skip_reason": "duplicate_feature_signature:control"},
+        {
+            "profile": "intrahour",
+            "role": "candidate_profile",
+            "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+        },
+    ]
+
+
 def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() -> None:
     settings = {
         "control_profile": "control",
@@ -126,12 +165,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_no_1h_cvd_rate",
-        "baseline_stable_no_slow_4h_bounded_flow",
-        "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate",
-        "baseline_stable_no_4h_whale_zscores",
-        "baseline_stable_no_4h_volume_context",
-        "baseline_stable_no_1h_large_trade_ratio",
+        "baseline_stable_plus_15m_late_order_flow",
+        "baseline_stable_plus_15m_intrahour_pressure",
+        "baseline_stable_plus_15m_whale_burst",
+        "baseline_stable_plus_15m_order_flow_full",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
@@ -226,6 +263,31 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "volume_denoised_log_zscore",
         "taker_buy_ratio",
         "cvd_cumulative_rate_norm",
+        "ih15_coverage",
+        "ih15_taker_imbalance_last",
+        "ih15_taker_imbalance_late_minus_early",
+        "ih15_taker_imbalance_slope",
+        "ih15_buy_ratio_range",
+        "ih15_cvd_pressure_norm",
+        "ih15_cvd_pressure_late_minus_early_norm",
+        "ih15_cvd_slope_norm",
+        "ih15_volume_share_last",
+        "ih15_trade_share_last",
+        "ih15_vpt_last_vs_hour",
+        "ih15_vpt_late_vs_early",
+        "ih15_large_trade_concentration",
+        "ih15_buy_volume_share_last",
+        "ih15_aggressive_buy_burst",
+        "ih15_aggressive_sell_burst",
+        "ih15_cvd_pressure_norm_stable_rank",
+        "ih15_cvd_pressure_norm_stable_zscore",
+        "ih15_cvd_slope_norm_stable_rank",
+        "ih15_vpt_last_vs_hour_stable_rank",
+        "ih15_vpt_last_vs_hour_stable_zscore",
+        "ih15_large_trade_concentration_stable_rank",
+        "ih15_large_trade_concentration_stable_zscore",
+        "ih15_aggressive_buy_burst_stable_rank",
+        "ih15_aggressive_sell_burst_stable_rank",
     ]
 
     pruned = profile_config(config, "baseline_no_4h_tier1_pruned_whale")
@@ -316,6 +378,38 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     stable_no_1h_ltr_columns = filter_feature_columns(columns, stable_no_1h_ltr)
     assert "large_trade_ratio" not in stable_no_1h_ltr_columns
     assert "4h_large_trade_ratio" in stable_no_1h_ltr_columns
+    for profile_name in [
+        "baseline_stable_no_1h_cvd_rate",
+        "baseline_stable_no_slow_4h_bounded_flow",
+        "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate",
+        "baseline_stable_no_4h_whale_zscores",
+        "baseline_stable_no_4h_volume_context",
+        "baseline_stable_no_1h_large_trade_ratio",
+    ]:
+        assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
+
+    intrahour_late = profile_config(config, "baseline_stable_plus_15m_late_order_flow")
+    intrahour_late_columns = filter_feature_columns(columns, intrahour_late)
+    assert "ih15_taker_imbalance_late_minus_early" in intrahour_late_columns
+    assert "ih15_cvd_pressure_norm" not in intrahour_late_columns
+    assert "gk_vol_14" not in intrahour_late_columns
+
+    intrahour_pressure = profile_config(config, "baseline_stable_plus_15m_intrahour_pressure")
+    intrahour_pressure_columns = filter_feature_columns(columns, intrahour_pressure)
+    assert "ih15_cvd_pressure_norm_stable_rank" in intrahour_pressure_columns
+    assert "ih15_vpt_last_vs_hour" not in intrahour_pressure_columns
+    assert "4h_taker_imbalance_mean_24" in intrahour_pressure_columns
+
+    intrahour_whale = profile_config(config, "baseline_stable_plus_15m_whale_burst")
+    intrahour_whale_columns = filter_feature_columns(columns, intrahour_whale)
+    assert "ih15_vpt_last_vs_hour_stable_rank" in intrahour_whale_columns
+    assert "ih15_large_trade_concentration" in intrahour_whale_columns
+    assert "ih15_cvd_pressure_norm" not in intrahour_whale_columns
+
+    intrahour_full = profile_config(config, "baseline_stable_plus_15m_order_flow_full")
+    intrahour_full_columns = filter_feature_columns(columns, intrahour_full)
+    assert "ih15_cvd_pressure_norm" in intrahour_full_columns
+    assert "ih15_aggressive_sell_burst_stable_rank" in intrahour_full_columns
 
     pure_volatility_columns = {
         "realized_vol_14",
@@ -990,8 +1084,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["experiment_selection"].empty
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
+    assert (tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip").exists()
+    assert (tmp_path / "reports" / "phase1_latest_experiment_slim_bundle.zip").exists()
     assert diagnostics["bundle_zip"].endswith("phase1_experiment_bundle_matrix.zip")
     assert diagnostics["latest_bundle_zip"].endswith("phase1_latest_experiment_bundle.zip")
+    assert diagnostics["slim_bundle_zip"].endswith("phase1_experiment_slim_bundle_matrix.zip")
+    assert diagnostics["latest_slim_bundle_zip"].endswith("phase1_latest_experiment_slim_bundle.zip")
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",
         "promote_best_candidate",
@@ -1000,7 +1098,13 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()
+        assert "matrix/profile_fold_metrics.csv" in archive.namelist()
         assert "matrix/experiment_selection.csv" in archive.namelist()
+    with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
+        names = set(archive.namelist())
+    assert "matrix/profile_comparison.csv" in names
+    assert "matrix/profile_fold_metrics.csv" in names
+    assert all("/diagnostics/" not in name for name in names)
 
 
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:

@@ -19,6 +19,7 @@ binance:
   symbol: BTCUSDT
   primary_interval: 1h
   htf_interval: 4h
+  intrabar_intervals: [15m]
   start_date: "2022-01-01"
   end_date: null
   limit: 1500
@@ -117,7 +118,8 @@ features:
         - "*orderflow_efficiency*"
         - "*absorption_pressure*"
         - "*cvd_price_divergence*"
-        - "*cvd_pressure*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
         - "*large_trade_pressure*"
         - "*_stable_*"
     baseline_plus_4h_bounded_whale_no_4h_tier1_no_slow_4h_bounded_flow:
@@ -175,6 +177,46 @@ features:
         - "realized_vol_14"
         - "gk_vol_14"
         - "atr_14_pct"
+    baseline_stable_allow_intrahour_stable:
+      description: Stability control with explicit exclusions that keep existing stable families out while allowing ih15 stable intrahour features.
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+        - "realized_vol_14"
+        - "gk_vol_14"
+        - "atr_14_pct"
     baseline_stable_no_1h_cvd_rate:
       description: Stability control without the local CVD cumulative-rate feature that repeatedly reverses in bad folds.
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -208,6 +250,54 @@ features:
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
       append_exclude_patterns:
         - "large_trade_ratio"
+    baseline_stable_plus_15m_late_order_flow:
+      description: Stability control plus only late-hour 15m taker-flow shape features.
+      inherit: baseline_stable_allow_intrahour_stable
+      include_patterns:
+        - "ih15_coverage"
+        - "ih15_taker_imbalance_last"
+        - "ih15_taker_imbalance_late_minus_early"
+        - "ih15_taker_imbalance_slope"
+        - "ih15_buy_ratio_range"
+        - "ih15_volume_share_last"
+        - "ih15_aggressive_buy_burst"
+        - "ih15_aggressive_sell_burst"
+        - "ih15_aggressive_buy_burst_stable_rank"
+        - "ih15_aggressive_sell_burst_stable_rank"
+    baseline_stable_plus_15m_intrahour_pressure:
+      description: Stability control plus 15m intrahour CVD pressure and normalized pressure-shape features.
+      inherit: baseline_stable_allow_intrahour_stable
+      include_patterns:
+        - "ih15_cvd_pressure_norm"
+        - "ih15_cvd_pressure_late_minus_early_norm"
+        - "ih15_cvd_slope_norm"
+        - "ih15_cvd_pressure_norm_stable_rank"
+        - "ih15_cvd_pressure_norm_stable_zscore"
+        - "ih15_cvd_slope_norm_stable_rank"
+        - "ih15_cvd_slope_norm_stable_zscore"
+        - "ih15_taker_imbalance_late_minus_early"
+        - "ih15_taker_imbalance_slope"
+    baseline_stable_plus_15m_whale_burst:
+      description: Stability control plus 15m ticket-size burst and last-quarter aggressive flow concentration.
+      inherit: baseline_stable_allow_intrahour_stable
+      include_patterns:
+        - "ih15_volume_share_last"
+        - "ih15_trade_share_last"
+        - "ih15_vpt_last_vs_hour"
+        - "ih15_vpt_late_vs_early"
+        - "ih15_large_trade_concentration"
+        - "ih15_buy_volume_share_last"
+        - "ih15_vpt_last_vs_hour_stable_rank"
+        - "ih15_vpt_last_vs_hour_stable_zscore"
+        - "ih15_large_trade_concentration_stable_rank"
+        - "ih15_large_trade_concentration_stable_zscore"
+        - "ih15_aggressive_buy_burst"
+        - "ih15_aggressive_sell_burst"
+    baseline_stable_plus_15m_order_flow_full:
+      description: Stability control plus the full bounded 15m intrahour order-flow shape family.
+      inherit: baseline_stable_allow_intrahour_stable
+      include_patterns:
+        - "ih15_*"
     baseline_plus_4h_bounded_whale_no_4h_tier1_no_raw_pure_volatility_except_1h_atr:
       description: "Minimum volatility re-add: stability branch plus only local 1H ATR percent."
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1
@@ -1110,6 +1200,25 @@ features:
       - gk_vol_14_stable_rank
       - atr_14_pct_stable_rank
     modes: [signed, high, low]
+  intrahour_order_flow:
+    enabled: true
+    interval: 15m
+    prefix: ih15
+    expected_bars_per_hour: 4
+    min_bars_per_hour: 4
+    stable_window: 100
+    stable_clip_abs: 5.0
+    stable_tanh_scale: 2.0
+    stable_transforms: [zscore, rank]
+    stable_columns:
+      - ih15_cvd_pressure_norm
+      - ih15_cvd_pressure_late_minus_early_norm
+      - ih15_cvd_slope_norm
+      - ih15_vpt_last_vs_hour
+      - ih15_vpt_late_vs_early
+      - ih15_large_trade_concentration
+      - ih15_aggressive_buy_burst
+      - ih15_aggressive_sell_burst
   structure_stability:
     enabled: true
     stable_window: 100
@@ -1231,12 +1340,10 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_stable_no_1h_cvd_rate
-    - baseline_stable_no_slow_4h_bounded_flow
-    - baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate
-    - baseline_stable_no_4h_whale_zscores
-    - baseline_stable_no_4h_volume_context
-    - baseline_stable_no_1h_large_trade_ratio
+    - baseline_stable_plus_15m_late_order_flow
+    - baseline_stable_plus_15m_intrahour_pressure
+    - baseline_stable_plus_15m_whale_burst
+    - baseline_stable_plus_15m_order_flow_full
   triage_fold_ids: [0, 2, 4, 8, 13, 16, 17, 20, 21, 22, 23, 29, 32, 35, 36, 38, 39, 40, 41]
   full_cv_profiles: auto
   always_full_profiles:
@@ -1312,6 +1419,18 @@ experiments:
         reason: "Bundle 20260510_172332: broad 4H GK-volatility flow interactions were essentially random in triage and damaged lift."
       baseline_stable_plus_4h_flow_atr_interactions:
         reason: "Bundle 20260510_172332: broad 4H ATR flow interactions showed weak mean IC and failed top-decile/positive-lift gates."
+      baseline_stable_no_1h_cvd_rate:
+        reason: "Bundle 20260513_070515: simple 1H CVD-rate ablation reduced triage mean IC from 0.0610 to 0.0336 and damaged top-decile lift."
+      baseline_stable_no_slow_4h_bounded_flow:
+        reason: "Bundle 20260513_070515: removing slow 4H bounded-flow means reduced triage mean IC to 0.0290; slow 4H context remains useful."
+      baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate:
+        reason: "Bundle 20260513_070515: combined ablation reduced triage mean IC to 0.0301 and increased instability."
+      baseline_stable_no_4h_whale_zscores:
+        reason: "Bundle 20260513_070515: best simple ablation but still far below control triage IC and failed positive-fold gates."
+      baseline_stable_no_4h_volume_context:
+        reason: "Bundle 20260513_070515: removing aligned 4H volume context lowered triage IC and top-decile lift."
+      baseline_stable_no_1h_large_trade_ratio:
+        reason: "Bundle 20260513_070515: removing local large-trade ratio lowered triage IC and top-decile lift."
   seed_audit:
     enabled: true
     profiles:

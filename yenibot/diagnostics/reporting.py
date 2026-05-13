@@ -1001,6 +1001,8 @@ def feature_group_importance_summary(importance: pd.DataFrame) -> pd.DataFrame:
 def classify_feature_column(feature: str) -> tuple[str, str]:
     timeframe = "4h" if feature.startswith("4h_") else "1h"
     name = feature[3:] if timeframe == "4h" else feature
+    if name.startswith("ih15_"):
+        return "intrahour", "order_flow_intrahour"
     if "_x_" in name and any(token in name for token in ("rv14_rank", "gk14_rank", "atr14_rank")):
         return timeframe, "flow_volatility_interaction"
     if "_stable_" in name:

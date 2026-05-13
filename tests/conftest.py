@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 @pytest.fixture
 def synthetic_klines(periods: int = 160, interval: str = "1h", start: str = "2022-01-01") -> pd.DataFrame:
     def factory(periods: int = 160, interval: str = "1h", start: str = "2022-01-01") -> pd.DataFrame:
-        freq = {"1h": "1h", "4h": "4h"}[interval]
+        freq = {"15m": "15min", "1h": "1h", "4h": "4h"}[interval]
         ts = pd.date_range(start, periods=periods, freq=freq, tz="UTC")
         idx = np.arange(periods, dtype=float)
         close = 100.0 + 0.04 * idx + np.sin(idx / 5.0)
@@ -34,7 +34,7 @@ def synthetic_klines(periods: int = 160, interval: str = "1h", start: str = "202
                 "close": close,
                 "volume": volume,
                 "close_time": ts
-                + pd.to_timedelta(1 if interval == "1h" else 4, unit="h")
+                + pd.to_timedelta({"15m": 15, "1h": 60, "4h": 240}[interval], unit="m")
                 - pd.to_timedelta(1, unit="ms"),
                 "quote_volume": quote_volume,
                 "num_trades": (100 + (idx % 20)).astype(int),
