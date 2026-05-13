@@ -47,6 +47,20 @@ def test_full_kline_validation_can_drop_zero_volume_rows(synthetic_klines) -> No
     assert pd.Timestamp("2022-01-01 02:00", tz="UTC") not in set(validated["timestamp"])
 
 
+def test_intrabar_validation_can_use_wider_gap_tolerance(synthetic_klines) -> None:
+    frame = synthetic_klines(12, "15m")
+    frame = frame.drop(index=[3, 4]).reset_index(drop=True)
+
+    with pytest.raises(ValueError, match="Kline gap exceeds allowed threshold"):
+        validate_full_kline_frame(frame, "15m", max_gap_multiplier=2)
+
+    validated = validate_full_kline_frame(frame, "15m", max_gap_multiplier=8)
+
+    assert len(validated) == 10
+    assert validated.attrs["gap_count_gt_expected"] == 1
+    assert validated.attrs["max_gap"] == pd.Timedelta(minutes=45)
+
+
 def test_download_full_klines_falls_back_to_vision_on_451() -> None:
     session = _FakeSession()
     df = download_full_klines(
