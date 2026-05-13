@@ -18,6 +18,7 @@ import pandas as pd
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
     calibration_table,
+    calibrate_test_probabilities_from_val,
     bad_fold_regime_diagnostics,
     experiment_ledger_diagnostics,
     feature_group_diagnostics,
@@ -355,6 +356,21 @@ def summarize_profile_predictions(
     threshold_metrics = threshold_diagnostics(predictions)
     threshold_summary = threshold_summary_diagnostics(threshold_metrics)
     report = attach_threshold_summary_to_phase1_report(report, threshold_summary, profile_cfg)
+    calibrated_report = None
+    calibrated_calibration = pd.DataFrame()
+    calibrated_predictions = pd.DataFrame()
+    calibration_cfg = _cfg(profile_cfg, ["validation", "calibration"], {}) or {}
+    if bool(calibration_cfg.get("enabled", False)):
+        try:
+            calibrated_predictions, calibrated_report, calibrated_calibration = calibrate_test_probabilities_from_val(
+                predictions,
+                profile_cfg,
+                method=str(calibration_cfg.get("method", "isotonic")),
+            )
+        except ValueError:
+            calibrated_report = None
+            calibrated_calibration = pd.DataFrame()
+            calibrated_predictions = pd.DataFrame()
     score_bins = int(_cfg(profile_cfg, ["validation", "score_lift_bins"], _cfg(profile_cfg, ["validation", "calibration_bins"], 10)))
     score_bands = _cfg(profile_cfg, ["validation", "score_bands"], None)
     score_lift = score_lift_diagnostics(test_predictions, bins=score_bins)
@@ -392,6 +408,9 @@ def summarize_profile_predictions(
     return {
         "report": report,
         "calibration": calibration,
+        "calibrated_report": calibrated_report,
+        "calibrated_calibration": calibrated_calibration,
+        "calibrated_predictions": calibrated_predictions,
         "fold_metrics": fold_metrics,
         "regime_metrics": regime_metrics,
         "regime_by_fold": regime_by_fold,
@@ -644,6 +663,9 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "positive_ic_fraction",
         "mean_long_f1",
         "test_f1_at_selected_threshold",
+        "test_precision_at_selected_threshold",
+        "test_recall_at_selected_threshold",
+        "test_pred_long_rate_at_selected_threshold",
         "selected_threshold_mean",
         "mean_prauc",
         "calibration_separation",
@@ -1363,6 +1385,7 @@ def _profile_blend_review_frame(
     leader_gates = _cfg(config, ["experiments", "profile_blend_leader_gates"], {}) or {}
     tail_lift_gates = leader_gates.get("tail_lift", gates) or gates
     stability_gates = leader_gates.get("stability", {}) or {}
+    balanced_gates = leader_gates.get("balanced")
 
     rows = []
     for _, item in reviewed.iterrows():
@@ -1395,10 +1418,13 @@ def _profile_blend_review_frame(
         row["review_reason"] = ";".join(reasons)
         tail_lift_reasons = _profile_blend_gate_reasons(row, tail_lift_gates)
         stability_reasons = _profile_blend_gate_reasons(row, stability_gates)
+        balanced_reasons = _profile_blend_gate_reasons(row, balanced_gates or {})
         row["tail_lift_eligible"] = not tail_lift_reasons
         row["tail_lift_reason"] = ";".join(tail_lift_reasons)
         row["stability_eligible"] = not stability_reasons
         row["stability_reason"] = ";".join(stability_reasons)
+        row["balanced_eligible"] = bool(balanced_gates) and not balanced_reasons
+        row["balanced_reason"] = ";".join(balanced_reasons if balanced_gates else ["not_configured"])
         rows.append(row)
 
     if not rows:
@@ -1453,6 +1479,16 @@ def _select_profile_blend_leader(profile_blend: pd.DataFrame, role: str) -> dict
         eligible_column = "stability_eligible"
         sort_columns = ["mean_rank_ic", "worst_5_rank_ic_mean", "std_rank_ic", "positive_ic_fraction"]
         ascending = [False, False, True, False]
+    elif role == "balanced":
+        eligible_column = "balanced_eligible"
+        sort_columns = [
+            "mean_rank_ic",
+            "std_rank_ic",
+            "positive_ic_fraction",
+            "top_10_lift_global",
+            "worst_5_rank_ic_mean",
+        ]
+        ascending = [False, True, False, False, False]
     else:
         raise ValueError(f"Unknown profile blend leader role: {role}")
     if eligible_column not in profile_blend.columns:
@@ -1466,6 +1502,7 @@ def _select_profile_blend_leader(profile_blend: pd.DataFrame, role: str) -> dict
 
 def _profile_blend_leaders(profile_blend: pd.DataFrame) -> dict[str, Any]:
     leaders = {
+        "balanced_leader": _select_profile_blend_leader(profile_blend, "balanced"),
         "tail_lift_leader": _select_profile_blend_leader(profile_blend, "tail_lift"),
         "stability_leader": _select_profile_blend_leader(profile_blend, "stability"),
     }
@@ -1476,6 +1513,7 @@ def _mark_profile_blend_leaders(profile_blend: pd.DataFrame) -> pd.DataFrame:
     if profile_blend.empty:
         return profile_blend
     marked = profile_blend.copy()
+    marked["balanced_leader"] = False
     marked["tail_lift_leader"] = False
     marked["stability_leader"] = False
     leaders = _profile_blend_leaders(marked)
@@ -1487,6 +1525,8 @@ def _mark_profile_blend_leaders(profile_blend: pd.DataFrame) -> pd.DataFrame:
     roles = []
     for _, row in marked.iterrows():
         item_roles = []
+        if bool(row.get("balanced_leader", False)):
+            item_roles.append("balanced")
         if bool(row.get("tail_lift_leader", False)):
             item_roles.append("tail_lift")
         if bool(row.get("stability_leader", False)):
@@ -1498,7 +1538,7 @@ def _mark_profile_blend_leaders(profile_blend: pd.DataFrame) -> pd.DataFrame:
 
 def _best_profile_blend(profile_blend: pd.DataFrame) -> dict[str, Any]:
     leaders = _profile_blend_leaders(profile_blend)
-    return leaders.get("tail_lift_leader") or leaders.get("stability_leader") or {}
+    return leaders.get("balanced_leader") or leaders.get("tail_lift_leader") or leaders.get("stability_leader") or {}
 
 
 def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
@@ -1522,6 +1562,8 @@ def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
         "test_f1_at_selected_threshold",
         "reviewable",
         "review_reason",
+        "balanced_eligible",
+        "balanced_reason",
         "tail_lift_eligible",
         "tail_lift_reason",
         "stability_eligible",
@@ -1825,6 +1867,9 @@ def write_experiment_diagnostics(
             report=diagnostics["report"],
             predictions=_test_predictions(predictions),
             calibration=diagnostics["calibration"],
+            calibrated_report=diagnostics.get("calibrated_report"),
+            calibrated_calibration=diagnostics.get("calibrated_calibration"),
+            calibrated_predictions=diagnostics.get("calibrated_predictions"),
             fold_metrics=diagnostics["fold_metrics"],
             regime_metrics=diagnostics["regime_metrics"],
             regime_by_fold=diagnostics["regime_by_fold"],

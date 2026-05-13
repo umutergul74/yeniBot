@@ -10,6 +10,7 @@ import pytest
 from yenibot.config import load_config
 from yenibot.experiments import (
     _auto_full_profiles,
+    _best_profile_blend,
     _passes_full,
     _passes_triage,
     _profile_blend_leaders,
@@ -125,12 +126,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_plus_1h_flow_rv_interactions",
-        "baseline_stable_plus_1h_flow_gk_interactions",
-        "baseline_stable_plus_1h_flow_atr_interactions",
-        "baseline_stable_plus_4h_flow_rv_interactions",
-        "baseline_stable_plus_4h_flow_gk_interactions",
-        "baseline_stable_plus_4h_flow_atr_interactions",
+        "baseline_stable_no_1h_cvd_rate",
+        "baseline_stable_no_slow_4h_bounded_flow",
+        "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate",
+        "baseline_stable_no_4h_whale_zscores",
+        "baseline_stable_no_4h_volume_context",
+        "baseline_stable_no_1h_large_trade_ratio",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
@@ -284,6 +285,38 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "4h_taker_imbalance_mean_24" in base_no_vol_no_1h_vol_columns
 
+    stable_no_cvd = profile_config(config, "baseline_stable_no_1h_cvd_rate")
+    stable_no_cvd_columns = filter_feature_columns(columns, stable_no_cvd)
+    assert "cvd_cumulative_rate_norm" not in stable_no_cvd_columns
+    assert "4h_taker_imbalance_mean_24" in stable_no_cvd_columns
+
+    stable_no_slow_flow = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow")
+    stable_no_slow_flow_columns = filter_feature_columns(columns, stable_no_slow_flow)
+    assert "4h_taker_imbalance_mean_12" not in stable_no_slow_flow_columns
+    assert "4h_taker_imbalance_mean_24" not in stable_no_slow_flow_columns
+    assert "cvd_cumulative_rate_norm" in stable_no_slow_flow_columns
+
+    stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
+    stable_combined_columns = filter_feature_columns(columns, stable_combined)
+    assert "cvd_cumulative_rate_norm" not in stable_combined_columns
+    assert "4h_taker_imbalance_mean_24" not in stable_combined_columns
+
+    stable_no_whale_zscores = profile_config(config, "baseline_stable_no_4h_whale_zscores")
+    stable_no_whale_zscore_columns = filter_feature_columns(columns, stable_no_whale_zscores)
+    assert "4h_vpt_zscore" not in stable_no_whale_zscore_columns
+    assert "4h_vol_per_trade_log_zscore" not in stable_no_whale_zscore_columns
+    assert "4h_large_trade_ratio" in stable_no_whale_zscore_columns
+
+    stable_no_4h_volume = profile_config(config, "baseline_stable_no_4h_volume_context")
+    stable_no_4h_volume_columns = filter_feature_columns(columns, stable_no_4h_volume)
+    assert "4h_volume_log_zscore" not in stable_no_4h_volume_columns
+    assert "volume_log_zscore" in stable_no_4h_volume_columns
+
+    stable_no_1h_ltr = profile_config(config, "baseline_stable_no_1h_large_trade_ratio")
+    stable_no_1h_ltr_columns = filter_feature_columns(columns, stable_no_1h_ltr)
+    assert "large_trade_ratio" not in stable_no_1h_ltr_columns
+    assert "4h_large_trade_ratio" in stable_no_1h_ltr_columns
+
     pure_volatility_columns = {
         "realized_vol_14",
         "gk_vol_14",
@@ -346,6 +379,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         assert excluded_interaction not in profile_columns
         assert excluded_raw_volatility not in profile_columns
         assert "4h_taker_imbalance_mean_24" in profile_columns
+        assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
 
     base_no_raw_vol_4h_stable_overlay = profile_config(
         config,
@@ -793,6 +827,80 @@ def test_profile_blend_review_separates_tail_lift_and_stability_leaders() -> Non
     assert bool(reviewed.loc[reviewed["profile"] == "stable", "stability_eligible"].item()) is True
 
 
+def test_profile_blend_review_selects_balanced_leader_before_tail_lift() -> None:
+    config = {
+        "experiments": {
+            "profile_blend_review_gates": {
+                "min_mean_rank_ic_delta": 0.005,
+                "max_std_rank_ic_delta": 0.02,
+                "min_positive_ic_fraction": 0.70,
+                "min_top_10_lift_global_delta": 0.02,
+            },
+            "profile_blend_leader_gates": {
+                "balanced": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "max_std_rank_ic_delta": 0.005,
+                    "min_positive_ic_fraction": 0.75,
+                    "min_top_10_lift_global_delta": 0.015,
+                    "min_worst_5_rank_ic_delta": 0.0,
+                },
+                "tail_lift": {
+                    "min_mean_rank_ic_delta": 0.005,
+                    "max_std_rank_ic_delta": 0.02,
+                    "min_positive_ic_fraction": 0.70,
+                    "min_top_10_lift_global_delta": 0.02,
+                },
+            },
+        }
+    }
+    comparison = pd.DataFrame(
+        [
+            {
+                "profile": "control",
+                "fold_scope": "full",
+                "mean_rank_ic": 0.0596,
+                "std_rank_ic": 0.0738,
+                "positive_ic_fraction": 0.857,
+                "worst_5_rank_ic_mean": -0.068,
+                "top_10_lift_global": 1.126,
+            }
+        ]
+    )
+    profile_blend = pd.DataFrame(
+        [
+            {
+                "profile": "tail",
+                "mean_rank_ic": 0.0650,
+                "std_rank_ic": 0.0926,
+                "positive_ic_fraction": 0.714,
+                "worst_5_rank_ic_mean": -0.077,
+                "top_10_lift_global": 1.172,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
+            },
+            {
+                "profile": "balanced",
+                "mean_rank_ic": 0.0664,
+                "std_rank_ic": 0.0751,
+                "positive_ic_fraction": 0.786,
+                "worst_5_rank_ic_mean": -0.054,
+                "top_10_lift_global": 1.148,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
+            },
+        ]
+    )
+
+    reviewed = _profile_blend_review_frame(profile_blend, comparison, config, "control")
+    leaders = _profile_blend_leaders(reviewed)
+
+    assert leaders["balanced_leader"]["profile"] == "balanced"
+    assert leaders["tail_lift_leader"]["profile"] == "tail"
+    assert _best_profile_blend(reviewed)["profile"] == "balanced"
+    assert bool(reviewed.loc[reviewed["profile"] == "balanced", "balanced_leader"].item()) is True
+    assert bool(reviewed.loc[reviewed["profile"] == "tail", "balanced_eligible"].item()) is False
+
+
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["active_profile"] = "base"
@@ -872,6 +980,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "reviewable",
         "review_reason",
         "mean_rank_ic_delta_vs_control",
+        "balanced_eligible",
         "tail_lift_eligible",
         "stability_eligible",
         "leader_roles",

@@ -888,9 +888,14 @@ def attach_threshold_summary_to_phase1_report(
     oracle_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
     f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
     min_long_f1 = float(_config_get(config or {}, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _config_get(config or {}, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(_config_get(threshold_cfg, ["max_pred_long_rate"], 0.70))
+    min_precision = float(_config_get(threshold_cfg, ["min_precision"], 0.30))
 
     threshold_checks = {
         "long_f1_selected_threshold": bool(pd.notna(selected_f1) and selected_f1 > min_long_f1),
+        "selected_precision": bool(pd.notna(selected_precision) and selected_precision >= min_precision),
+        "selected_pred_long_rate": bool(pd.notna(selected_pred_rate) and selected_pred_rate <= max_pred_long_rate),
     }
     core_checks = dict(updated.get("checks", {}) or {})
     threshold_phase_checks = {
@@ -996,6 +1001,8 @@ def feature_group_importance_summary(importance: pd.DataFrame) -> pd.DataFrame:
 def classify_feature_column(feature: str) -> tuple[str, str]:
     timeframe = "4h" if feature.startswith("4h_") else "1h"
     name = feature[3:] if timeframe == "4h" else feature
+    if "_x_" in name and any(token in name for token in ("rv14_rank", "gk14_rank", "atr14_rank")):
+        return timeframe, "flow_volatility_interaction"
     if "_stable_" in name:
         base_name = name.split("_stable_", 1)[0]
         if any(token in base_name for token in ("log_return", "realized_vol", "gk_vol", "atr", "adx", "vwap", "denoised", "volume_log_zscore")):
