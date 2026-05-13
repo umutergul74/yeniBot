@@ -3,6 +3,7 @@ from __future__ import annotations
 import zipfile
 from io import BytesIO
 
+import pyarrow.parquet as pq
 import pandas as pd
 import pytest
 import requests
@@ -58,7 +59,19 @@ def test_intrabar_validation_can_use_wider_gap_tolerance(synthetic_klines) -> No
 
     assert len(validated) == 10
     assert validated.attrs["gap_count_gt_expected"] == 1
-    assert validated.attrs["max_gap"] == pd.Timedelta(minutes=45)
+    assert validated.attrs["max_gap"] == "0 days 00:45:00"
+    assert validated.attrs["max_gap_seconds"] == 2700.0
+
+
+def test_validation_attrs_are_parquet_serializable(synthetic_klines, tmp_path) -> None:
+    frame = synthetic_klines(12, "15m").drop(index=[3, 4]).reset_index(drop=True)
+    validated = validate_full_kline_frame(frame, "15m", max_gap_multiplier=8)
+    path = tmp_path / "klines.parquet"
+
+    validated.to_parquet(path, index=False)
+    loaded = pq.read_table(path).to_pandas()
+
+    assert len(loaded) == len(validated)
 
 
 def test_download_full_klines_falls_back_to_vision_on_451() -> None:

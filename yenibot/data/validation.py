@@ -53,8 +53,10 @@ def validate_full_kline_frame(
             f"({bad_gaps.iloc[0]})"
         )
 
+    max_gap = gaps.max() if not gaps.empty else pd.Timedelta(0)
     df.attrs["gap_count_gt_expected"] = int((gaps > expected).sum())
-    df.attrs["max_gap"] = gaps.max() if not gaps.empty else pd.Timedelta(0)
+    df.attrs["max_gap"] = str(max_gap)
+    df.attrs["max_gap_seconds"] = float(max_gap.total_seconds())
     if require_taker_nonzero and df["taker_buy_base_vol"].abs().sum() == 0:
         raise ValueError("taker_buy_base_vol is all zero; this is not usable full-kline data")
     if (df["taker_buy_base_vol"] < 0).any() or (df["taker_buy_base_vol"] > df["volume"]).any():
