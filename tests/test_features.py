@@ -230,6 +230,9 @@ def test_intrahour_order_flow_features_are_causal_when_future_rows_appended(synt
         "stable_columns": [
             "ih15_cvd_pressure_norm",
             "ih15_cvd_slope_norm",
+            "ih15_flow_price_alignment",
+            "ih15_absorption_imbalance",
+            "ih15_late_flow_reversal",
             "ih15_vpt_last_vs_hour",
             "ih15_aggressive_buy_burst",
         ],
@@ -245,6 +248,9 @@ def test_intrahour_order_flow_features_are_causal_when_future_rows_appended(synt
     assert {
         "ih15_taker_imbalance_late_minus_early",
         "ih15_cvd_pressure_norm",
+        "ih15_flow_price_alignment",
+        "ih15_buy_absorption",
+        "ih15_absorption_imbalance_stable_rank",
         "ih15_cvd_pressure_norm_stable_rank",
         "ih15_aggressive_buy_burst_stable_zscore",
     }.issubset(set(intrahour.feature_columns))
@@ -257,6 +263,12 @@ def test_intrahour_order_flow_features_are_causal_when_future_rows_appended(synt
         "ih15_taker_imbalance_late_minus_early",
         "ih15_cvd_pressure_norm",
         "ih15_cvd_slope_norm",
+        "ih15_price_move_norm",
+        "ih15_flow_price_alignment",
+        "ih15_buy_absorption",
+        "ih15_sell_absorption",
+        "ih15_absorption_imbalance_stable_rank",
+        "ih15_late_flow_reversal",
         "ih15_volume_share_last",
         "ih15_vpt_last_vs_hour",
         "ih15_aggressive_buy_burst",
@@ -268,3 +280,31 @@ def test_intrahour_order_flow_features_are_causal_when_future_rows_appended(synt
     base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
     extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
     pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
+
+
+def test_intrahour_missing_hours_are_neutral_not_forward_filled(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["intrahour_order_flow"] = {
+        "enabled": True,
+        "interval": "15m",
+        "prefix": "ih15",
+        "expected_bars_per_hour": 4,
+        "min_bars_per_hour": 4,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_transforms": ["zscore", "rank"],
+        "stable_columns": ["ih15_absorption_imbalance", "ih15_flow_price_alignment"],
+    }
+    primary = synthetic_klines(48, "1h")
+    htf = synthetic_klines(18, "4h")
+    intrabar = synthetic_klines(48 * 4, "15m")
+    missing_hour = pd.Timestamp("2022-01-02 04:00", tz="UTC")
+    intrabar = intrabar[intrabar["timestamp"].dt.floor("h") != missing_hour].reset_index(drop=True)
+
+    features = build_feature_matrix(primary, htf, config, intrabar_frame=intrabar).frame
+    row = features.loc[features["timestamp"] == missing_hour].iloc[0]
+
+    assert row["ih15_missing"] == 1.0
+    assert row["ih15_coverage"] == 0.0
+    assert row["ih15_taker_imbalance_mean"] == 0.0
+    assert row["ih15_absorption_imbalance"] == 0.0

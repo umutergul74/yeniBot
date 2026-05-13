@@ -285,6 +285,10 @@ def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: 
         buy_ratio = part["taker_buy_ratio"].astype(float)
         cvd = part["true_cvd_delta"].astype(float)
         vpt = part["vol_per_trade"].astype(float)
+        close = part["close"].astype(float)
+        open_ = part["open"].astype(float)
+        high = part["high"].astype(float)
+        low = part["low"].astype(float)
         total_volume = float(volume.sum())
         total_trades = float(trades.sum())
         total_buy = float(taker_buy.sum())
@@ -301,6 +305,85 @@ def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: 
         last_trades = float(trades.iloc[-1])
         last_buy = float(taker_buy.iloc[-1])
         last_imbalance = float(imbalance.iloc[-1])
+        hour_open = float(open_.iloc[0])
+        hour_close = float(close.iloc[-1])
+        hour_high = float(high.max())
+        hour_low = float(low.min())
+        hour_range = max(hour_high - hour_low, 0.0)
+        hour_range_pct = hour_range / hour_open if hour_open > 0 else np.nan
+        hour_return = float(np.log(hour_close / hour_open)) if hour_open > 0 and hour_close > 0 else np.nan
+        price_move_norm = (
+            float(np.clip(hour_return / (hour_range_pct + 1e-12), -1.0, 1.0))
+            if np.isfinite(hour_range_pct) and hour_range_pct > 0
+            else np.nan
+        )
+        cvd_pressure_norm = float(cvd.sum() / total_volume) if total_volume > 0 else np.nan
+        early_return = (
+            float(np.log(float(first_half["close"].iloc[-1]) / float(first_half["open"].iloc[0])))
+            if float(first_half["open"].iloc[0]) > 0 and float(first_half["close"].iloc[-1]) > 0
+            else np.nan
+        )
+        late_return = (
+            float(np.log(float(second_half["close"].iloc[-1]) / float(second_half["open"].iloc[0])))
+            if float(second_half["open"].iloc[0]) > 0 and float(second_half["close"].iloc[-1]) > 0
+            else np.nan
+        )
+        early_range = max(float(first_half["high"].max()) - float(first_half["low"].min()), 0.0)
+        late_range = max(float(second_half["high"].max()) - float(second_half["low"].min()), 0.0)
+        early_range_pct = early_range / float(first_half["open"].iloc[0]) if float(first_half["open"].iloc[0]) > 0 else np.nan
+        late_range_pct = late_range / float(second_half["open"].iloc[0]) if float(second_half["open"].iloc[0]) > 0 else np.nan
+        early_price_move_norm = (
+            float(np.clip(early_return / (early_range_pct + 1e-12), -1.0, 1.0))
+            if np.isfinite(early_range_pct) and early_range_pct > 0
+            else np.nan
+        )
+        late_price_move_norm = (
+            float(np.clip(late_return / (late_range_pct + 1e-12), -1.0, 1.0))
+            if np.isfinite(late_range_pct) and late_range_pct > 0
+            else np.nan
+        )
+        early_cvd_norm = float(early_cvd / total_volume) if total_volume > 0 else np.nan
+        late_cvd_norm = float(late_cvd / total_volume) if total_volume > 0 else np.nan
+        flow_alignment = (
+            float(np.sign(cvd_pressure_norm) * price_move_norm)
+            if np.isfinite(cvd_pressure_norm) and np.isfinite(price_move_norm)
+            else np.nan
+        )
+        buy_absorption = (
+            float(max(cvd_pressure_norm, 0.0) * max(-price_move_norm, 0.0))
+            if np.isfinite(cvd_pressure_norm) and np.isfinite(price_move_norm)
+            else np.nan
+        )
+        sell_absorption = (
+            float(max(-cvd_pressure_norm, 0.0) * max(price_move_norm, 0.0))
+            if np.isfinite(cvd_pressure_norm) and np.isfinite(price_move_norm)
+            else np.nan
+        )
+        late_buy_absorption = (
+            float(max(late_cvd_norm, 0.0) * max(-late_price_move_norm, 0.0))
+            if np.isfinite(late_cvd_norm) and np.isfinite(late_price_move_norm)
+            else np.nan
+        )
+        late_sell_absorption = (
+            float(max(-late_cvd_norm, 0.0) * max(late_price_move_norm, 0.0))
+            if np.isfinite(late_cvd_norm) and np.isfinite(late_price_move_norm)
+            else np.nan
+        )
+        late_flow_reversal = (
+            float(max(-np.sign(early_cvd_norm) * late_cvd_norm, 0.0))
+            if np.isfinite(early_cvd_norm) and np.isfinite(late_cvd_norm) and early_cvd_norm != 0
+            else 0.0
+        )
+        late_price_reversal = (
+            float(max(-np.sign(early_price_move_norm) * late_price_move_norm, 0.0))
+            if np.isfinite(early_price_move_norm) and np.isfinite(late_price_move_norm) and early_price_move_norm != 0
+            else 0.0
+        )
+        late_flow_price_alignment = (
+            float(np.sign(late_cvd_norm) * late_price_move_norm)
+            if np.isfinite(late_cvd_norm) and np.isfinite(late_price_move_norm)
+            else np.nan
+        )
 
         row = {
             "timestamp": hour,
@@ -311,9 +394,20 @@ def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: 
             f"{prefix}_taker_imbalance_late_minus_early": float(second_half["taker_imbalance"].mean() - first_half["taker_imbalance"].mean()),
             f"{prefix}_taker_imbalance_slope": _array_slope(imbalance.to_numpy()),
             f"{prefix}_buy_ratio_range": float(buy_ratio.max() - buy_ratio.min()),
-            f"{prefix}_cvd_pressure_norm": float(cvd.sum() / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_cvd_pressure_norm": cvd_pressure_norm,
             f"{prefix}_cvd_pressure_late_minus_early_norm": float((late_cvd - early_cvd) / total_volume) if total_volume > 0 else np.nan,
             f"{prefix}_cvd_slope_norm": float(_array_slope(cvd.cumsum().to_numpy()) / total_volume) if total_volume > 0 else np.nan,
+            f"{prefix}_price_move_norm": price_move_norm,
+            f"{prefix}_flow_price_alignment": flow_alignment,
+            f"{prefix}_buy_absorption": buy_absorption,
+            f"{prefix}_sell_absorption": sell_absorption,
+            f"{prefix}_absorption_imbalance": buy_absorption - sell_absorption if np.isfinite(buy_absorption) and np.isfinite(sell_absorption) else np.nan,
+            f"{prefix}_late_buy_absorption": late_buy_absorption,
+            f"{prefix}_late_sell_absorption": late_sell_absorption,
+            f"{prefix}_late_absorption_imbalance": late_buy_absorption - late_sell_absorption if np.isfinite(late_buy_absorption) and np.isfinite(late_sell_absorption) else np.nan,
+            f"{prefix}_late_flow_reversal": late_flow_reversal,
+            f"{prefix}_late_price_reversal": late_price_reversal,
+            f"{prefix}_late_flow_price_alignment": late_flow_price_alignment,
             f"{prefix}_volume_share_last": float(last_volume / total_volume) if total_volume > 0 else np.nan,
             f"{prefix}_volume_share_late": float(late_volume / total_volume) if total_volume > 0 else np.nan,
             f"{prefix}_trade_share_last": float(last_trades / total_trades) if total_trades > 0 else np.nan,
@@ -786,11 +880,24 @@ def build_feature_matrix(
         if intrahour_result.feature_columns:
             intrahour_features = intrahour_result.frame[["timestamp", *intrahour_result.feature_columns]].copy()
             merged = merged.merge(intrahour_features, on="timestamp", how="left")
+            missing_col = f"{_config_get(config, ['features', 'intrahour_order_flow', 'prefix'], 'ih15')}_missing"
+            missing = merged[intrahour_result.feature_columns].isna().all(axis=1)
+            merged[missing_col] = missing.astype(float)
+            intrahour_fill_columns = [*intrahour_result.feature_columns, missing_col]
+        else:
+            intrahour_fill_columns = []
+    else:
+        intrahour_fill_columns = []
 
     warmup_rows = int(_config_get(config, ["features", "warmup_rows"], 300))
     if warmup_rows > 0:
         merged = merged.iloc[warmup_rows:].copy()
-    merged = merged.ffill()
+    if intrahour_fill_columns:
+        passthrough_columns = [column for column in merged.columns if column not in intrahour_fill_columns]
+        merged[passthrough_columns] = merged[passthrough_columns].ffill()
+        merged[intrahour_fill_columns] = merged[intrahour_fill_columns].fillna(0.0)
+    else:
+        merged = merged.ffill()
     feature_columns = select_feature_columns(merged)
     model_feature_columns = filter_feature_columns(feature_columns, config)
     availability_columns = feature_availability_columns(feature_columns, config)

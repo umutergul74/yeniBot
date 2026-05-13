@@ -207,6 +207,17 @@ def _profile_requires_intrahour_features(config: dict[str, Any], profile: str) -
     return any("ih15" in str(pattern) for pattern in resolved.get("include_patterns", []) or [])
 
 
+def _missing_intrahour_include_patterns(config: dict[str, Any], profile: str, feature_columns: tuple[str, ...]) -> list[str]:
+    profile_cfg = profile_config(config, profile)
+    resolved = resolve_feature_profile(profile_cfg)
+    patterns = [str(pattern) for pattern in resolved.get("include_patterns", []) or [] if "ih15_" in str(pattern)]
+    return [
+        pattern
+        for pattern in patterns
+        if not any(fnmatch(column, pattern) for column in feature_columns)
+    ]
+
+
 def _preflight_experiment_profiles(
     settings: dict[str, Any],
     frame: pd.DataFrame,
@@ -225,12 +236,18 @@ def _preflight_experiment_profiles(
         cfg = profile_config(config, profile)
         feature_columns = tuple(filter_feature_columns(base_columns, cfg))
         has_intrahour = any(column.startswith("ih15_") for column in feature_columns)
-        if profile != control and _profile_requires_intrahour_features(config, profile) and not has_intrahour:
+        missing_intrahour_patterns = _missing_intrahour_include_patterns(config, profile, feature_columns)
+        if profile != control and _profile_requires_intrahour_features(config, profile) and (
+            not has_intrahour or missing_intrahour_patterns
+        ):
+            reason = "missing_intrahour_features_rerun_01_02_03"
+            if missing_intrahour_patterns:
+                reason = f"{reason}:{','.join(missing_intrahour_patterns[:6])}"
             skipped_profiles.append(
                 {
                     "profile": profile,
                     "role": "candidate_profile",
-                    "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+                    "skip_reason": reason,
                 }
             )
             continue

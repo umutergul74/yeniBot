@@ -128,8 +128,47 @@ def test_experiment_preflight_skips_intrahour_candidates_until_features_exist() 
         {
             "profile": "intrahour",
             "role": "candidate_profile",
-            "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+            "skip_reason": "missing_intrahour_features_rerun_01_02_03:ih15_*",
         },
+    ]
+
+
+def test_experiment_preflight_skips_partial_intrahour_feature_sets() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["base_feature"], "exclude_patterns": []},
+                "intrahour": {
+                    "inherit": "control",
+                    "include_patterns": ["ih15_coverage", "ih15_absorption_imbalance_stable_rank"],
+                    "exclude_patterns": [],
+                },
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["intrahour"],
+            "always_full_profiles": ["control"],
+        },
+    }
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+            "base_feature": [1.0, 2.0, 3.0, 4.0],
+            "ih15_coverage": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+
+    settings = _preflight_experiment_profiles(experiment_settings(config), frame, config)
+
+    assert settings["profiles"] == ["control"]
+    assert settings["skipped_profiles"] == [
+        {
+            "profile": "intrahour",
+            "role": "candidate_profile",
+            "skip_reason": "missing_intrahour_features_rerun_01_02_03:ih15_absorption_imbalance_stable_rank",
+        }
     ]
 
 
@@ -165,10 +204,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_plus_15m_late_order_flow",
-        "baseline_stable_plus_15m_intrahour_pressure",
-        "baseline_stable_plus_15m_whale_burst",
-        "baseline_stable_plus_15m_order_flow_full",
+        "baseline_stable_plus_15m_absorption_rank",
+        "baseline_stable_plus_15m_flow_efficiency_rank",
+        "baseline_stable_plus_15m_late_reversal_tanh",
+        "baseline_stable_plus_15m_absorption_efficiency_combo",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
@@ -279,9 +318,37 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "ih15_buy_volume_share_last",
         "ih15_aggressive_buy_burst",
         "ih15_aggressive_sell_burst",
+        "ih15_missing",
+        "ih15_price_move_norm",
+        "ih15_flow_price_alignment",
+        "ih15_buy_absorption",
+        "ih15_sell_absorption",
+        "ih15_absorption_imbalance",
+        "ih15_late_buy_absorption",
+        "ih15_late_sell_absorption",
+        "ih15_late_absorption_imbalance",
+        "ih15_late_flow_reversal",
+        "ih15_late_price_reversal",
+        "ih15_late_flow_price_alignment",
         "ih15_cvd_pressure_norm_stable_rank",
         "ih15_cvd_pressure_norm_stable_zscore",
         "ih15_cvd_slope_norm_stable_rank",
+        "ih15_flow_price_alignment_stable_rank",
+        "ih15_flow_price_alignment_stable_tanh",
+        "ih15_buy_absorption_stable_rank",
+        "ih15_sell_absorption_stable_rank",
+        "ih15_absorption_imbalance_stable_rank",
+        "ih15_absorption_imbalance_stable_tanh",
+        "ih15_late_buy_absorption_stable_rank",
+        "ih15_late_sell_absorption_stable_rank",
+        "ih15_late_absorption_imbalance_stable_rank",
+        "ih15_late_absorption_imbalance_stable_tanh",
+        "ih15_late_flow_reversal_stable_rank",
+        "ih15_late_flow_reversal_stable_tanh",
+        "ih15_late_price_reversal_stable_rank",
+        "ih15_late_price_reversal_stable_tanh",
+        "ih15_late_flow_price_alignment_stable_rank",
+        "ih15_late_flow_price_alignment_stable_tanh",
         "ih15_vpt_last_vs_hour_stable_rank",
         "ih15_vpt_last_vs_hour_stable_zscore",
         "ih15_large_trade_concentration_stable_rank",
@@ -385,6 +452,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_no_4h_whale_zscores",
         "baseline_stable_no_4h_volume_context",
         "baseline_stable_no_1h_large_trade_ratio",
+        "baseline_stable_plus_15m_late_order_flow",
+        "baseline_stable_plus_15m_intrahour_pressure",
+        "baseline_stable_plus_15m_whale_burst",
+        "baseline_stable_plus_15m_order_flow_full",
     ]:
         assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
 
@@ -410,6 +481,31 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     intrahour_full_columns = filter_feature_columns(columns, intrahour_full)
     assert "ih15_cvd_pressure_norm" in intrahour_full_columns
     assert "ih15_aggressive_sell_burst_stable_rank" in intrahour_full_columns
+
+    intrahour_absorption = profile_config(config, "baseline_stable_plus_15m_absorption_rank")
+    intrahour_absorption_columns = filter_feature_columns(columns, intrahour_absorption)
+    assert "ih15_absorption_imbalance_stable_rank" in intrahour_absorption_columns
+    assert "ih15_late_absorption_imbalance_stable_rank" in intrahour_absorption_columns
+    assert "ih15_cvd_pressure_norm" not in intrahour_absorption_columns
+    assert "ih15_missing" in intrahour_absorption_columns
+
+    intrahour_efficiency = profile_config(config, "baseline_stable_plus_15m_flow_efficiency_rank")
+    intrahour_efficiency_columns = filter_feature_columns(columns, intrahour_efficiency)
+    assert "ih15_flow_price_alignment_stable_rank" in intrahour_efficiency_columns
+    assert "ih15_flow_price_alignment_stable_tanh" in intrahour_efficiency_columns
+    assert "ih15_buy_absorption_stable_rank" not in intrahour_efficiency_columns
+
+    intrahour_reversal = profile_config(config, "baseline_stable_plus_15m_late_reversal_tanh")
+    intrahour_reversal_columns = filter_feature_columns(columns, intrahour_reversal)
+    assert "ih15_late_flow_reversal_stable_tanh" in intrahour_reversal_columns
+    assert "ih15_late_price_reversal_stable_rank" in intrahour_reversal_columns
+    assert "ih15_taker_imbalance_late_minus_early" not in intrahour_reversal_columns
+
+    intrahour_combo = profile_config(config, "baseline_stable_plus_15m_absorption_efficiency_combo")
+    intrahour_combo_columns = filter_feature_columns(columns, intrahour_combo)
+    assert "ih15_absorption_imbalance_stable_tanh" in intrahour_combo_columns
+    assert "ih15_late_flow_price_alignment_stable_tanh" in intrahour_combo_columns
+    assert "ih15_cvd_slope_norm" not in intrahour_combo_columns
 
     pure_volatility_columns = {
         "realized_vol_14",
