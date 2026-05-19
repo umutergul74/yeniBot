@@ -838,12 +838,13 @@ def _write_decision_files(run_dir: Path, comparison: pd.DataFrame, decision: dic
 
 
 def _experiment_selection_frame(settings: dict[str, Any]) -> pd.DataFrame:
-    columns = ["profile", "role", "selected", "skip_reason"]
+    columns = ["profile", "role", "selected", "expected_fold_scope", "skip_reason"]
     rows: list[dict[str, Any]] = [
         {
             "profile": str(settings["control_profile"]),
             "role": "control_profile",
             "selected": True,
+            "expected_fold_scope": "triage",
             "skip_reason": "",
         }
     ]
@@ -855,14 +856,28 @@ def _experiment_selection_frame(settings: dict[str, Any]) -> pd.DataFrame:
         values = settings.get(key, [])
         if key == "seed_audit_profiles":
             values = (settings.get("seed_audit", {}) or {}).get("profiles", [])
+        expected_scope = {
+            "candidate_profile": "triage",
+            "always_full_profile": "full",
+            "seed_audit_profile": "seed_audit",
+        }[role]
         for profile in values or []:
-            rows.append({"profile": str(profile), "role": role, "selected": True, "skip_reason": ""})
+            rows.append(
+                {
+                    "profile": str(profile),
+                    "role": role,
+                    "selected": True,
+                    "expected_fold_scope": expected_scope,
+                    "skip_reason": "",
+                }
+            )
     for skipped in settings.get("skipped_profiles", []) or []:
         rows.append(
             {
                 "profile": str(skipped.get("profile", "")),
                 "role": str(skipped.get("role", "skipped_profile")),
                 "selected": False,
+                "expected_fold_scope": "",
                 "skip_reason": str(skipped.get("skip_reason", "")),
             }
         )
@@ -876,8 +891,8 @@ def _experiment_selection_markdown(selection: pd.DataFrame) -> str:
     if selection.empty:
         lines.append("No profile selection metadata was produced.")
         return "\n".join(lines)
-    lines.append("| profile | role | selected | skip_reason |")
-    lines.append("| --- | --- | --- | --- |")
+    lines.append("| profile | role | selected | expected_fold_scope | skip_reason |")
+    lines.append("| --- | --- | --- | --- | --- |")
     for _, row in selection.iterrows():
         lines.append(
             "| "
@@ -886,6 +901,7 @@ def _experiment_selection_markdown(selection: pd.DataFrame) -> str:
                     str(row["profile"]),
                     str(row["role"]),
                     str(bool(row["selected"])),
+                    str(row.get("expected_fold_scope", "")),
                     str(row.get("skip_reason", "")),
                 ]
             )
@@ -909,6 +925,110 @@ def _write_experiment_selection(path: Path, settings: dict[str, Any]) -> pd.Data
         },
     )
     return selection
+
+
+def _missing_selected_profiles(selection: pd.DataFrame, comparison: pd.DataFrame) -> pd.DataFrame:
+    columns = ["profile", "role", "expected_fold_scope", "reason"]
+    if selection.empty:
+        return pd.DataFrame(columns=columns)
+    completed = {
+        (str(row["profile"]), str(row["fold_scope"]))
+        for _, row in comparison.iterrows()
+        if str(row.get("fold_scope", "")) in {"triage", "full"}
+    }
+    rows = []
+    comparable_scopes = {"triage", "full"}
+    for _, row in selection.iterrows():
+        if not bool(row.get("selected", False)):
+            continue
+        scope = str(row.get("expected_fold_scope", ""))
+        if scope not in comparable_scopes:
+            continue
+        profile = str(row.get("profile", ""))
+        if (profile, scope) in completed:
+            continue
+        rows.append(
+            {
+                "profile": profile,
+                "role": str(row.get("role", "")),
+                "expected_fold_scope": scope,
+                "reason": "missing_selected_profile_output",
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _missing_selected_markdown(missing: pd.DataFrame) -> str:
+    lines = ["# Missing Selected Profiles", ""]
+    if missing.empty:
+        lines.append("All selected comparison profiles have completed outputs.")
+        return "\n".join(lines)
+    lines.append("| profile | role | expected_fold_scope | reason |")
+    lines.append("| --- | --- | --- | --- |")
+    for _, row in missing.iterrows():
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row["profile"]),
+                    str(row["role"]),
+                    str(row["expected_fold_scope"]),
+                    str(row["reason"]),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def _write_missing_selected_profiles(path: Path, missing: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    missing.to_csv(path / "missing_selected_profiles.csv", index=False)
+    (path / "missing_selected_profiles.md").write_text(_missing_selected_markdown(missing), encoding="utf-8")
+    _write_json(path / "missing_selected_profiles.json", {"rows": missing.to_dict(orient="records")})
+
+
+def _holdout_reservation_frame(settings: dict[str, Any]) -> pd.DataFrame:
+    holdout = settings.get("holdout", {}) or {}
+    columns = [
+        "enabled",
+        "holdout_bars",
+        "selection_rows",
+        "holdout_rows",
+        "selection_data_start",
+        "selection_data_end",
+        "holdout_data_start",
+        "holdout_data_end",
+        "holdout_path",
+        "policy",
+    ]
+    if not holdout:
+        return pd.DataFrame(columns=columns)
+    row = {column: holdout.get(column, "") for column in columns}
+    row["enabled"] = bool(holdout.get("enabled", False))
+    return pd.DataFrame([row], columns=columns)
+
+
+def _holdout_reservation_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Holdout Reservation", ""]
+    if frame.empty:
+        lines.append("No holdout reservation metadata was attached to this experiment run.")
+        return "\n".join(lines)
+    lines.append("| field | value |")
+    lines.append("| --- | --- |")
+    row = frame.iloc[0].to_dict()
+    for key, value in row.items():
+        lines.append(f"| {key} | {value} |")
+    return "\n".join(lines)
+
+
+def _write_holdout_reservation(path: Path, settings: dict[str, Any]) -> pd.DataFrame:
+    path.mkdir(parents=True, exist_ok=True)
+    frame = _holdout_reservation_frame(settings)
+    frame.to_csv(path / "holdout_reservation.csv", index=False)
+    (path / "holdout_reservation.md").write_text(_holdout_reservation_markdown(frame), encoding="utf-8")
+    _write_json(path / "holdout_reservation.json", {"rows": frame.to_dict(orient="records")})
+    return frame
 
 
 def _fold_delta_frame(entry: dict[str, Any]) -> pd.DataFrame:
@@ -1405,6 +1525,7 @@ def _profile_blend_entries(entries: list[dict[str, Any]], config: dict[str, Any]
 
     blend_settings = _cfg(config, ["experiments", "profile_blends"], {}) or {}
     include_auto_equal = bool(blend_settings.get("include_auto_equal_weight", True))
+    include_auto_rank = bool(blend_settings.get("include_auto_rank_mean", True))
     blend_entries = []
     entry_by_profile = {str(entry["profile"]): entry for entry in full_entries}
 
@@ -1468,7 +1589,10 @@ def _profile_blend_entries(entries: list[dict[str, Any]], config: dict[str, Any]
         if len(full_entries) > 2:
             combos.append(tuple(full_entries))
         for combo in combos:
-            for method in ("prob_mean", "rank_mean"):
+            methods = ["prob_mean"]
+            if include_auto_rank:
+                methods.append("rank_mean")
+            for method in methods:
                 append_blend(list(combo), method=method)
 
     for spec in blend_settings.get("weighted", []) or []:
@@ -1796,6 +1920,12 @@ def _write_experiment_bundle(
         "experiment_selection.csv",
         "experiment_selection.md",
         "experiment_selection.json",
+        "missing_selected_profiles.csv",
+        "missing_selected_profiles.md",
+        "missing_selected_profiles.json",
+        "holdout_reservation.csv",
+        "holdout_reservation.md",
+        "holdout_reservation.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -1849,6 +1979,7 @@ def run_experiment_matrix(
         },
     )
     experiment_selection = _write_experiment_selection(run_dir, settings)
+    holdout_reservation = _write_holdout_reservation(run_dir, settings)
 
     triage_fold_ids = [int(fold_id) for fold_id in settings.get("triage_fold_ids", [])]
     resume_existing = bool(settings.get("resume_existing", True))
@@ -1936,6 +2067,8 @@ def run_experiment_matrix(
     best = _best_candidate(comparison, settings["control_profile"])
     blend_leaders = _profile_blend_leaders(profile_blend)
     best_blend = _best_profile_blend(profile_blend)
+    missing_selected = _missing_selected_profiles(experiment_selection, comparison)
+    _write_missing_selected_profiles(run_dir, missing_selected)
     decision = {
         "run_id": run_id,
         "control_profile": settings["control_profile"],
@@ -1946,9 +2079,12 @@ def run_experiment_matrix(
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
-        "recommendation": "promote_best_candidate"
-        if best
-        else ("review_profile_blend" if best_blend else "keep_control_profile"),
+        "missing_selected_profiles": missing_selected.to_dict(orient="records"),
+        "experiment_complete": bool(missing_selected.empty),
+        "holdout": settings.get("holdout", {}) or {},
+        "recommendation": "fix_missing_selected_profiles"
+        if not missing_selected.empty
+        else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
     }
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
@@ -1963,6 +2099,8 @@ def run_experiment_matrix(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
+        "holdout_reservation": holdout_reservation,
+        "missing_selected_profiles": missing_selected,
         "decision": decision,
     }
 
@@ -1986,7 +2124,13 @@ def write_experiment_diagnostics(
     run_id: str | None = None,
 ) -> dict[str, Any]:
     run_dir = experiment_root(checkpoint_dir) / run_id if run_id else latest_experiment_run(checkpoint_dir)
-    settings = experiment_settings(config)
+    run_manifest_path = run_dir / "experiment_manifest.json"
+    run_manifest = _read_json(run_manifest_path) if run_manifest_path.exists() else {}
+    settings = copy.deepcopy(run_manifest.get("settings") or experiment_settings(config))
+    diagnostic_config = copy.deepcopy(config)
+    experiment_cfg = copy.deepcopy(_cfg(diagnostic_config, ["experiments"], default={}) or {})
+    experiment_cfg.update(settings)
+    _set_cfg(diagnostic_config, ["experiments"], experiment_cfg)
     scope_dirs = _profile_dirs(run_dir)
     if not scope_dirs:
         root = experiment_root(checkpoint_dir)
@@ -2008,7 +2152,7 @@ def write_experiment_diagnostics(
         predictions = pd.read_parquet(scope_dir / "predictions_all.parquet")
         diagnostics = summarize_profile_predictions(
             predictions,
-            config,
+            diagnostic_config,
             profile=profile,
             feature_columns=feature_columns,
             fold_scope=fold_scope,
@@ -2024,19 +2168,27 @@ def write_experiment_diagnostics(
             }
         )
     profile_entries = list(entries)
-    seed_ensemble_entries = _seed_ensemble_entries(profile_entries, config)
-    profile_blend_entries = _profile_blend_entries(profile_entries, config)
+    seed_ensemble_entries = _seed_ensemble_entries(profile_entries, diagnostic_config)
+    profile_blend_entries = _profile_blend_entries(profile_entries, diagnostic_config)
     entries = [*profile_entries, *seed_ensemble_entries, *profile_blend_entries]
 
     rows = [entry["diagnostics"]["row"] for entry in entries]
-    triage_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "triage"], config, scope="triage")
-    full_rows = _decision_rows([row for row in rows if row.get("fold_scope") == "full"], config, scope="full")
+    triage_rows = _decision_rows(
+        [row for row in rows if row.get("fold_scope") == "triage"],
+        diagnostic_config,
+        scope="triage",
+    )
+    full_rows = _decision_rows(
+        [row for row in rows if row.get("fold_scope") == "full"],
+        diagnostic_config,
+        scope="full",
+    )
     comparison = _comparison_frame([*triage_rows, *full_rows])
     profile_delta = _profile_delta_vs_control(profile_entries, settings["control_profile"])
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
     seed_ensemble = _seed_ensemble_frame(entries)
     profile_blend = _profile_blend_frame(entries)
-    profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
+    profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -2089,19 +2241,32 @@ def write_experiment_diagnostics(
     best = _best_candidate(comparison, settings["control_profile"])
     blend_leaders = _profile_blend_leaders(profile_blend)
     best_blend = _best_profile_blend(profile_blend)
+    report_dir = Path(output_dir) / "experiments" / run_dir.name
+    report_dir.mkdir(parents=True, exist_ok=True)
+    experiment_selection = _write_experiment_selection(report_dir, settings)
+    holdout_reservation = _write_holdout_reservation(report_dir, settings)
+    missing_selected = _missing_selected_profiles(experiment_selection, comparison)
+    _write_missing_selected_profiles(report_dir, missing_selected)
     decision = {
         "run_id": run_dir.name,
         "control_profile": settings["control_profile"],
         "best_candidate": best,
         "best_profile_blend": best_blend,
         "profile_blend_leaders": blend_leaders,
-        "recommendation": "promote_best_candidate"
-        if best
-        else ("review_profile_blend" if best_blend else "keep_control_profile"),
+        "full_profiles": [str(profile) for profile in settings.get("always_full_profiles", [])],
+        "seed_audit_profiles": [
+            str(profile) for profile in (settings.get("seed_audit", {}) or {}).get("profiles", [])
+        ],
+        "seed_audit_seeds": [int(seed) for seed in (settings.get("seed_audit", {}) or {}).get("seeds", [])],
+        "skipped_profiles": settings.get("skipped_profiles", []) or [],
+        "missing_selected_profiles": missing_selected.to_dict(orient="records"),
+        "experiment_complete": bool(missing_selected.empty),
+        "holdout": settings.get("holdout", {}) or {},
+        "recommendation": "fix_missing_selected_profiles"
+        if not missing_selected.empty
+        else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
         "diagnostic_zips": zip_paths,
     }
-    report_dir = Path(output_dir) / "experiments" / run_dir.name
-    report_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
     slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
@@ -2110,14 +2275,12 @@ def write_experiment_diagnostics(
     decision["latest_bundle_zip"] = str(latest_bundle_path)
     decision["slim_bundle_zip"] = str(slim_bundle_path)
     decision["latest_slim_bundle_zip"] = str(latest_slim_bundle_path)
-    decision["skipped_profiles"] = settings.get("skipped_profiles", []) or []
     _write_decision_files(report_dir, comparison, decision)
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_profile_diagnostic_summaries(report_dir, entries)
-    experiment_selection = _write_experiment_selection(report_dir, settings)
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
@@ -2125,6 +2288,8 @@ def write_experiment_diagnostics(
     _write_profile_blend_files(run_dir, profile_blend)
     _write_profile_diagnostic_summaries(run_dir, entries)
     _write_experiment_selection(run_dir, settings)
+    _write_holdout_reservation(run_dir, settings)
+    _write_missing_selected_profiles(run_dir, missing_selected)
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -2146,6 +2311,8 @@ def write_experiment_diagnostics(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
+        "holdout_reservation": holdout_reservation,
+        "missing_selected_profiles": missing_selected,
         "decision": decision,
         "zip_paths": zip_paths,
         "bundle_zip": str(bundle_path),

@@ -11,6 +11,9 @@ from yenibot.config import load_config
 from yenibot.experiments import (
     _auto_full_profiles,
     _best_profile_blend,
+    _experiment_selection_frame,
+    _holdout_reservation_frame,
+    _missing_selected_profiles,
     _preflight_experiment_profiles,
     _passes_full,
     _passes_triage,
@@ -94,6 +97,56 @@ def test_experiment_settings_skips_historically_rejected_candidates() -> None:
         {"profile": "rejected", "role": "always_full_profile", "skip_reason": "known_bad_run"},
         {"profile": "rejected", "role": "seed_audit_profile", "skip_reason": "known_bad_run"},
     ]
+
+
+def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
+    settings = {
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "always_full_profiles": ["control", "missing_full"],
+        "seed_audit": {"enabled": True, "profiles": ["control"], "seeds": [42]},
+    }
+    selection = _experiment_selection_frame(settings)
+    comparison = pd.DataFrame(
+        [
+            {"profile": "control", "fold_scope": "triage"},
+            {"profile": "control", "fold_scope": "full"},
+        ]
+    )
+
+    missing = _missing_selected_profiles(selection, comparison)
+
+    assert missing.to_dict(orient="records") == [
+        {
+            "profile": "missing_full",
+            "role": "always_full_profile",
+            "expected_fold_scope": "full",
+            "reason": "missing_selected_profile_output",
+        }
+    ]
+
+
+def test_holdout_reservation_frame_records_selection_and_holdout_window() -> None:
+    settings = {
+        "holdout": {
+            "enabled": True,
+            "holdout_bars": 4320,
+            "selection_rows": 32000,
+            "holdout_rows": 4320,
+            "selection_data_start": "2022-01-01 00:00:00+00:00",
+            "selection_data_end": "2025-11-01 00:00:00+00:00",
+            "holdout_data_start": "2025-11-01 01:00:00+00:00",
+            "holdout_data_end": "2026-05-01 00:00:00+00:00",
+            "holdout_path": "/content/drive/MyDrive/yeniBot/data/processed/holdout_1h.parquet",
+            "policy": "profile_selection_only_before_holdout",
+        }
+    }
+
+    frame = _holdout_reservation_frame(settings)
+
+    assert bool(frame.loc[0, "enabled"]) is True
+    assert frame.loc[0, "holdout_bars"] == 4320
+    assert frame.loc[0, "selection_data_end"] < frame.loc[0, "holdout_data_start"]
 
 
 def test_experiment_preflight_skips_intrahour_candidates_until_features_exist() -> None:
@@ -199,24 +252,17 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
-        "baseline_stable_plus_15m_flow_efficiency_rank",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     weighted_blends = config["experiments"]["profile_blends"]["weighted"]
-    assert weighted_blends
-    assert any(
-        item["name"] == "control_long_pressure_flow_efficiency_60_30_10"
-        and item["weights"] == [0.60, 0.30, 0.10]
-        for item in weighted_blends
-    )
+    assert [item["name"] for item in weighted_blends] == ["control_long_pressure_65_35"]
+    assert weighted_blends[0]["weights"] == [0.65, 0.35]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_plus_4h_bounded_whale_no_4h_tier1",
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
@@ -1172,15 +1218,18 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "candidate_profiles": ["candidate"],
         "triage_fold_ids": [0],
         "full_cv_profiles": ["control", "candidate"],
+        "always_full_profiles": ["control", "candidate"],
         "resume_existing": True,
         "force_retrain": False,
     }
     frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
 
     result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="matrix", device="cpu")
+    diagnostics_config = copy.deepcopy(config)
+    diagnostics_config["experiments"]["always_full_profiles"].append("ghost_profile_not_in_run")
     diagnostics = write_experiment_diagnostics(
         checkpoint_dir=tmp_path,
-        config=config,
+        config=diagnostics_config,
         output_dir=tmp_path / "reports",
         run_id="matrix",
     )
@@ -1192,10 +1241,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "holdout_reservation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "holdout_reservation.csv").exists()
     assert diagnostics["zip_paths"]
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
@@ -1212,6 +1265,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "best_profile_blend" in diagnostics["decision"]
     assert "profile_blend_leaders" in diagnostics["decision"]
     assert not diagnostics["experiment_selection"].empty
+    assert diagnostics["missing_selected_profiles"].empty
+    assert "ghost_profile_not_in_run" not in set(diagnostics["experiment_selection"]["profile"])
+    assert diagnostics["decision"]["experiment_complete"] is True
     assert (tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "reports" / "phase1_latest_experiment_bundle.zip").exists()
     assert (tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip").exists()
@@ -1230,10 +1286,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_blend.csv" in archive.namelist()
         assert "matrix/profile_fold_metrics.csv" in archive.namelist()
         assert "matrix/experiment_selection.csv" in archive.namelist()
+        assert "matrix/missing_selected_profiles.csv" in archive.namelist()
+        assert "matrix/holdout_reservation.csv" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
+    assert "matrix/missing_selected_profiles.csv" in names
+    assert "matrix/holdout_reservation.csv" in names
     assert all("/diagnostics/" not in name for name in names)
 
 

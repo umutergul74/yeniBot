@@ -1403,23 +1403,14 @@ experiments:
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-    - baseline_plus_4h_bounded_whale_no_4h_tier1
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
-    - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility
-    - baseline_stable_plus_15m_flow_efficiency_rank
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
   profile_blends:
     include_auto_equal_weight: true
+    include_auto_rank_mean: false
     weighted:
-      - name: control_long_pressure_60_40
-        method: prob_weighted
-        profiles:
-          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-          - baseline_no_4h_tier1_4h_large_trade_pressure_long
-        weights: [0.60, 0.40]
-        description: "Weighted blend of the stability control and long-pressure tail-lift benchmark."
       - name: control_long_pressure_65_35
         method: prob_weighted
         profiles:
@@ -1427,30 +1418,6 @@ experiments:
           - baseline_no_4h_tier1_4h_large_trade_pressure_long
         weights: [0.65, 0.35]
         description: "Slightly control-heavy version of the best current two-profile blend."
-      - name: control_long_pressure_flow_efficiency_60_30_10
-        method: prob_weighted
-        profiles:
-          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-          - baseline_no_4h_tier1_4h_large_trade_pressure_long
-          - baseline_stable_plus_15m_flow_efficiency_rank
-        weights: [0.60, 0.30, 0.10]
-        description: "Small 15m flow-efficiency allocation on top of the current stability plus tail-lift pair."
-      - name: control_long_pressure_flow_efficiency_65_25_10
-        method: prob_weighted
-        profiles:
-          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-          - baseline_no_4h_tier1_4h_large_trade_pressure_long
-          - baseline_stable_plus_15m_flow_efficiency_rank
-        weights: [0.65, 0.25, 0.10]
-        description: "More conservative 15m flow-efficiency blend, keeping the stability control dominant."
-      - name: control_long_pressure_flow_efficiency_70_20_10
-        method: prob_weighted
-        profiles:
-          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-          - baseline_no_4h_tier1_4h_large_trade_pressure_long
-          - baseline_stable_plus_15m_flow_efficiency_rank
-        weights: [0.70, 0.20, 0.10]
-        description: "Maximum-control weighted blend for testing whether the 15m signal only helps as a small overlay."
   experiment_memory:
     enabled: true
     reject_retests: true
@@ -1459,7 +1426,7 @@ experiments:
       baseline_plus_4h_bounded_whale_no_4h_tier1: "Legacy baseline kept for continuity; latest full run mean IC 0.0575, std 0.1012, positive folds 78.6%."
       baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest full run mean IC 0.0517, std 0.0938, top-10 lift 1.1681 but only 61.9% positive folds."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; latest full run mean IC 0.0596, std 0.0738, positive folds 85.7%."
-      baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile, but showed triage top-10 lift 1.122 and is kept only as a small weighted-blend auxiliary."
+      baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
     rejected_profiles:
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."
@@ -1547,7 +1514,6 @@ experiments:
     enabled: true
     profiles:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-      - baseline_plus_4h_bounded_whale_no_4h_tier1
     seeds: [42, 43, 44]
     fold_ids: [0, 13, 21, 29, 32, 35, 39, 41]
   promotion_gates:
