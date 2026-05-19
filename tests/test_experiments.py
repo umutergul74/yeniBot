@@ -15,6 +15,7 @@ from yenibot.experiments import (
     _passes_full,
     _passes_triage,
     _profile_blend_leaders,
+    _profile_blend_predictions,
     _profile_blend_review_frame,
     experiment_settings,
     profile_config,
@@ -201,14 +202,17 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility",
+        "baseline_stable_plus_15m_flow_efficiency_rank",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_plus_15m_absorption_rank",
-        "baseline_stable_plus_15m_flow_efficiency_rank",
-        "baseline_stable_plus_15m_late_reversal_tanh",
-        "baseline_stable_plus_15m_absorption_efficiency_combo",
-    ]
+    assert config["experiments"]["candidate_profiles"] == []
+    weighted_blends = config["experiments"]["profile_blends"]["weighted"]
+    assert weighted_blends
+    assert any(
+        item["name"] == "control_long_pressure_flow_efficiency_60_30_10"
+        and item["weights"] == [0.60, 0.30, 0.10]
+        for item in weighted_blends
+    )
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
@@ -456,6 +460,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_plus_15m_intrahour_pressure",
         "baseline_stable_plus_15m_whale_burst",
         "baseline_stable_plus_15m_order_flow_full",
+        "baseline_stable_plus_15m_absorption_rank",
+        "baseline_stable_plus_15m_late_reversal_tanh",
+        "baseline_stable_plus_15m_absorption_efficiency_combo",
     ]:
         assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
 
@@ -1015,6 +1022,33 @@ def test_profile_blend_review_separates_tail_lift_and_stability_leaders() -> Non
     assert bool(reviewed.loc[reviewed["profile"] == "stable", "stability_leader"].item()) is True
     assert bool(reviewed.loc[reviewed["profile"] == "stable", "tail_lift_eligible"].item()) is False
     assert bool(reviewed.loc[reviewed["profile"] == "stable", "stability_eligible"].item()) is True
+
+
+def test_profile_blend_predictions_support_weighted_probability_blends() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+    base = pd.DataFrame(
+        {
+            "fold": [0, 0, 0],
+            "timestamp": timestamps,
+            "label": [0, 1, 0],
+            "fwd_return_10h": [0.0, 0.01, -0.01],
+            "prob_long": [0.10, 0.20, 0.30],
+        }
+    )
+    overlay = base.copy()
+    overlay["prob_long"] = [0.90, 0.80, 0.70]
+    entries = [
+        {"profile": "control", "predictions": base},
+        {"profile": "overlay", "predictions": overlay},
+    ]
+
+    blended = _profile_blend_predictions(entries, method="prob_weighted", weights=[0.75, 0.25])
+
+    assert blended["blend_method"].unique().tolist() == ["prob_weighted"]
+    assert blended["blend_profiles"].unique().tolist() == ["control,overlay"]
+    assert blended["blend_weights"].unique().tolist() == ["0.75,0.25"]
+    np.testing.assert_allclose(blended["prob_long"], [0.30, 0.35, 0.40])
+    assert (blended["blend_profile_count"] == 2).all()
 
 
 def test_profile_blend_review_selects_balanced_leader_before_tail_lift() -> None:
