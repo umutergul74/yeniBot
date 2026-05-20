@@ -1362,6 +1362,18 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     candidates = set(holdout_evaluation["candidate"])
     assert {"control", "candidate", "blend_control_candidate_65_35"}.issubset(candidates)
     assert any(candidate.startswith("blend_prob_mean_") for candidate in candidates)
+    assert {
+        "holdout_cv_threshold",
+        "holdout_cv_threshold_source",
+        "holdout_cv_threshold_f1",
+        "holdout_cv_threshold_precision",
+        "holdout_cv_threshold_recall",
+        "holdout_cv_threshold_pred_long_rate",
+        "holdout_reject_reason",
+    }.issubset(holdout_evaluation.columns)
+    assert holdout_evaluation["holdout_cv_threshold_source"].eq("cv_selected_threshold").all()
+    assert holdout_evaluation["holdout_cv_threshold_pred_long_rate"].between(0.0, 1.0).all()
+    assert holdout_evaluation["mtf_leakage_passed"].all()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()

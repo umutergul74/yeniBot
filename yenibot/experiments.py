@@ -1151,6 +1151,8 @@ def _aggregate_holdout_predictions(predictions: pd.DataFrame, *, profile: str) -
             "forward_return",
             "tb_return",
             "hit_type",
+            "4h_source_timestamp",
+            "4h_available_timestamp",
         )
         if column in frame.columns
     ]
@@ -1182,8 +1184,13 @@ def _holdout_markdown(holdout_evaluation: pd.DataFrame, holdout_decision: dict[s
         "mean_prauc",
         "calibration_separation",
         "top_10_lift_global",
-        "test_f1_at_selected_threshold",
+        "top_10_forward_return_global",
+        "holdout_cv_threshold_f1",
+        "holdout_cv_threshold_pred_long_rate",
+        "holdout_cv_threshold_source",
+        "mtf_leakage_passed",
         "holdout_soft_pass",
+        "holdout_reject_reason",
         "frozen_selection",
     ]
     visible = holdout_evaluation[[column for column in display_cols if column in holdout_evaluation.columns]].copy()
@@ -1222,18 +1229,99 @@ def _write_holdout_files(
     )
 
 
-def _holdout_soft_pass(row: dict[str, Any]) -> bool:
-    return bool(
-        float(row.get("mean_rank_ic", 0.0)) > 0.03
-        and float(row.get("top_10_lift_global", 0.0)) > 1.0
-        and float(row.get("test_f1_at_selected_threshold", 0.0)) > 0.45
-        and float(row.get("calibration_separation", 0.0)) > 0.0
-    )
+def _threshold_summary_value(threshold_summary: pd.DataFrame | None, metric: str) -> float:
+    if threshold_summary is None or threshold_summary.empty:
+        return np.nan
+    if "metric" not in threshold_summary.columns or "mean" not in threshold_summary.columns:
+        return np.nan
+    matched = threshold_summary.loc[threshold_summary["metric"].astype(str) == metric, "mean"]
+    if matched.empty:
+        return np.nan
+    try:
+        return float(matched.iloc[0])
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _cv_selected_threshold(entry: dict[str, Any] | None) -> tuple[float, str]:
+    if not entry:
+        return 0.5, "fallback_0.50_missing_cv_entry"
+    diagnostics = entry.get("diagnostics", {}) or {}
+    row = diagnostics.get("row", {}) or {}
+    threshold = _float(row, "selected_threshold_mean", np.nan)
+    if np.isfinite(threshold):
+        return threshold, "cv_selected_threshold"
+    threshold = _threshold_summary_value(diagnostics.get("threshold_summary"), "selected_threshold")
+    if np.isfinite(threshold):
+        return threshold, "cv_selected_threshold"
+    return 0.5, "fallback_0.50_missing_cv_threshold"
+
+
+def _binary_metrics_at_threshold(labels: pd.Series, scores: pd.Series, threshold: float) -> dict[str, float]:
+    y_true = labels.astype(int).to_numpy()
+    y_score = pd.to_numeric(scores, errors="coerce").fillna(-np.inf).to_numpy(dtype=float)
+    y_pred = (y_score >= float(threshold)).astype(int)
+    true_positive = float(((y_true == 1) & (y_pred == 1)).sum())
+    false_positive = float(((y_true == 0) & (y_pred == 1)).sum())
+    false_negative = float(((y_true == 1) & (y_pred == 0)).sum())
+    precision = true_positive / max(true_positive + false_positive, 1.0)
+    recall = true_positive / max(true_positive + false_negative, 1.0)
+    f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+    return {
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "pred_long_rate": float(y_pred.mean()) if len(y_pred) else np.nan,
+    }
+
+
+def _attach_holdout_cv_threshold_metrics(
+    row: dict[str, Any],
+    predictions: pd.DataFrame,
+    cv_entry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    threshold, source = _cv_selected_threshold(cv_entry)
+    metrics = _binary_metrics_at_threshold(predictions["label"], predictions["prob_long"], threshold)
+    row["holdout_cv_threshold"] = float(threshold)
+    row["holdout_cv_threshold_source"] = source
+    row["holdout_cv_threshold_f1"] = metrics["f1"]
+    row["holdout_cv_threshold_precision"] = metrics["precision"]
+    row["holdout_cv_threshold_recall"] = metrics["recall"]
+    row["holdout_cv_threshold_pred_long_rate"] = metrics["pred_long_rate"]
+    return row
+
+
+def _holdout_soft_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    reasons = []
+    if float(row.get("mean_rank_ic", 0.0)) <= 0.03:
+        reasons.append("mean_rank_ic")
+    if float(row.get("top_10_lift_global", 0.0)) <= 1.0:
+        reasons.append("top_10_lift_global")
+    if float(row.get("top_10_forward_return_global", 0.0)) <= 0.0:
+        reasons.append("top_10_forward_return_global")
+    if float(row.get("holdout_cv_threshold_f1", 0.0)) <= 0.45:
+        reasons.append("holdout_cv_threshold_f1")
+    if float(row.get("holdout_cv_threshold_pred_long_rate", 1.0)) > max_pred_long_rate:
+        reasons.append("holdout_cv_threshold_pred_long_rate")
+    if float(row.get("calibration_separation", 0.0)) <= 0.0:
+        reasons.append("calibration_separation")
+    if not bool(row.get("mtf_leakage_passed", False)):
+        reasons.append("mtf_leakage")
+    return reasons
+
+
+def _attach_holdout_soft_pass(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    reasons = _holdout_soft_pass_reasons(row, config)
+    row["holdout_soft_pass"] = len(reasons) == 0
+    row["holdout_reject_reason"] = ";".join(reasons)
+    return row
 
 
 def _evaluate_holdout_candidates(
     *,
     profile_entries: list[dict[str, Any]],
+    cv_blend_entries: list[dict[str, Any]] | None = None,
     settings: dict[str, Any],
     config: dict[str, Any],
     decision: dict[str, Any],
@@ -1257,6 +1345,11 @@ def _evaluate_holdout_candidates(
     score_band_rows = []
     threshold_rows = []
     evaluation_rows = []
+    cv_entry_by_profile = {
+        str(entry.get("profile", "")): entry
+        for entry in [*profile_entries, *(cv_blend_entries or [])]
+        if str(entry.get("fold_scope", "")) == "full" or str(entry.get("fold_scope", "")).startswith("blend_")
+    }
 
     for entry in full_entries:
         scope_dir = Path(entry["scope_dir"])
@@ -1284,7 +1377,8 @@ def _evaluate_holdout_candidates(
         row["source_profiles"] = str(entry["profile"])
         row["blend_method"] = ""
         row["blend_weights"] = ""
-        row["holdout_soft_pass"] = _holdout_soft_pass(row)
+        row = _attach_holdout_cv_threshold_metrics(row, predictions, cv_entry_by_profile.get(str(entry["profile"])))
+        row = _attach_holdout_soft_pass(row, config)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
         if not bands.empty:
@@ -1316,7 +1410,8 @@ def _evaluate_holdout_candidates(
         row["source_profiles"] = row.get("blend_profiles", "")
         row["blend_method"] = row.get("blend_method", "")
         row["blend_weights"] = row.get("blend_weights", "")
-        row["holdout_soft_pass"] = _holdout_soft_pass(row)
+        row = _attach_holdout_cv_threshold_metrics(row, entry["predictions"], cv_entry_by_profile.get(str(entry["profile"])))
+        row = _attach_holdout_soft_pass(row, config)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
         if not bands.empty:
@@ -1350,7 +1445,7 @@ def _evaluate_holdout_candidates(
     sortable = holdout_evaluation.copy()
     sortable["soft_pass_sort"] = sortable["holdout_soft_pass"].astype(bool).astype(int)
     sortable = sortable.sort_values(
-        ["soft_pass_sort", "mean_rank_ic", "top_10_lift_global", "test_f1_at_selected_threshold"],
+        ["soft_pass_sort", "mean_rank_ic", "top_10_lift_global", "holdout_cv_threshold_f1"],
         ascending=[False, False, False, False],
     )
     observed_best = sortable.iloc[0].to_dict()
@@ -2613,6 +2708,7 @@ def write_experiment_diagnostics(
     holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries = (
         _evaluate_holdout_candidates(
             profile_entries=profile_entries,
+            cv_blend_entries=profile_blend_entries,
             settings=settings,
             config=diagnostic_config,
             decision=decision,
