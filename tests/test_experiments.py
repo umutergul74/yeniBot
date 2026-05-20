@@ -1297,6 +1297,81 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert all("/diagnostics/" not in name for name in names)
 
 
+def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tiny_config, tmp_path) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["paths"] = {"data_dir": str(tmp_path / "data")}
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": ["4h_taker_buy_ratio"]},
+        "candidate": {"include_patterns": ["*"], "exclude_patterns": ["4h_taker_sell_ratio"]},
+    }
+    config["experiments"] = {
+        "mode": "staged",
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "triage_fold_ids": [0],
+        "full_cv_profiles": ["control", "candidate"],
+        "always_full_profiles": ["control", "candidate"],
+        "resume_existing": True,
+        "force_retrain": False,
+        "profile_blends": {
+            "include_auto_equal_weight": True,
+            "include_auto_rank_mean": False,
+            "weighted": [
+                {
+                    "name": "control_candidate_65_35",
+                    "method": "prob_weighted",
+                    "profiles": ["control", "candidate"],
+                    "weights": [0.65, 0.35],
+                }
+            ],
+        },
+    }
+    frame, _ = _labeled_frame(synthetic_klines, config, periods=260)
+    holdout = frame.tail(48).copy().reset_index(drop=True)
+    selection = frame.iloc[:-48].copy().reset_index(drop=True)
+    processed_dir = tmp_path / "data" / "processed"
+    processed_dir.mkdir(parents=True)
+    frame.to_parquet(processed_dir / "labeled_1h.parquet", index=False)
+    holdout_path = processed_dir / "holdout_1h.parquet"
+    holdout.to_parquet(holdout_path, index=False)
+    config["experiments"]["holdout"] = {
+        "enabled": True,
+        "holdout_bars": int(len(holdout)),
+        "selection_rows": int(len(selection)),
+        "holdout_rows": int(len(holdout)),
+        "selection_data_start": str(pd.to_datetime(selection["timestamp"], utc=True).min()),
+        "selection_data_end": str(pd.to_datetime(selection["timestamp"], utc=True).max()),
+        "holdout_data_start": str(pd.to_datetime(holdout["timestamp"], utc=True).min()),
+        "holdout_data_end": str(pd.to_datetime(holdout["timestamp"], utc=True).max()),
+        "holdout_path": str(holdout_path),
+        "policy": "profile_selection_only_before_holdout",
+    }
+
+    run_experiment_matrix(selection, config, checkpoint_dir=tmp_path, run_id="holdout_run", device="cpu")
+    diagnostics = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=config,
+        output_dir=tmp_path / "reports",
+        run_id="holdout_run",
+    )
+
+    holdout_evaluation = diagnostics["holdout_evaluation"]
+    assert not holdout_evaluation.empty
+    assert diagnostics["decision"]["holdout_evaluation_available"] is True
+    assert diagnostics["decision"]["holdout_evaluation"]["available"] is True
+    candidates = set(holdout_evaluation["candidate"])
+    assert {"control", "candidate", "blend_control_candidate_65_35"}.issubset(candidates)
+    assert any(candidate.startswith("blend_prob_mean_") for candidate in candidates)
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_evaluation.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()
+    with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_holdout_run.zip") as archive:
+        names = set(archive.namelist())
+    assert "holdout_run/holdout_evaluation.csv" in names
+    assert "holdout_run/holdout_score_band_summary.csv" in names
+    assert "holdout_run/holdout_threshold_summary.csv" in names
+
+
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["profiles"] = {

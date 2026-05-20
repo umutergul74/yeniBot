@@ -12,8 +12,10 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
+import torch
 
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
@@ -41,6 +43,7 @@ from yenibot.diagnostics import (
 )
 from yenibot.features import filter_feature_columns, resolve_feature_profile, select_feature_columns
 from yenibot.training import run_walk_forward_training
+from yenibot.training.trainer import _add_regime_probs, _build_model, _device, _make_dataset, _predict_dataset
 
 
 def _cfg(config: Any, path: list[str], default: Any = None) -> Any:
@@ -1031,6 +1034,341 @@ def _write_holdout_reservation(path: Path, settings: dict[str, Any]) -> pd.DataF
     return frame
 
 
+def _read_holdout_context(settings: dict[str, Any], config: dict[str, Any]) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+    holdout = settings.get("holdout", {}) or {}
+    if not bool(holdout.get("enabled", False)):
+        return pd.DataFrame(), None
+    holdout_path = Path(str(holdout.get("holdout_path", "")))
+    if not holdout_path.exists():
+        return pd.DataFrame(), None
+
+    holdout_frame = pd.read_parquet(holdout_path).copy()
+    if holdout_frame.empty or "timestamp" not in holdout_frame.columns:
+        return pd.DataFrame(), None
+    holdout_frame["timestamp"] = pd.to_datetime(holdout_frame["timestamp"], utc=True)
+    holdout_start = pd.to_datetime(holdout.get("holdout_data_start", holdout_frame["timestamp"].min()), utc=True)
+
+    seq_len = int(_cfg(config, ["model", "seq_len"], 64))
+    context_rows = max(seq_len - 1, 0)
+    context = pd.DataFrame()
+    data_dir = _cfg(config, ["paths", "data_dir"], None)
+    if data_dir:
+        labeled_path = Path(str(data_dir)) / "processed" / "labeled_1h.parquet"
+        if labeled_path.exists() and context_rows:
+            full = pd.read_parquet(labeled_path)
+            if "timestamp" in full.columns:
+                full = full.copy()
+                full["timestamp"] = pd.to_datetime(full["timestamp"], utc=True)
+                selection_end = pd.to_datetime(holdout.get("selection_data_end", holdout_start), utc=True)
+                context = full.loc[full["timestamp"] <= selection_end].tail(context_rows).copy()
+
+    if not context.empty:
+        frame = pd.concat([context, holdout_frame], ignore_index=True)
+        frame = frame.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp").reset_index(drop=True)
+    else:
+        frame = holdout_frame.sort_values("timestamp").reset_index(drop=True)
+    return frame, holdout_start
+
+
+def _load_torch_checkpoint(path: Path, device: torch.device) -> dict[str, Any]:
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
+def _predict_holdout_for_profile(
+    *,
+    scope_dir: Path,
+    manifest: dict[str, Any],
+    holdout_context: pd.DataFrame,
+    holdout_start: pd.Timestamp,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    profile = str(manifest["profile"])
+    cfg = profile_config(config, profile)
+    feature_columns = list(manifest["feature_columns"])
+    required = [*feature_columns, *list(_cfg(cfg, ["hmm", "features"], []) or []), "label"]
+    forward_column = f"fwd_return_{int(_cfg(cfg, ['labeling', 'max_holding_bars'], 10))}h"
+    if forward_column not in holdout_context.columns:
+        forward_column = "fwd_return_10h"
+    required.append(forward_column)
+    missing = [column for column in dict.fromkeys(required) if column not in holdout_context.columns]
+    if missing:
+        raise ValueError(f"Holdout frame is missing columns for {profile}: {missing}")
+
+    torch_device = _device(None)
+    batch_size = int(_cfg(cfg, ["training", "batch_size"], 256))
+    rows = []
+    model_paths = sorted(scope_dir.glob("model_fold_*.pt"))
+    for model_path in model_paths:
+        fold = int(model_path.stem.rsplit("_", 1)[-1])
+        scaler_path = scope_dir / f"scaler_fold_{fold:03d}.pkl"
+        hmm_path = scope_dir / f"hmm_fold_{fold:03d}.pkl"
+        if not scaler_path.exists() or not hmm_path.exists():
+            continue
+
+        part = holdout_context.copy().reset_index(drop=True)
+        scaler = joblib.load(scaler_path)
+        part.loc[:, feature_columns] = scaler.transform(part[feature_columns])
+        hmm = joblib.load(hmm_path)
+        part = _add_regime_probs(part, hmm, cfg)
+        dataset = _make_dataset(part, feature_columns, cfg)
+
+        checkpoint = _load_torch_checkpoint(model_path, torch_device)
+        model = _build_model(len(feature_columns), cfg).to(torch_device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        prediction = _predict_dataset(model, dataset, part, batch_size=batch_size, device=torch_device)
+        prediction = prediction.loc[pd.to_datetime(prediction["timestamp"], utc=True) >= holdout_start].copy()
+        if prediction.empty:
+            continue
+        prediction["split"] = "test"
+        prediction["fold"] = fold
+        prediction["model_fold"] = fold
+        prediction["profile"] = profile
+        rows.append(prediction)
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
+def _aggregate_holdout_predictions(predictions: pd.DataFrame, *, profile: str) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame()
+    frame = predictions.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    group_keys = ["timestamp"]
+    first_columns = [
+        column
+        for column in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "label",
+            "forward_return",
+            "tb_return",
+            "hit_type",
+        )
+        if column in frame.columns
+    ]
+    aggregations: dict[str, Any] = {column: (column, "first") for column in first_columns}
+    aggregations["prob_long"] = ("prob_long", "mean")
+    aggregations["model_fold_count"] = ("model_fold", "nunique")
+    for column in [column for column in frame.columns if column.startswith("regime_prob_")]:
+        aggregations[column] = (column, "mean")
+    out = frame.groupby(group_keys, as_index=False).agg(**aggregations)
+    out["split"] = "test"
+    out["fold"] = 0
+    out["source_row_position"] = np.arange(len(out))
+    out["profile"] = profile
+    return out.sort_values("timestamp").reset_index(drop=True)
+
+
+def _holdout_markdown(holdout_evaluation: pd.DataFrame, holdout_decision: dict[str, Any]) -> str:
+    lines = ["# Holdout Evaluation", ""]
+    if holdout_evaluation.empty:
+        lines.append("No holdout evaluation was produced.")
+        if holdout_decision:
+            lines.extend(["", "## Decision", "", json.dumps(_json_ready(holdout_decision), indent=2, sort_keys=True)])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "candidate_type",
+        "mean_rank_ic",
+        "mean_long_f1",
+        "mean_prauc",
+        "calibration_separation",
+        "top_10_lift_global",
+        "test_f1_at_selected_threshold",
+        "holdout_soft_pass",
+        "frozen_selection",
+    ]
+    visible = holdout_evaluation[[column for column in display_cols if column in holdout_evaluation.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    lines.extend(["", "## Decision", "", json.dumps(_json_ready(holdout_decision), indent=2, sort_keys=True)])
+    return "\n".join(lines)
+
+
+def _write_holdout_files(
+    path: Path,
+    *,
+    holdout_evaluation: pd.DataFrame,
+    holdout_score_bands: pd.DataFrame,
+    holdout_thresholds: pd.DataFrame,
+    holdout_decision: dict[str, Any],
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    holdout_evaluation.to_csv(path / "holdout_evaluation.csv", index=False)
+    holdout_score_bands.to_csv(path / "holdout_score_band_summary.csv", index=False)
+    holdout_thresholds.to_csv(path / "holdout_threshold_summary.csv", index=False)
+    (path / "holdout_evaluation.md").write_text(
+        _holdout_markdown(holdout_evaluation, holdout_decision),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "holdout_evaluation.json",
+        {
+            "decision": holdout_decision,
+            "rows": holdout_evaluation.to_dict(orient="records"),
+            "score_bands": holdout_score_bands.to_dict(orient="records"),
+            "thresholds": holdout_thresholds.to_dict(orient="records"),
+        },
+    )
+
+
+def _holdout_soft_pass(row: dict[str, Any]) -> bool:
+    return bool(
+        float(row.get("mean_rank_ic", 0.0)) > 0.03
+        and float(row.get("top_10_lift_global", 0.0)) > 1.0
+        and float(row.get("test_f1_at_selected_threshold", 0.0)) > 0.45
+        and float(row.get("calibration_separation", 0.0)) > 0.0
+    )
+
+
+def _evaluate_holdout_candidates(
+    *,
+    profile_entries: list[dict[str, Any]],
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    decision: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any], list[dict[str, Any]]]:
+    holdout_context, holdout_start = _read_holdout_context(settings, config)
+    if holdout_context.empty or holdout_start is None:
+        holdout_decision = {
+            "available": False,
+            "reason": "missing_holdout_frame_or_metadata",
+            "policy": "holdout result must remain separate from profile selection",
+        }
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), holdout_decision, []
+
+    full_entries = [
+        entry
+        for entry in profile_entries
+        if str(entry.get("fold_scope", "")) == "full"
+        and not str(entry.get("profile", "")).startswith("blend_")
+    ]
+    holdout_entries: list[dict[str, Any]] = []
+    score_band_rows = []
+    threshold_rows = []
+    evaluation_rows = []
+
+    for entry in full_entries:
+        scope_dir = Path(entry["scope_dir"])
+        manifest = _read_json(scope_dir / "training_manifest.json")
+        raw_predictions = _predict_holdout_for_profile(
+            scope_dir=scope_dir,
+            manifest=manifest,
+            holdout_context=holdout_context,
+            holdout_start=holdout_start,
+            config=config,
+        )
+        predictions = _aggregate_holdout_predictions(raw_predictions, profile=str(entry["profile"]))
+        if predictions.empty:
+            continue
+        diagnostics = summarize_profile_predictions(
+            predictions,
+            config,
+            profile=str(entry["profile"]),
+            feature_columns=list(entry["feature_columns"]),
+            fold_scope="holdout_profile",
+        )
+        row = dict(diagnostics["row"])
+        row["candidate"] = str(entry["profile"])
+        row["candidate_type"] = "profile"
+        row["source_profiles"] = str(entry["profile"])
+        row["blend_method"] = ""
+        row["blend_weights"] = ""
+        row["holdout_soft_pass"] = _holdout_soft_pass(row)
+        evaluation_rows.append(row)
+        bands = diagnostics["score_band_summary"].copy()
+        if not bands.empty:
+            bands.insert(0, "candidate", row["candidate"])
+            score_band_rows.append(bands)
+        thresholds = diagnostics["threshold_summary"].copy()
+        if not thresholds.empty:
+            thresholds.insert(0, "candidate", row["candidate"])
+            threshold_rows.append(thresholds)
+        holdout_entries.append(
+            {
+                "profile": str(entry["profile"]),
+                "fold_scope": "holdout_profile",
+                "feature_columns": list(entry["feature_columns"]),
+                "predictions": predictions,
+                "diagnostics": diagnostics,
+                "summary": row,
+                "config": entry.get("config", config),
+            }
+        )
+
+    blend_source_entries = [{**entry, "fold_scope": "full"} for entry in holdout_entries]
+    blend_entries = _profile_blend_entries(blend_source_entries, config)
+    for entry in blend_entries:
+        diagnostics = entry["diagnostics"]
+        row = dict(diagnostics["row"])
+        row["candidate"] = str(entry["profile"])
+        row["candidate_type"] = "blend"
+        row["source_profiles"] = row.get("blend_profiles", "")
+        row["blend_method"] = row.get("blend_method", "")
+        row["blend_weights"] = row.get("blend_weights", "")
+        row["holdout_soft_pass"] = _holdout_soft_pass(row)
+        evaluation_rows.append(row)
+        bands = diagnostics["score_band_summary"].copy()
+        if not bands.empty:
+            bands.insert(0, "candidate", row["candidate"])
+            score_band_rows.append(bands)
+        thresholds = diagnostics["threshold_summary"].copy()
+        if not thresholds.empty:
+            thresholds.insert(0, "candidate", row["candidate"])
+            threshold_rows.append(thresholds)
+
+    holdout_evaluation = pd.DataFrame(evaluation_rows)
+    holdout_score_bands = pd.concat(score_band_rows, ignore_index=True) if score_band_rows else pd.DataFrame()
+    holdout_thresholds = pd.concat(threshold_rows, ignore_index=True) if threshold_rows else pd.DataFrame()
+    if holdout_evaluation.empty:
+        holdout_decision = {
+            "available": False,
+            "reason": "no_holdout_predictions",
+            "policy": "holdout result must remain separate from profile selection",
+        }
+        return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
+
+    frozen_selection = str(settings.get("control_profile", ""))
+    best_blend = decision.get("best_profile_blend") or {}
+    best_candidate = decision.get("best_candidate") or {}
+    if best_blend:
+        frozen_selection = str(best_blend.get("profile") or frozen_selection)
+    elif best_candidate:
+        frozen_selection = str(best_candidate.get("profile") or frozen_selection)
+    holdout_evaluation["frozen_selection"] = holdout_evaluation["candidate"].astype(str).eq(frozen_selection)
+
+    sortable = holdout_evaluation.copy()
+    sortable["soft_pass_sort"] = sortable["holdout_soft_pass"].astype(bool).astype(int)
+    sortable = sortable.sort_values(
+        ["soft_pass_sort", "mean_rank_ic", "top_10_lift_global", "test_f1_at_selected_threshold"],
+        ascending=[False, False, False, False],
+    )
+    observed_best = sortable.iloc[0].to_dict()
+    frozen_rows = holdout_evaluation.loc[holdout_evaluation["frozen_selection"].astype(bool)]
+    frozen_row = frozen_rows.iloc[0].to_dict() if not frozen_rows.empty else {}
+    holdout_decision = {
+        "available": True,
+        "policy": "one_shot_final_validation; do not tune profiles or weights against this same holdout",
+        "holdout_start": str(pd.to_datetime(holdout_start, utc=True)),
+        "holdout_rows": int(len(holdout_context.loc[pd.to_datetime(holdout_context["timestamp"], utc=True) >= holdout_start])),
+        "candidate_count": int(len(holdout_evaluation)),
+        "frozen_selection": frozen_selection,
+        "frozen_selection_metrics": _json_ready(frozen_row),
+        "observed_best_holdout_candidate": _json_ready(observed_best),
+    }
+    return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
+
+
 def _fold_delta_frame(entry: dict[str, Any]) -> pd.DataFrame:
     diagnostics = entry["diagnostics"]
     fold_metrics = diagnostics["fold_metrics"].copy()
@@ -1926,6 +2264,11 @@ def _write_experiment_bundle(
         "holdout_reservation.csv",
         "holdout_reservation.md",
         "holdout_reservation.json",
+        "holdout_evaluation.csv",
+        "holdout_evaluation.md",
+        "holdout_evaluation.json",
+        "holdout_score_band_summary.csv",
+        "holdout_threshold_summary.csv",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -2267,6 +2610,16 @@ def write_experiment_diagnostics(
         else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
         "diagnostic_zips": zip_paths,
     }
+    holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries = (
+        _evaluate_holdout_candidates(
+            profile_entries=profile_entries,
+            settings=settings,
+            config=diagnostic_config,
+            decision=decision,
+        )
+    )
+    decision["holdout_evaluation"] = holdout_decision
+    decision["holdout_evaluation_available"] = bool(holdout_decision.get("available", False))
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
     slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
@@ -2281,6 +2634,13 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_profile_diagnostic_summaries(report_dir, entries)
+    _write_holdout_files(
+        report_dir,
+        holdout_evaluation=holdout_evaluation,
+        holdout_score_bands=holdout_score_bands,
+        holdout_thresholds=holdout_thresholds,
+        holdout_decision=holdout_decision,
+    )
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
@@ -2290,6 +2650,13 @@ def write_experiment_diagnostics(
     _write_experiment_selection(run_dir, settings)
     _write_holdout_reservation(run_dir, settings)
     _write_missing_selected_profiles(run_dir, missing_selected)
+    _write_holdout_files(
+        run_dir,
+        holdout_evaluation=holdout_evaluation,
+        holdout_score_bands=holdout_score_bands,
+        holdout_thresholds=holdout_thresholds,
+        holdout_decision=holdout_decision,
+    )
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -2312,6 +2679,10 @@ def write_experiment_diagnostics(
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
+        "holdout_evaluation": holdout_evaluation,
+        "holdout_score_bands": holdout_score_bands,
+        "holdout_thresholds": holdout_thresholds,
+        "holdout_entries": holdout_entries,
         "missing_selected_profiles": missing_selected,
         "decision": decision,
         "zip_paths": zip_paths,

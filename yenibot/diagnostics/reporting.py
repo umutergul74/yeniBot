@@ -195,6 +195,9 @@ def threshold_diagnostics(
             source = fold_part[fold_part["split"] == "val"]
             target = fold_part[fold_part["split"] == "test"]
             source_name = "val"
+            if source.empty and not target.empty:
+                source = target
+                source_name = "same_split_oracle"
         else:
             source = fold_part
             target = fold_part
@@ -220,6 +223,8 @@ def threshold_diagnostics(
                 "test_f1_at_050": _metrics_at_threshold(target["label"], target[score_column], 0.5)["f1"],
             }
         )
+    if not rows:
+        return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("fold").reset_index(drop=True)
 
 
