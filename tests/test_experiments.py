@@ -1369,6 +1369,10 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
         "holdout_cv_threshold_precision",
         "holdout_cv_threshold_recall",
         "holdout_cv_threshold_pred_long_rate",
+        "holdout_policy_name",
+        "holdout_policy_selection_rate",
+        "holdout_policy_forward_return",
+        "holdout_policy_pass",
         "holdout_reject_reason",
     }.issubset(holdout_evaluation.columns)
     assert holdout_evaluation["holdout_cv_threshold_source"].eq("cv_constrained_threshold").all()
@@ -1377,11 +1381,17 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_evaluation.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_holdout_run.zip") as archive:
         names = set(archive.namelist())
     assert "holdout_run/holdout_evaluation.csv" in names
     assert "holdout_run/holdout_score_band_summary.csv" in names
     assert "holdout_run/holdout_threshold_summary.csv" in names
+    assert "holdout_run/holdout_policy_evaluation.csv" in names
+    assert "holdout_run/profile_score_policy_grid.csv" in names
+    assert "holdout_run/profile_score_policy_selection.csv" in names
 
 
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:

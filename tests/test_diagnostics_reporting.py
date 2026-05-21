@@ -22,6 +22,8 @@ from yenibot.diagnostics import (
     score_band_by_fold_diagnostics,
     score_band_diagnostics,
     score_band_summary_diagnostics,
+    score_policy_grid_diagnostics,
+    select_score_policy,
     score_lift_diagnostics,
     score_lift_by_fold_diagnostics,
     mtf_leakage_diagnostics,
@@ -327,9 +329,43 @@ def test_score_band_diagnostics_reports_upper_score_ranges() -> None:
     summary = score_band_summary_diagnostics(band_by_fold)
 
     assert band_lift["band"].tolist() == ["top_bin", "upper_half"]
-    assert {"selection_rate", "lift_vs_base", "mean_forward_return"}.issubset(band_lift.columns)
+    assert {"selection_rate", "lift_vs_base", "mean_forward_return", "recall", "f1"}.issubset(band_lift.columns)
     assert set(summary["band"]) == {"top_bin", "upper_half"}
     assert "positive_lift_fold_rate" in summary.columns
+
+
+def test_score_policy_grid_selects_cv_policy() -> None:
+    predictions = pd.concat(
+        [
+            _predictions().assign(split="val"),
+            _predictions().assign(split="test"),
+        ],
+        ignore_index=True,
+    )
+    grid = score_policy_grid_diagnostics(
+        predictions,
+        bins=4,
+        bands=[
+            {"name": "top_bin", "min_bin": 3, "max_bin": 3},
+            {"name": "upper_half", "min_bin": 2, "max_bin": 3},
+        ],
+        threshold_caps=[0.30, 0.50],
+        min_precision=0.30,
+    )
+    selection = select_score_policy(
+        grid,
+        {
+            "validation": {
+                "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+                "policy_selection": {"min_positive_forward_return_fold_rate": 0.0},
+            }
+        },
+    )
+
+    assert {"score_band", "threshold_cap"}.issubset(set(grid["policy_type"]))
+    assert not selection.empty
+    assert bool(selection.iloc[0]["selected_policy"]) is True
+    assert "policy_reject_reason" in selection.columns
 
 
 def test_experiment_ledger_summarizes_profile_recent_ic_and_top_lift() -> None:

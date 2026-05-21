@@ -420,6 +420,11 @@ def score_band_diagnostics(
         part = frame[(frame["score_bin"] >= band["min_bin"]) & (frame["score_bin"] <= band["max_bin"])]
         if part.empty:
             continue
+        selected_positive = int(part["label"].astype(int).sum())
+        total_positive = int(frame["label"].astype(int).sum())
+        precision = float(part["label"].mean())
+        recall = float(selected_positive / total_positive) if total_positive else 0.0
+        f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
         row = {
             "band": band["name"],
             "min_bin": int(band["min_bin"]),
@@ -427,9 +432,11 @@ def score_band_diagnostics(
             "count": int(len(part)),
             "selection_rate": float(len(part) / len(frame)),
             "mean_prob_long": float(part[score_column].mean()),
-            "actual_long_rate": float(part["label"].mean()),
+            "actual_long_rate": precision,
             "base_long_rate": base_long_rate,
-            "lift_vs_base": float(part["label"].mean() / base_long_rate) if base_long_rate > 0 else np.nan,
+            "lift_vs_base": float(precision / base_long_rate) if base_long_rate > 0 else np.nan,
+            "recall": recall,
+            "f1": float(f1),
         }
         if "forward_return" in part.columns:
             row["mean_forward_return"] = float(part["forward_return"].mean())
@@ -469,6 +476,8 @@ def score_band_summary_diagnostics(score_band_by_fold: pd.DataFrame) -> pd.DataF
         "mean_selection_rate": ("selection_rate", "mean"),
         "mean_actual_long_rate": ("actual_long_rate", "mean"),
         "mean_lift_vs_base": ("lift_vs_base", "mean"),
+        "mean_f1": ("f1", "mean"),
+        "mean_recall": ("recall", "mean"),
         "median_lift_vs_base": ("lift_vs_base", "median"),
         "positive_lift_fold_rate": ("lift_vs_base", lambda values: float((values > 1.0).mean())),
     }
@@ -485,6 +494,246 @@ def score_band_summary_diagnostics(score_band_by_fold: pd.DataFrame) -> pd.DataF
     if "mean_forward_return" in summary.columns:
         sort_columns.append("mean_forward_return")
     return summary.sort_values(sort_columns, ascending=False).reset_index(drop=True)
+
+
+def threshold_grid_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    threshold_source: str = "val",
+    max_pred_long_rates: list[float] | None = None,
+    min_precision: float = 0.30,
+) -> pd.DataFrame:
+    max_pred_long_rates = max_pred_long_rates or [0.30, 0.40, 0.50, 0.60, 0.70]
+    rows = []
+    has_splits = "split" in predictions.columns
+    for fold, fold_part in predictions.groupby("fold"):
+        if has_splits and threshold_source == "val":
+            source = fold_part[fold_part["split"] == "val"]
+            target = fold_part[fold_part["split"] == "test"]
+            source_name = "val"
+            if source.empty and not target.empty:
+                source = target
+                source_name = "same_split_oracle"
+        else:
+            source = fold_part
+            target = fold_part
+            source_name = "same_split_oracle"
+        if source.empty or target.empty:
+            continue
+
+        base_long_rate = float(target["label"].mean())
+        for cap in max_pred_long_rates:
+            threshold = constrained_f1_threshold(
+                source["label"],
+                source[score_column],
+                max_pred_long_rate=float(cap),
+                min_precision=float(min_precision),
+            )
+            target_metrics = _metrics_at_threshold(target["label"], target[score_column], float(threshold["threshold"]))
+            selected = target[target[score_column].astype(float) >= float(threshold["threshold"])]
+            row = {
+                "fold": int(fold),
+                "threshold_source": source_name,
+                "max_pred_long_rate": float(cap),
+                "threshold": float(threshold["threshold"]),
+                "source_f1": float(threshold["f1"]),
+                "source_precision": float(threshold["precision"]),
+                "source_recall": float(threshold["recall"]),
+                "source_pred_long_rate": float(threshold["pred_long_rate"]),
+                "constraints_satisfied": bool(threshold["constraints_satisfied"]),
+                "reject_reason": str(threshold["reject_reason"]),
+                "test_f1": target_metrics["f1"],
+                "test_precision": target_metrics["precision"],
+                "test_recall": target_metrics["recall"],
+                "test_pred_long_rate": target_metrics["pred_long_rate"],
+                "selected_count": int(len(selected)),
+                "base_long_rate": base_long_rate,
+                "selected_long_rate": float(selected["label"].mean()) if not selected.empty else np.nan,
+                "lift_vs_base": float(selected["label"].mean() / base_long_rate)
+                if not selected.empty and base_long_rate > 0
+                else np.nan,
+                "mean_forward_return": float(selected["forward_return"].mean())
+                if not selected.empty and "forward_return" in selected.columns
+                else np.nan,
+            }
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["max_pred_long_rate", "fold"]).reset_index(drop=True)
+
+
+def threshold_grid_summary_diagnostics(threshold_grid: pd.DataFrame) -> pd.DataFrame:
+    if threshold_grid is None or threshold_grid.empty:
+        return pd.DataFrame()
+    frame = threshold_grid.copy()
+    aggregations: dict[str, Any] = {
+        "folds": ("fold", "nunique"),
+        "threshold_mean": ("threshold", "mean"),
+        "constraints_satisfied_fold_rate": ("constraints_satisfied", lambda values: float(pd.Series(values).astype(bool).mean())),
+        "mean_f1": ("test_f1", "mean"),
+        "mean_precision": ("test_precision", "mean"),
+        "mean_recall": ("test_recall", "mean"),
+        "mean_selection_rate": ("test_pred_long_rate", "mean"),
+        "mean_lift_vs_base": ("lift_vs_base", "mean"),
+        "positive_lift_fold_rate": ("lift_vs_base", lambda values: float((pd.to_numeric(values, errors="coerce") > 1.0).mean())),
+    }
+    if "mean_forward_return" in frame.columns:
+        aggregations["mean_forward_return"] = ("mean_forward_return", "mean")
+        aggregations["positive_forward_return_fold_rate"] = (
+            "mean_forward_return",
+            lambda values: float((pd.to_numeric(values, errors="coerce") > 0.0).mean()),
+        )
+    return frame.groupby("max_pred_long_rate", as_index=False).agg(**aggregations).reset_index(drop=True)
+
+
+def score_policy_grid_diagnostics(
+    predictions: pd.DataFrame,
+    *,
+    score_column: str = "prob_long",
+    bins: int = 10,
+    bands: list[dict[str, Any]] | None = None,
+    threshold_caps: list[float] | None = None,
+    min_precision: float = 0.30,
+) -> pd.DataFrame:
+    test_predictions = predictions[predictions["split"] == "test"].copy() if "split" in predictions.columns else predictions.copy()
+    rows: list[dict[str, Any]] = []
+
+    band_global = score_band_diagnostics(test_predictions, score_column=score_column, bins=bins, bands=bands)
+    band_by_fold = score_band_by_fold_diagnostics(test_predictions, score_column=score_column, bins=bins, bands=bands)
+    band_summary = score_band_summary_diagnostics(band_by_fold)
+    if not band_summary.empty:
+        global_by_band = {str(row["band"]): row for _, row in band_global.iterrows()} if not band_global.empty else {}
+        for _, item in band_summary.iterrows():
+            band = str(item["band"])
+            global_row = global_by_band.get(band, {})
+            rows.append(
+                {
+                    "policy_type": "score_band",
+                    "policy_name": band,
+                    "band": band,
+                    "threshold_cap": np.nan,
+                    "threshold_mean": np.nan,
+                    "folds": int(item.get("folds", 0)),
+                    "selection_rate": float(global_row.get("selection_rate", item.get("mean_selection_rate", np.nan))),
+                    "mean_selection_rate": float(item.get("mean_selection_rate", np.nan)),
+                    "precision": float(global_row.get("actual_long_rate", item.get("mean_actual_long_rate", np.nan))),
+                    "mean_precision": float(item.get("mean_actual_long_rate", np.nan)),
+                    "recall": float(global_row.get("recall", item.get("mean_recall", np.nan))),
+                    "mean_recall": float(item.get("mean_recall", np.nan)),
+                    "f1": float(global_row.get("f1", item.get("mean_f1", np.nan))),
+                    "mean_f1": float(item.get("mean_f1", np.nan)),
+                    "lift_vs_base": float(global_row.get("lift_vs_base", item.get("mean_lift_vs_base", np.nan))),
+                    "mean_lift_vs_base": float(item.get("mean_lift_vs_base", np.nan)),
+                    "positive_lift_fold_rate": float(item.get("positive_lift_fold_rate", np.nan)),
+                    "mean_forward_return": float(item.get("mean_forward_return", np.nan)),
+                    "forward_return": float(global_row.get("mean_forward_return", item.get("mean_forward_return", np.nan))),
+                    "positive_forward_return_fold_rate": float(item.get("positive_forward_return_fold_rate", np.nan)),
+                }
+            )
+
+    threshold_grid = threshold_grid_diagnostics(
+        predictions,
+        score_column=score_column,
+        max_pred_long_rates=threshold_caps,
+        min_precision=min_precision,
+    )
+    threshold_summary = threshold_grid_summary_diagnostics(threshold_grid)
+    for _, item in threshold_summary.iterrows():
+        cap = float(item["max_pred_long_rate"])
+        rows.append(
+            {
+                "policy_type": "threshold_cap",
+                "policy_name": f"threshold_cap_{cap:.2f}",
+                "band": "",
+                "threshold_cap": cap,
+                "threshold_mean": float(item.get("threshold_mean", np.nan)),
+                "folds": int(item.get("folds", 0)),
+                "selection_rate": float(item.get("mean_selection_rate", np.nan)),
+                "mean_selection_rate": float(item.get("mean_selection_rate", np.nan)),
+                "precision": float(item.get("mean_precision", np.nan)),
+                "mean_precision": float(item.get("mean_precision", np.nan)),
+                "recall": float(item.get("mean_recall", np.nan)),
+                "mean_recall": float(item.get("mean_recall", np.nan)),
+                "f1": float(item.get("mean_f1", np.nan)),
+                "mean_f1": float(item.get("mean_f1", np.nan)),
+                "lift_vs_base": float(item.get("mean_lift_vs_base", np.nan)),
+                "mean_lift_vs_base": float(item.get("mean_lift_vs_base", np.nan)),
+                "positive_lift_fold_rate": float(item.get("positive_lift_fold_rate", np.nan)),
+                "mean_forward_return": float(item.get("mean_forward_return", np.nan)),
+                "forward_return": float(item.get("mean_forward_return", np.nan)),
+                "positive_forward_return_fold_rate": float(item.get("positive_forward_return_fold_rate", np.nan)),
+                "constraints_satisfied_fold_rate": float(item.get("constraints_satisfied_fold_rate", np.nan)),
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+def select_score_policy(policy_grid: pd.DataFrame, config: dict[str, Any] | None = None) -> pd.DataFrame:
+    if policy_grid is None or policy_grid.empty:
+        return pd.DataFrame()
+    threshold_cfg = _config_get(config or {}, ["validation", "threshold_checks"], {}) or {}
+    policy_cfg = _config_get(config or {}, ["validation", "policy_selection"], {}) or {}
+    max_selection_rate = float(_config_get(policy_cfg, ["max_selection_rate"], _config_get(threshold_cfg, ["max_pred_long_rate"], 0.70)))
+    min_precision = float(_config_get(policy_cfg, ["min_precision"], _config_get(threshold_cfg, ["min_precision"], 0.30)))
+    min_lift = float(_config_get(policy_cfg, ["min_lift_vs_base"], 1.0))
+    min_positive_lift_rate = float(_config_get(policy_cfg, ["min_positive_lift_fold_rate"], 0.55))
+    min_positive_return_rate = float(_config_get(policy_cfg, ["min_positive_forward_return_fold_rate"], 0.55))
+    min_forward_return = float(_config_get(policy_cfg, ["min_forward_return"], 0.0))
+
+    frame = policy_grid.copy()
+    for column in (
+        "selection_rate",
+        "precision",
+        "lift_vs_base",
+        "positive_lift_fold_rate",
+        "positive_forward_return_fold_rate",
+        "mean_forward_return",
+        "f1",
+    ):
+        frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+    reasons = []
+    passes = []
+    for _, row in frame.iterrows():
+        row_reasons = []
+        if not pd.notna(row.get("selection_rate")) or float(row["selection_rate"]) > max_selection_rate:
+            row_reasons.append("selection_rate")
+        if not pd.notna(row.get("precision")) or float(row["precision"]) < min_precision:
+            row_reasons.append("precision")
+        if not pd.notna(row.get("lift_vs_base")) or float(row["lift_vs_base"]) <= min_lift:
+            row_reasons.append("lift_vs_base")
+        if not pd.notna(row.get("mean_forward_return")) or float(row["mean_forward_return"]) <= min_forward_return:
+            row_reasons.append("mean_forward_return")
+        if (
+            pd.notna(row.get("positive_lift_fold_rate"))
+            and float(row["positive_lift_fold_rate"]) < min_positive_lift_rate
+        ):
+            row_reasons.append("positive_lift_fold_rate")
+        if (
+            pd.notna(row.get("positive_forward_return_fold_rate"))
+            and float(row["positive_forward_return_fold_rate"]) < min_positive_return_rate
+        ):
+            row_reasons.append("positive_forward_return_fold_rate")
+        reasons.append(";".join(row_reasons))
+        passes.append(len(row_reasons) == 0)
+    frame["policy_pass"] = passes
+    frame["policy_reject_reason"] = reasons
+    frame = frame.sort_values(
+        [
+            "policy_pass",
+            "mean_forward_return",
+            "positive_forward_return_fold_rate",
+            "lift_vs_base",
+            "f1",
+            "selection_rate",
+        ],
+        ascending=[False, False, False, False, False, True],
+    ).reset_index(drop=True)
+    selected = frame.head(1).copy()
+    selected["selected_policy"] = True
+    return selected
 
 
 def score_lift_by_fold_diagnostics(

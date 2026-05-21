@@ -1383,6 +1383,14 @@ validation:
   threshold_checks:
     max_pred_long_rate: 0.70
     min_precision: 0.30
+  policy_selection:
+    threshold_caps: [0.30, 0.40, 0.50, 0.60, 0.70]
+    max_selection_rate: 0.70
+    min_precision: 0.30
+    min_lift_vs_base: 1.00
+    min_forward_return: 0.00
+    min_positive_lift_fold_rate: 0.55
+    min_positive_forward_return_fold_rate: 0.55
   score_lift_bins: 10
   score_bands:
     - {name: top_10, min_bin: 9, max_bin: 9}

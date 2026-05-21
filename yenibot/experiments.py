@@ -34,10 +34,14 @@ from yenibot.diagnostics import (
     score_band_by_fold_diagnostics,
     score_band_diagnostics,
     score_band_summary_diagnostics,
+    score_policy_grid_diagnostics,
+    select_score_policy,
     score_lift_by_fold_diagnostics,
     score_lift_diagnostics,
     stationarity_policy_diagnostics,
     threshold_diagnostics,
+    threshold_grid_diagnostics,
+    threshold_grid_summary_diagnostics,
     threshold_summary_diagnostics,
     write_phase1_diagnostic_bundle,
 )
@@ -469,11 +473,27 @@ def summarize_profile_predictions(
             calibrated_predictions = pd.DataFrame()
     score_bins = int(_cfg(profile_cfg, ["validation", "score_lift_bins"], _cfg(profile_cfg, ["validation", "calibration_bins"], 10)))
     score_bands = _cfg(profile_cfg, ["validation", "score_bands"], None)
+    policy_cfg = _cfg(profile_cfg, ["validation", "policy_selection"], {}) or {}
+    threshold_caps = [float(value) for value in policy_cfg.get("threshold_caps", [0.30, 0.40, 0.50, 0.60, 0.70])]
     score_lift = score_lift_diagnostics(test_predictions, bins=score_bins)
     score_lift_by_fold = score_lift_by_fold_diagnostics(test_predictions, bins=score_bins)
     score_band_lift = score_band_diagnostics(test_predictions, bins=score_bins, bands=score_bands)
     score_band_by_fold = score_band_by_fold_diagnostics(test_predictions, bins=score_bins, bands=score_bands)
     score_band_summary = score_band_summary_diagnostics(score_band_by_fold)
+    threshold_grid = threshold_grid_diagnostics(
+        predictions,
+        max_pred_long_rates=threshold_caps,
+        min_precision=float(threshold_cfg.get("min_precision", 0.30)),
+    )
+    threshold_grid_summary = threshold_grid_summary_diagnostics(threshold_grid)
+    score_policy_grid = score_policy_grid_diagnostics(
+        predictions,
+        bins=score_bins,
+        bands=score_bands,
+        threshold_caps=threshold_caps,
+        min_precision=float(threshold_cfg.get("min_precision", 0.30)),
+    )
+    score_policy_selection = select_score_policy(score_policy_grid, profile_cfg)
     recent = recent_fold_diagnostics(
         fold_metrics,
         recent_folds=int(_cfg(profile_cfg, ["validation", "recent_folds"], 5)),
@@ -513,11 +533,15 @@ def summarize_profile_predictions(
         "bad_fold_regime": bad_fold_regime,
         "threshold_metrics": threshold_metrics,
         "threshold_summary": threshold_summary,
+        "threshold_grid": threshold_grid,
+        "threshold_grid_summary": threshold_grid_summary,
         "score_lift": score_lift,
         "score_lift_by_fold": score_lift_by_fold,
         "score_band_lift": score_band_lift,
         "score_band_by_fold": score_band_by_fold,
         "score_band_summary": score_band_summary,
+        "score_policy_grid": score_policy_grid,
+        "score_policy_selection": score_policy_selection,
         "recent_fold_summary": recent,
         "mtf_leakage": mtf,
         "stationarity_policy": stationarity,
@@ -1217,6 +1241,10 @@ def _holdout_markdown(holdout_evaluation: pd.DataFrame, holdout_decision: dict[s
         "holdout_cv_threshold_f1",
         "holdout_cv_threshold_pred_long_rate",
         "holdout_cv_threshold_source",
+        "holdout_policy_name",
+        "holdout_policy_selection_rate",
+        "holdout_policy_forward_return",
+        "holdout_policy_pass",
         "mtf_leakage_passed",
         "holdout_soft_pass",
         "holdout_reject_reason",
@@ -1243,6 +1271,32 @@ def _write_holdout_files(
     holdout_evaluation.to_csv(path / "holdout_evaluation.csv", index=False)
     holdout_score_bands.to_csv(path / "holdout_score_band_summary.csv", index=False)
     holdout_thresholds.to_csv(path / "holdout_threshold_summary.csv", index=False)
+    policy_columns = [
+        column
+        for column in (
+            "candidate",
+            "candidate_type",
+            "holdout_policy_name",
+            "holdout_policy_type",
+            "holdout_policy_source",
+            "holdout_policy_selection_rate",
+            "holdout_policy_precision",
+            "holdout_policy_recall",
+            "holdout_policy_f1",
+            "holdout_policy_lift_vs_base",
+            "holdout_policy_forward_return",
+            "holdout_policy_pass",
+            "holdout_policy_reject_reason",
+            "frozen_selection",
+        )
+        if column in holdout_evaluation.columns
+    ]
+    holdout_policy_evaluation = (
+        holdout_evaluation[policy_columns].copy()
+        if policy_columns
+        else pd.DataFrame()
+    )
+    holdout_policy_evaluation.to_csv(path / "holdout_policy_evaluation.csv", index=False)
     (path / "holdout_evaluation.md").write_text(
         _holdout_markdown(holdout_evaluation, holdout_decision),
         encoding="utf-8",
@@ -1254,6 +1308,7 @@ def _write_holdout_files(
             "rows": holdout_evaluation.to_dict(orient="records"),
             "score_bands": holdout_score_bands.to_dict(orient="records"),
             "thresholds": holdout_thresholds.to_dict(orient="records"),
+            "policy_evaluation": holdout_policy_evaluation.to_dict(orient="records"),
         },
     )
 
@@ -1326,6 +1381,144 @@ def _attach_holdout_cv_threshold_metrics(
     return row
 
 
+def _cv_score_policy(entry: dict[str, Any] | None) -> dict[str, Any]:
+    if not entry:
+        return {}
+    diagnostics = entry.get("diagnostics", {}) or {}
+    selection = diagnostics.get("score_policy_selection")
+    if isinstance(selection, pd.DataFrame) and not selection.empty:
+        return selection.iloc[0].to_dict()
+    grid = diagnostics.get("score_policy_grid")
+    if isinstance(grid, pd.DataFrame) and not grid.empty:
+        chosen = select_score_policy(grid, entry.get("config", {}) or {})
+        if not chosen.empty:
+            return chosen.iloc[0].to_dict()
+    return {}
+
+
+def _policy_metrics_from_mask(predictions: pd.DataFrame, mask: pd.Series) -> dict[str, float]:
+    selected = predictions.loc[mask].copy()
+    base_long_rate = float(predictions["label"].mean()) if len(predictions) else np.nan
+    if selected.empty:
+        return {
+            "selection_rate": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "lift_vs_base": np.nan,
+            "forward_return": np.nan,
+        }
+    true_positive = float(selected["label"].astype(int).sum())
+    total_positive = float(predictions["label"].astype(int).sum())
+    precision = float(selected["label"].mean())
+    recall = true_positive / max(total_positive, 1.0)
+    f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+    return {
+        "selection_rate": float(len(selected) / len(predictions)) if len(predictions) else np.nan,
+        "precision": precision,
+        "recall": float(recall),
+        "f1": float(f1),
+        "lift_vs_base": float(precision / base_long_rate) if base_long_rate and base_long_rate > 0 else np.nan,
+        "forward_return": float(selected["forward_return"].mean()) if "forward_return" in selected.columns else np.nan,
+    }
+
+
+def _evaluate_score_policy_on_holdout(
+    predictions: pd.DataFrame,
+    policy: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not policy:
+        return {"source": "missing_cv_policy", "reject_reason": "missing_cv_policy"}
+    policy_type = str(policy.get("policy_type", ""))
+    policy_name = str(policy.get("policy_name", ""))
+    if policy_type == "score_band":
+        score_bins = int(_cfg(config, ["validation", "score_lift_bins"], _cfg(config, ["validation", "calibration_bins"], 10)))
+        score_bands = _cfg(config, ["validation", "score_bands"], None)
+        band_rows = score_band_diagnostics(predictions, bins=score_bins, bands=score_bands)
+        matched = band_rows.loc[band_rows["band"].astype(str) == policy_name]
+        if matched.empty:
+            return {
+                "name": policy_name,
+                "type": policy_type,
+                "source": "cv_score_policy_selection",
+                "reject_reason": "missing_holdout_band",
+            }
+        item = matched.iloc[0].to_dict()
+        metrics = {
+            "selection_rate": _float(item, "selection_rate"),
+            "precision": _float(item, "actual_long_rate"),
+            "recall": _float(item, "recall"),
+            "f1": _float(item, "f1"),
+            "lift_vs_base": _float(item, "lift_vs_base"),
+            "forward_return": _float(item, "mean_forward_return"),
+        }
+    elif policy_type == "threshold_cap":
+        threshold = _float(policy, "threshold_mean", np.nan)
+        if not np.isfinite(threshold):
+            return {
+                "name": policy_name,
+                "type": policy_type,
+                "source": "cv_score_policy_selection",
+                "reject_reason": "missing_cv_threshold_mean",
+            }
+        mask = pd.to_numeric(predictions["prob_long"], errors="coerce") >= threshold
+        metrics = _policy_metrics_from_mask(predictions, mask)
+    else:
+        return {
+            "name": policy_name,
+            "type": policy_type,
+            "source": "cv_score_policy_selection",
+            "reject_reason": "unknown_policy_type",
+        }
+
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    policy_cfg = _cfg(config, ["validation", "policy_selection"], {}) or {}
+    max_selection_rate = float(policy_cfg.get("max_selection_rate", threshold_cfg.get("max_pred_long_rate", 0.70)))
+    min_precision = float(policy_cfg.get("min_precision", threshold_cfg.get("min_precision", 0.30)))
+    min_lift = float(policy_cfg.get("min_lift_vs_base", 1.0))
+    min_forward_return = float(policy_cfg.get("min_forward_return", 0.0))
+    reasons = []
+    if metrics["selection_rate"] > max_selection_rate:
+        reasons.append("selection_rate")
+    if metrics["precision"] < min_precision:
+        reasons.append("precision")
+    if not np.isfinite(metrics["lift_vs_base"]) or metrics["lift_vs_base"] <= min_lift:
+        reasons.append("lift_vs_base")
+    if not np.isfinite(metrics["forward_return"]) or metrics["forward_return"] <= min_forward_return:
+        reasons.append("forward_return")
+    return {
+        "name": policy_name,
+        "type": policy_type,
+        "source": "cv_score_policy_selection",
+        **metrics,
+        "pass": len(reasons) == 0,
+        "reject_reason": ";".join(reasons),
+    }
+
+
+def _attach_holdout_policy_metrics(
+    row: dict[str, Any],
+    predictions: pd.DataFrame,
+    cv_entry: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    policy = _cv_score_policy(cv_entry)
+    metrics = _evaluate_score_policy_on_holdout(predictions, policy, config)
+    row["holdout_policy_name"] = metrics.get("name", "")
+    row["holdout_policy_type"] = metrics.get("type", "")
+    row["holdout_policy_source"] = metrics.get("source", "")
+    row["holdout_policy_selection_rate"] = metrics.get("selection_rate", np.nan)
+    row["holdout_policy_precision"] = metrics.get("precision", np.nan)
+    row["holdout_policy_recall"] = metrics.get("recall", np.nan)
+    row["holdout_policy_f1"] = metrics.get("f1", np.nan)
+    row["holdout_policy_lift_vs_base"] = metrics.get("lift_vs_base", np.nan)
+    row["holdout_policy_forward_return"] = metrics.get("forward_return", np.nan)
+    row["holdout_policy_pass"] = bool(metrics.get("pass", False))
+    row["holdout_policy_reject_reason"] = metrics.get("reject_reason", "")
+    return row
+
+
 def _holdout_soft_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> list[str]:
     max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
     reasons = []
@@ -1339,6 +1532,8 @@ def _holdout_soft_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> l
         reasons.append("holdout_cv_threshold_f1")
     if float(row.get("holdout_cv_threshold_pred_long_rate", 1.0)) > max_pred_long_rate:
         reasons.append("holdout_cv_threshold_pred_long_rate")
+    if not bool(row.get("holdout_policy_pass", False)):
+        reasons.append("holdout_policy")
     if float(row.get("calibration_separation", 0.0)) <= 0.0:
         reasons.append("calibration_separation")
     if not bool(row.get("mtf_leakage_passed", False)):
@@ -1412,7 +1607,9 @@ def _evaluate_holdout_candidates(
         row["source_profiles"] = str(entry["profile"])
         row["blend_method"] = ""
         row["blend_weights"] = ""
-        row = _attach_holdout_cv_threshold_metrics(row, predictions, cv_entry_by_profile.get(str(entry["profile"])))
+        cv_entry = cv_entry_by_profile.get(str(entry["profile"]))
+        row = _attach_holdout_cv_threshold_metrics(row, predictions, cv_entry)
+        row = _attach_holdout_policy_metrics(row, predictions, cv_entry, config)
         row = _attach_holdout_soft_pass(row, config)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
@@ -1445,7 +1642,9 @@ def _evaluate_holdout_candidates(
         row["source_profiles"] = row.get("blend_profiles", "")
         row["blend_method"] = row.get("blend_method", "")
         row["blend_weights"] = row.get("blend_weights", "")
-        row = _attach_holdout_cv_threshold_metrics(row, entry["predictions"], cv_entry_by_profile.get(str(entry["profile"])))
+        cv_entry = cv_entry_by_profile.get(str(entry["profile"]))
+        row = _attach_holdout_cv_threshold_metrics(row, entry["predictions"], cv_entry)
+        row = _attach_holdout_policy_metrics(row, entry["predictions"], cv_entry, config)
         row = _attach_holdout_soft_pass(row, config)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
@@ -2378,7 +2577,10 @@ def _write_profile_diagnostic_summaries(path: Path, entries: list[dict[str, Any]
     for key, filename in [
         ("fold_metrics", "profile_fold_metrics.csv"),
         ("threshold_summary", "profile_threshold_summary.csv"),
+        ("threshold_grid_summary", "profile_threshold_grid_summary.csv"),
         ("score_band_summary", "profile_score_band_summary.csv"),
+        ("score_policy_grid", "profile_score_policy_grid.csv"),
+        ("score_policy_selection", "profile_score_policy_selection.csv"),
         ("feature_groups", "profile_feature_groups.csv"),
     ]:
         frames = [tagged_frame(entry, key) for entry in entries]
@@ -2413,7 +2615,10 @@ def _write_experiment_bundle(
         "profile_blend.json",
         "profile_fold_metrics.csv",
         "profile_threshold_summary.csv",
+        "profile_threshold_grid_summary.csv",
         "profile_score_band_summary.csv",
+        "profile_score_policy_grid.csv",
+        "profile_score_policy_selection.csv",
         "profile_feature_groups.csv",
         "experiment_selection.csv",
         "experiment_selection.md",
@@ -2429,6 +2634,7 @@ def _write_experiment_bundle(
         "holdout_evaluation.json",
         "holdout_score_band_summary.csv",
         "holdout_threshold_summary.csv",
+        "holdout_policy_evaluation.csv",
         "decision_report.json",
         "best_candidate.json",
     ]
