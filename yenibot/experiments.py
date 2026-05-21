@@ -1323,6 +1323,10 @@ def _holdout_markdown(holdout_evaluation: pd.DataFrame, holdout_decision: dict[s
         "holdout_policy_forward_return",
         "holdout_policy_pass",
         "mtf_leakage_passed",
+        "holdout_signal_pass",
+        "holdout_signal_reject_reason",
+        "holdout_threshold_pass",
+        "holdout_threshold_reject_reason",
         "holdout_soft_pass",
         "holdout_reject_reason",
         "frozen_selection",
@@ -1364,6 +1368,12 @@ def _write_holdout_files(
             "holdout_policy_forward_return",
             "holdout_policy_pass",
             "holdout_policy_reject_reason",
+            "holdout_signal_pass",
+            "holdout_signal_reject_reason",
+            "holdout_threshold_pass",
+            "holdout_threshold_reject_reason",
+            "holdout_soft_pass",
+            "holdout_reject_reason",
             "frozen_selection",
         )
         if column in holdout_evaluation.columns
@@ -1596,30 +1606,45 @@ def _attach_holdout_policy_metrics(
     return row
 
 
-def _holdout_soft_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> list[str]:
-    max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+def _holdout_signal_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
     reasons = []
-    if float(row.get("mean_rank_ic", 0.0)) <= 0.03:
+    if float(row.get("mean_rank_ic", 0.0)) <= target_rank_ic:
         reasons.append("mean_rank_ic")
     if float(row.get("top_10_lift_global", 0.0)) <= 1.0:
         reasons.append("top_10_lift_global")
     if float(row.get("top_10_forward_return_global", 0.0)) <= 0.0:
         reasons.append("top_10_forward_return_global")
-    if float(row.get("holdout_cv_threshold_f1", 0.0)) <= 0.45:
-        reasons.append("holdout_cv_threshold_f1")
-    if float(row.get("holdout_cv_threshold_pred_long_rate", 1.0)) > max_pred_long_rate:
-        reasons.append("holdout_cv_threshold_pred_long_rate")
     if not bool(row.get("holdout_policy_pass", False)):
         reasons.append("holdout_policy")
     if float(row.get("calibration_separation", 0.0)) <= 0.0:
         reasons.append("calibration_separation")
     if not bool(row.get("mtf_leakage_passed", False)):
         reasons.append("mtf_leakage")
+    if not bool(row.get("stationarity_policy_passed", True)):
+        reasons.append("stationarity_policy")
+    return reasons
+
+
+def _holdout_threshold_pass_reasons(row: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    reasons = []
+    if float(row.get("holdout_cv_threshold_f1", 0.0)) <= min_long_f1:
+        reasons.append("holdout_cv_threshold_f1")
+    if float(row.get("holdout_cv_threshold_pred_long_rate", 1.0)) > max_pred_long_rate:
+        reasons.append("holdout_cv_threshold_pred_long_rate")
     return reasons
 
 
 def _attach_holdout_soft_pass(row: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    reasons = _holdout_soft_pass_reasons(row, config)
+    signal_reasons = _holdout_signal_pass_reasons(row, config)
+    threshold_reasons = _holdout_threshold_pass_reasons(row, config)
+    reasons = [*signal_reasons, *threshold_reasons]
+    row["holdout_signal_pass"] = len(signal_reasons) == 0
+    row["holdout_signal_reject_reason"] = ";".join(signal_reasons)
+    row["holdout_threshold_pass"] = len(threshold_reasons) == 0
+    row["holdout_threshold_reject_reason"] = ";".join(threshold_reasons)
     row["holdout_soft_pass"] = len(reasons) == 0
     row["holdout_reject_reason"] = ";".join(reasons)
     return row
@@ -1754,14 +1779,28 @@ def _evaluate_holdout_candidates(
     holdout_evaluation["frozen_selection"] = holdout_evaluation["candidate"].astype(str).eq(frozen_selection)
 
     sortable = holdout_evaluation.copy()
-    sortable["soft_pass_sort"] = sortable["holdout_soft_pass"].astype(bool).astype(int)
+    sortable["signal_pass_sort"] = sortable["holdout_signal_pass"].astype(bool).astype(int)
+    sortable["threshold_pass_sort"] = sortable["holdout_threshold_pass"].astype(bool).astype(int)
     sortable = sortable.sort_values(
-        ["soft_pass_sort", "mean_rank_ic", "top_10_lift_global", "holdout_cv_threshold_f1"],
-        ascending=[False, False, False, False],
+        [
+            "signal_pass_sort",
+            "threshold_pass_sort",
+            "mean_rank_ic",
+            "top_10_lift_global",
+            "holdout_cv_threshold_f1",
+        ],
+        ascending=[False, False, False, False, False],
     )
     observed_best = sortable.iloc[0].to_dict()
     frozen_rows = holdout_evaluation.loc[holdout_evaluation["frozen_selection"].astype(bool)]
     frozen_row = frozen_rows.iloc[0].to_dict() if not frozen_rows.empty else {}
+    observed_best_name = str(observed_best.get("candidate", ""))
+    observed_best_warning = ""
+    if observed_best_name and observed_best_name != frozen_selection:
+        observed_best_warning = (
+            "Observed-best holdout candidate is diagnostic only; do not promote it "
+            "or tune blend weights against this same reserved holdout."
+        )
     holdout_decision = {
         "available": True,
         "policy": "one_shot_final_validation; do not tune profiles or weights against this same holdout",
@@ -1771,6 +1810,7 @@ def _evaluate_holdout_candidates(
         "frozen_selection": frozen_selection,
         "frozen_selection_metrics": _json_ready(frozen_row),
         "observed_best_holdout_candidate": _json_ready(observed_best),
+        "observed_best_holdout_warning": observed_best_warning,
     }
     return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
 

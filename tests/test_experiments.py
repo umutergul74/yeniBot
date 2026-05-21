@@ -10,6 +10,7 @@ import pytest
 
 from yenibot.config import load_config
 from yenibot.experiments import (
+    _attach_holdout_soft_pass,
     _auto_full_profiles,
     _best_profile_blend,
     _experiment_selection_frame,
@@ -98,6 +99,36 @@ def test_experiment_settings_skips_historically_rejected_candidates() -> None:
         {"profile": "rejected", "role": "always_full_profile", "skip_reason": "known_bad_run"},
         {"profile": "rejected", "role": "seed_audit_profile", "skip_reason": "known_bad_run"},
     ]
+
+
+def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    row = {
+        "mean_rank_ic": 0.06,
+        "top_10_lift_global": 1.12,
+        "top_10_forward_return_global": 0.002,
+        "holdout_policy_pass": True,
+        "calibration_separation": 0.01,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+        "holdout_cv_threshold_f1": 0.48,
+        "holdout_cv_threshold_pred_long_rate": 0.78,
+    }
+
+    evaluated = _attach_holdout_soft_pass(row, config)
+
+    assert evaluated["holdout_signal_pass"] is True
+    assert evaluated["holdout_signal_reject_reason"] == ""
+    assert evaluated["holdout_threshold_pass"] is False
+    assert evaluated["holdout_threshold_reject_reason"] == "holdout_cv_threshold_pred_long_rate"
+    assert evaluated["holdout_soft_pass"] is False
+    assert evaluated["holdout_reject_reason"] == "holdout_cv_threshold_pred_long_rate"
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -274,6 +305,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
+    notes = config["experiments"]["experiment_memory"]["reference_notes"]
+    assert "diagnostic only" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
+    assert "score-band signal" in notes["blend_prob_mean_953a4ee825"]
+    assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -1382,10 +1417,22 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
         "holdout_policy_selection_rate",
         "holdout_policy_forward_return",
         "holdout_policy_pass",
+        "holdout_signal_pass",
+        "holdout_signal_reject_reason",
+        "holdout_threshold_pass",
+        "holdout_threshold_reject_reason",
+        "holdout_soft_pass",
         "holdout_reject_reason",
     }.issubset(holdout_evaluation.columns)
     assert holdout_evaluation["holdout_cv_threshold_source"].eq("cv_constrained_threshold").all()
     assert holdout_evaluation["holdout_cv_threshold_pred_long_rate"].between(0.0, 1.0).all()
+    assert (
+        holdout_evaluation["holdout_soft_pass"].astype(bool)
+        == (
+            holdout_evaluation["holdout_signal_pass"].astype(bool)
+            & holdout_evaluation["holdout_threshold_pass"].astype(bool)
+        )
+    ).all()
     assert holdout_evaluation["mtf_leakage_passed"].all()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
