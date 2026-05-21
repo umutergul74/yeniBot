@@ -77,6 +77,8 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, (np.floating,)):
         number = float(value)
         return number if np.isfinite(number) else None
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
     if isinstance(value, (np.bool_,)):
         return bool(value)
     if isinstance(value, pd.Timestamp):
@@ -442,7 +444,12 @@ def summarize_profile_predictions(
         bad_ic=float(_cfg(profile_cfg, ["validation", "bad_fold_ic_threshold"], -0.08)),
     )
     bad_fold_regime = bad_fold_regime_diagnostics(regime_by_fold)
-    threshold_metrics = threshold_diagnostics(predictions)
+    threshold_cfg = _cfg(profile_cfg, ["validation", "threshold_checks"], {}) or {}
+    threshold_metrics = threshold_diagnostics(
+        predictions,
+        max_pred_long_rate=float(threshold_cfg.get("max_pred_long_rate", 0.70)),
+        min_precision=float(threshold_cfg.get("min_precision", 0.30)),
+    )
     threshold_summary = threshold_summary_diagnostics(threshold_metrics)
     report = attach_threshold_summary_to_phase1_report(report, threshold_summary, profile_cfg)
     calibrated_report = None
@@ -651,14 +658,27 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("positive_ic_fraction")
     if _float(row, "std_rank_ic") > _float(control, "std_rank_ic") + float(gates.get("max_std_rank_ic_delta", 0.0)):
         reasons.append("std_rank_ic")
-    selected_f1 = _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1"))
-    control_selected_f1 = _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1"))
+    selected_f1 = _metric_or(
+        row,
+        "test_f1_at_constrained_threshold",
+        _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+    )
+    control_selected_f1 = _metric_or(
+        control,
+        "test_f1_at_constrained_threshold",
+        _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+    )
     selected_f1_floor = _optional_gate_float(gates, "min_selected_threshold_f1", None)
     if selected_f1_floor is not None and selected_f1 < selected_f1_floor:
-        reasons.append("selected_threshold_f1")
+        reasons.append("constrained_threshold_f1")
     selected_f1_delta = _optional_gate_float(gates, "min_selected_threshold_f1_delta", None)
     if selected_f1_delta is not None and selected_f1 < control_selected_f1 + selected_f1_delta:
-        reasons.append("selected_threshold_f1_delta")
+        reasons.append("constrained_threshold_f1_delta")
+    threshold_checks = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_checks.get("max_pred_long_rate", 0.70))
+    constrained_pred_rate = _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan)
+    if np.isfinite(constrained_pred_rate) and constrained_pred_rate > max_pred_long_rate:
+        reasons.append("constrained_pred_long_rate")
     mean_long_f1_delta = _optional_gate_float(gates, "min_long_f1_delta", None)
     if mean_long_f1_delta is not None and _float(row, "mean_long_f1") < _float(control, "mean_long_f1") + mean_long_f1_delta:
         reasons.append("mean_long_f1_delta")
@@ -756,6 +776,11 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "test_recall_at_selected_threshold",
         "test_pred_long_rate_at_selected_threshold",
         "selected_threshold_mean",
+        "test_f1_at_constrained_threshold",
+        "test_precision_at_constrained_threshold",
+        "test_recall_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
+        "constrained_threshold_mean",
         "mean_prauc",
         "calibration_separation",
         "recent_rank_ic_mean",
@@ -773,6 +798,7 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "stationarity_policy_passed",
         "passed_phase1",
         "passed_phase1_selected_threshold",
+        "passed_phase1_constrained_threshold",
         "promotable",
         "reject_reason",
         "data_start",
@@ -817,9 +843,12 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "worst_5_rank_ic_mean",
             "mean_long_f1",
             "test_f1_at_selected_threshold",
+            "test_f1_at_constrained_threshold",
+            "test_pred_long_rate_at_constrained_threshold",
             "top_10_lift_global",
             "top_10_bad_fold_lift_mean",
             "passed_phase1_selected_threshold",
+            "passed_phase1_constrained_threshold",
             "promotable",
             "reject_reason",
         ]
@@ -1248,6 +1277,12 @@ def _cv_selected_threshold(entry: dict[str, Any] | None) -> tuple[float, str]:
         return 0.5, "fallback_0.50_missing_cv_entry"
     diagnostics = entry.get("diagnostics", {}) or {}
     row = diagnostics.get("row", {}) or {}
+    threshold = _float(row, "constrained_threshold_mean", np.nan)
+    if np.isfinite(threshold):
+        return threshold, "cv_constrained_threshold"
+    threshold = _threshold_summary_value(diagnostics.get("threshold_summary"), "constrained_threshold")
+    if np.isfinite(threshold):
+        return threshold, "cv_constrained_threshold"
     threshold = _float(row, "selected_threshold_mean", np.nan)
     if np.isfinite(threshold):
         return threshold, "cv_selected_threshold"
@@ -1477,7 +1512,17 @@ def _fold_delta_frame(entry: dict[str, Any]) -> pd.DataFrame:
             frame = frame.merge(score_lift[["fold", *lift_columns]], on="fold", how="left")
     thresholds = diagnostics["threshold_metrics"]
     if thresholds is not None and not thresholds.empty and "test_f1_at_selected_threshold" in thresholds.columns:
-        frame = frame.merge(thresholds[["fold", "test_f1_at_selected_threshold"]], on="fold", how="left")
+        merge_columns = [
+            column
+            for column in (
+                "fold",
+                "test_f1_at_selected_threshold",
+                "test_f1_at_constrained_threshold",
+                "test_pred_long_rate_at_constrained_threshold",
+            )
+            if column in thresholds.columns
+        ]
+        frame = frame.merge(thresholds[merge_columns], on="fold", how="left")
     return frame
 
 
@@ -1604,6 +1649,10 @@ def _seed_stability_frame(seed_audit: pd.DataFrame) -> pd.DataFrame:
         "top_10_lift_global_seed_std",
         "test_f1_at_selected_threshold_seed_mean",
         "test_f1_at_selected_threshold_seed_std",
+        "test_f1_at_constrained_threshold_seed_mean",
+        "test_f1_at_constrained_threshold_seed_std",
+        "test_pred_long_rate_at_constrained_threshold_seed_mean",
+        "test_pred_long_rate_at_constrained_threshold_seed_std",
         "worst_5_rank_ic_mean_seed_mean",
         "worst_5_rank_ic_mean_seed_std",
     ]
@@ -1616,6 +1665,8 @@ def _seed_stability_frame(seed_audit: pd.DataFrame) -> pd.DataFrame:
         "std_rank_ic",
         "top_10_lift_global",
         "test_f1_at_selected_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
         "worst_5_rank_ic_mean",
     ]
     frame = seed_audit.copy()
@@ -1634,6 +1685,10 @@ def _seed_stability_frame(seed_audit: pd.DataFrame) -> pd.DataFrame:
         top_10_lift_global_seed_std=("top_10_lift_global", "std"),
         test_f1_at_selected_threshold_seed_mean=("test_f1_at_selected_threshold", "mean"),
         test_f1_at_selected_threshold_seed_std=("test_f1_at_selected_threshold", "std"),
+        test_f1_at_constrained_threshold_seed_mean=("test_f1_at_constrained_threshold", "mean"),
+        test_f1_at_constrained_threshold_seed_std=("test_f1_at_constrained_threshold", "std"),
+        test_pred_long_rate_at_constrained_threshold_seed_mean=("test_pred_long_rate_at_constrained_threshold", "mean"),
+        test_pred_long_rate_at_constrained_threshold_seed_std=("test_pred_long_rate_at_constrained_threshold", "std"),
         worst_5_rank_ic_mean_seed_mean=("worst_5_rank_ic_mean", "mean"),
         worst_5_rank_ic_mean_seed_std=("worst_5_rank_ic_mean", "std"),
     )
@@ -1654,6 +1709,8 @@ def _seed_audit_markdown(seed_audit: pd.DataFrame, seed_stability: pd.DataFrame)
             "positive_ic_fraction",
             "top_10_lift_global",
             "test_f1_at_selected_threshold",
+            "test_f1_at_constrained_threshold",
+            "test_pred_long_rate_at_constrained_threshold",
             "worst_5_rank_ic_mean",
         ]
         lines.extend(["## Per Seed", ""])
@@ -1814,6 +1871,8 @@ def _seed_ensemble_markdown(seed_ensemble: pd.DataFrame) -> str:
         "positive_ic_fraction",
         "top_10_lift_global",
         "test_f1_at_selected_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
         "prob_long_seed_std_mean",
         "prob_long_seed_std_p90",
     ]
@@ -2104,10 +2163,14 @@ def _profile_blend_review_frame(
         row["std_rank_ic_delta_vs_control"] = _float(row, "std_rank_ic") - _float(control, "std_rank_ic")
         row["positive_ic_fraction_delta_vs_control"] = _float(row, "positive_ic_fraction") - _float(control, "positive_ic_fraction")
         row["top_10_lift_global_delta_vs_control"] = _float(row, "top_10_lift_global") - _float(control, "top_10_lift_global")
-        row["selected_threshold_f1_delta_vs_control"] = _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")) - _metric_or(
+        row["selected_threshold_f1_delta_vs_control"] = _metric_or(
+            row,
+            "test_f1_at_constrained_threshold",
+            _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+        ) - _metric_or(
             control,
-            "test_f1_at_selected_threshold",
-            _float(control, "mean_long_f1"),
+            "test_f1_at_constrained_threshold",
+            _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
         )
         row["worst_5_rank_ic_delta_vs_control"] = _float(row, "worst_5_rank_ic_mean") - _float(control, "worst_5_rank_ic_mean")
         reasons = []
@@ -2270,6 +2333,8 @@ def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
         "top_10_lift_global",
         "top_10_lift_global_delta_vs_control",
         "test_f1_at_selected_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
         "reviewable",
         "review_reason",
         "balanced_eligible",

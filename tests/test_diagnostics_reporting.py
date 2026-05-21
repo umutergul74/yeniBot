@@ -170,8 +170,37 @@ def test_calibration_threshold_and_leakage_diagnostics() -> None:
     assert "prob_long_calibrated" in calibrated.columns
     assert "mean_rank_ic" in report
     assert len(calibrated_table) == 4
-    assert {"selected_threshold", "test_oracle_best_f1"}.issubset(thresholds.columns)
+    assert {
+        "selected_threshold",
+        "constrained_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
+        "test_oracle_best_f1",
+    }.issubset(thresholds.columns)
     assert leakage["passed"].all()
+
+
+def test_constrained_threshold_caps_pred_long_rate() -> None:
+    predictions = pd.DataFrame(
+        {
+            "fold": [0] * 12,
+            "split": ["val"] * 6 + ["test"] * 6,
+            "label": [1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+            "prob_long": [0.91, 0.88, 0.82, 0.80, 0.78, 0.76, 0.93, 0.85, 0.84, 0.79, 0.72, 0.68],
+        }
+    )
+
+    thresholds = threshold_diagnostics(
+        predictions,
+        max_pred_long_rate=0.50,
+        min_precision=0.30,
+    )
+
+    row = thresholds.iloc[0]
+    assert bool(row["constrained_threshold_constraints_satisfied"]) is True
+    assert row["source_constrained_pred_long_rate"] <= 0.50
+    assert row["test_pred_long_rate_at_constrained_threshold"] <= 0.50
+    assert row["constrained_threshold_source"] == "constrained_f1"
 
 
 def test_regime_by_fold_diagnostics_compares_bad_folds() -> None:

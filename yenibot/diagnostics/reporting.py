@@ -185,9 +185,13 @@ def threshold_diagnostics(
     *,
     score_column: str = "prob_long",
     threshold_source: str = "val",
+    max_pred_long_rate: float | None = None,
+    min_precision: float | None = None,
 ) -> pd.DataFrame:
     """Report whether bad F1 is mostly a threshold/calibration problem."""
 
+    max_pred_long_rate = 0.70 if max_pred_long_rate is None else float(max_pred_long_rate)
+    min_precision = 0.30 if min_precision is None else float(min_precision)
     rows = []
     has_splits = "split" in predictions.columns
     for fold, fold_part in predictions.groupby("fold"):
@@ -207,6 +211,17 @@ def threshold_diagnostics(
 
         source_best = best_f1_threshold(source["label"], source[score_column])
         target_at_source = _metrics_at_threshold(target["label"], target[score_column], source_best["threshold"])
+        source_constrained = constrained_f1_threshold(
+            source["label"],
+            source[score_column],
+            max_pred_long_rate=max_pred_long_rate,
+            min_precision=min_precision,
+        )
+        target_at_constrained = _metrics_at_threshold(
+            target["label"],
+            target[score_column],
+            source_constrained["threshold"],
+        )
         target_oracle = best_f1_threshold(target["label"], target[score_column])
         rows.append(
             {
@@ -218,6 +233,18 @@ def threshold_diagnostics(
                 "test_precision_at_selected_threshold": target_at_source["precision"],
                 "test_recall_at_selected_threshold": target_at_source["recall"],
                 "test_pred_long_rate_at_selected_threshold": target_at_source["pred_long_rate"],
+                "constrained_threshold": source_constrained["threshold"],
+                "constrained_threshold_source": source_constrained["threshold_source"],
+                "constrained_threshold_constraints_satisfied": source_constrained["constraints_satisfied"],
+                "constrained_threshold_reject_reason": source_constrained["reject_reason"],
+                "source_constrained_f1": source_constrained["f1"],
+                "source_constrained_precision": source_constrained["precision"],
+                "source_constrained_recall": source_constrained["recall"],
+                "source_constrained_pred_long_rate": source_constrained["pred_long_rate"],
+                "test_f1_at_constrained_threshold": target_at_constrained["f1"],
+                "test_precision_at_constrained_threshold": target_at_constrained["precision"],
+                "test_recall_at_constrained_threshold": target_at_constrained["recall"],
+                "test_pred_long_rate_at_constrained_threshold": target_at_constrained["pred_long_rate"],
                 "test_oracle_best_threshold": target_oracle["threshold"],
                 "test_oracle_best_f1": target_oracle["f1"],
                 "test_f1_at_050": _metrics_at_threshold(target["label"], target[score_column], 0.5)["f1"],
@@ -238,6 +265,15 @@ def threshold_summary_diagnostics(threshold_metrics: pd.DataFrame) -> pd.DataFra
         "test_precision_at_selected_threshold",
         "test_recall_at_selected_threshold",
         "test_pred_long_rate_at_selected_threshold",
+        "constrained_threshold",
+        "source_constrained_f1",
+        "source_constrained_precision",
+        "source_constrained_recall",
+        "source_constrained_pred_long_rate",
+        "test_f1_at_constrained_threshold",
+        "test_precision_at_constrained_threshold",
+        "test_recall_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
         "test_oracle_best_f1",
         "test_f1_at_050",
     ]
@@ -259,6 +295,65 @@ def threshold_summary_diagnostics(threshold_metrics: pd.DataFrame) -> pd.DataFra
             }
         )
     return pd.DataFrame(rows)
+
+
+def constrained_f1_threshold(
+    labels: pd.Series,
+    scores: pd.Series,
+    *,
+    max_pred_long_rate: float = 0.70,
+    min_precision: float = 0.30,
+) -> dict[str, float | bool | str]:
+    y_score = scores.astype(float).to_numpy()
+    if len(y_score) == 0:
+        return {
+            "threshold": 0.5,
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "pred_long_rate": 0.0,
+            "threshold_source": "empty_fallback",
+            "constraints_satisfied": False,
+            "reject_reason": "empty_source",
+        }
+
+    fallback = best_f1_threshold(labels, scores)
+    candidates = sorted(set(float(value) for value in y_score if np.isfinite(value)))
+    if 0.5 not in candidates:
+        candidates.append(0.5)
+    rows = []
+    for threshold in candidates:
+        metrics = _metrics_at_threshold(labels, scores, threshold)
+        rows.append({"threshold": threshold, **metrics})
+    feasible = [
+        row
+        for row in rows
+        if row["pred_long_rate"] <= max_pred_long_rate
+        and row["precision"] >= min_precision
+        and row["pred_long_rate"] > 0.0
+    ]
+    if not feasible:
+        return {
+            **fallback,
+            "threshold_source": "unconstrained_fallback",
+            "constraints_satisfied": False,
+            "reject_reason": "no_threshold_satisfies_pred_rate_precision",
+        }
+    best = max(
+        feasible,
+        key=lambda row: (
+            row["f1"],
+            row["precision"],
+            -row["pred_long_rate"],
+            row["threshold"],
+        ),
+    )
+    return {
+        **best,
+        "threshold_source": "constrained_f1",
+        "constraints_satisfied": True,
+        "reject_reason": "",
+    }
 
 
 def best_f1_threshold(labels: pd.Series, scores: pd.Series) -> dict[str, float]:
@@ -826,9 +921,24 @@ def experiment_ledger_diagnostics(
         threshold_summary,
         "test_pred_long_rate_at_selected_threshold",
     )
+    constrained_threshold_mean = _threshold_summary_mean(threshold_summary, "constrained_threshold")
+    test_f1_at_constrained_threshold = _threshold_summary_mean(threshold_summary, "test_f1_at_constrained_threshold")
+    test_precision_at_constrained_threshold = _threshold_summary_mean(
+        threshold_summary,
+        "test_precision_at_constrained_threshold",
+    )
+    test_recall_at_constrained_threshold = _threshold_summary_mean(
+        threshold_summary,
+        "test_recall_at_constrained_threshold",
+    )
+    test_pred_long_rate_at_constrained_threshold = _threshold_summary_mean(
+        threshold_summary,
+        "test_pred_long_rate_at_constrained_threshold",
+    )
     test_oracle_best_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
     test_f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
     selected_threshold_passed = bool(report.get("passed_threshold_selected", False))
+    constrained_threshold_passed = bool(report.get("passed_threshold_constrained", False))
     return pd.DataFrame(
         [
             {
@@ -847,6 +957,11 @@ def experiment_ledger_diagnostics(
                 "test_precision_at_selected_threshold": test_precision_at_selected_threshold,
                 "test_recall_at_selected_threshold": test_recall_at_selected_threshold,
                 "test_pred_long_rate_at_selected_threshold": test_pred_long_rate_at_selected_threshold,
+                "constrained_threshold_mean": constrained_threshold_mean,
+                "test_f1_at_constrained_threshold": test_f1_at_constrained_threshold,
+                "test_precision_at_constrained_threshold": test_precision_at_constrained_threshold,
+                "test_recall_at_constrained_threshold": test_recall_at_constrained_threshold,
+                "test_pred_long_rate_at_constrained_threshold": test_pred_long_rate_at_constrained_threshold,
                 "test_oracle_best_f1": test_oracle_best_f1,
                 "test_f1_at_050": test_f1_at_050,
                 "mean_prauc": float(report.get("mean_prauc", np.nan)),
@@ -867,6 +982,7 @@ def experiment_ledger_diagnostics(
                 "top_10_forward_return_global": top_10_forward_return_global,
                 "passed_phase1": bool(report.get("passed", False)),
                 "passed_phase1_selected_threshold": selected_threshold_passed,
+                "passed_phase1_constrained_threshold": constrained_threshold_passed,
                 "promotable": bool(promotable) if promotable is not None else bool(report.get("passed", False)),
                 "reject_reason": reject_reason,
             }
@@ -890,6 +1006,11 @@ def attach_threshold_summary_to_phase1_report(
     selected_precision = _threshold_summary_mean(threshold_summary, "test_precision_at_selected_threshold")
     selected_recall = _threshold_summary_mean(threshold_summary, "test_recall_at_selected_threshold")
     selected_pred_rate = _threshold_summary_mean(threshold_summary, "test_pred_long_rate_at_selected_threshold")
+    constrained_threshold = _threshold_summary_mean(threshold_summary, "constrained_threshold")
+    constrained_f1 = _threshold_summary_mean(threshold_summary, "test_f1_at_constrained_threshold")
+    constrained_precision = _threshold_summary_mean(threshold_summary, "test_precision_at_constrained_threshold")
+    constrained_recall = _threshold_summary_mean(threshold_summary, "test_recall_at_constrained_threshold")
+    constrained_pred_rate = _threshold_summary_mean(threshold_summary, "test_pred_long_rate_at_constrained_threshold")
     oracle_f1 = _threshold_summary_mean(threshold_summary, "test_oracle_best_f1")
     f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
     min_long_f1 = float(_config_get(config or {}, ["validation", "min_long_f1"], 0.45))
@@ -902,6 +1023,13 @@ def attach_threshold_summary_to_phase1_report(
         "selected_precision": bool(pd.notna(selected_precision) and selected_precision >= min_precision),
         "selected_pred_long_rate": bool(pd.notna(selected_pred_rate) and selected_pred_rate <= max_pred_long_rate),
     }
+    constrained_checks = {
+        "long_f1_constrained_threshold": bool(pd.notna(constrained_f1) and constrained_f1 > min_long_f1),
+        "constrained_precision": bool(pd.notna(constrained_precision) and constrained_precision >= min_precision),
+        "constrained_pred_long_rate": bool(
+            pd.notna(constrained_pred_rate) and constrained_pred_rate <= max_pred_long_rate
+        ),
+    }
     core_checks = dict(updated.get("checks", {}) or {})
     threshold_phase_checks = {
         key: value
@@ -909,6 +1037,12 @@ def attach_threshold_summary_to_phase1_report(
         if key != "long_f1"
     }
     threshold_phase_checks.update(threshold_checks)
+    constrained_phase_checks = {
+        key: value
+        for key, value in core_checks.items()
+        if key != "long_f1"
+    }
+    constrained_phase_checks.update(constrained_checks)
 
     updated["threshold_selected"] = {
         "selected_threshold_mean": selected_threshold,
@@ -919,8 +1053,17 @@ def attach_threshold_summary_to_phase1_report(
         "test_oracle_best_f1": oracle_f1,
         "test_f1_at_050": f1_at_050,
     }
+    updated["threshold_constrained"] = {
+        "constrained_threshold_mean": constrained_threshold,
+        "test_f1_at_constrained_threshold": constrained_f1,
+        "test_precision_at_constrained_threshold": constrained_precision,
+        "test_recall_at_constrained_threshold": constrained_recall,
+        "test_pred_long_rate_at_constrained_threshold": constrained_pred_rate,
+    }
     updated["checks_threshold_selected"] = threshold_phase_checks
+    updated["checks_threshold_constrained"] = constrained_phase_checks
     updated["passed_threshold_selected"] = all(bool(value) for value in threshold_phase_checks.values())
+    updated["passed_threshold_constrained"] = all(bool(value) for value in constrained_phase_checks.values())
     return updated
 
 
@@ -1477,6 +1620,7 @@ def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str
     top_good = fold_metrics.sort_values("rank_ic", ascending=False).head(5)[["fold", "rank_ic"]]
     top_bad = fold_metrics.sort_values("rank_ic", ascending=True).head(5)[["fold", "rank_ic"]]
     threshold_selected = report.get("threshold_selected", {}) or {}
+    threshold_constrained = report.get("threshold_constrained", {}) or {}
 
     def fmt(value: object) -> str:
         try:
@@ -1505,6 +1649,16 @@ def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str
                 f"Selected-Threshold Pred Long Rate: {fmt(threshold_selected.get('test_pred_long_rate_at_selected_threshold'))}",
             ]
         )
+    if threshold_constrained:
+        lines.extend(
+            [
+                f"Constrained Threshold Mean: {fmt(threshold_constrained.get('constrained_threshold_mean'))}",
+                f"Constrained-Threshold Long F1: {fmt(threshold_constrained.get('test_f1_at_constrained_threshold'))}",
+                f"Constrained-Threshold Precision: {fmt(threshold_constrained.get('test_precision_at_constrained_threshold'))}",
+                f"Constrained-Threshold Recall: {fmt(threshold_constrained.get('test_recall_at_constrained_threshold'))}",
+                f"Constrained-Threshold Pred Long Rate: {fmt(threshold_constrained.get('test_pred_long_rate_at_constrained_threshold'))}",
+            ]
+        )
     lines.extend(["", "## Checks"])
     checks = report.get("checks", {})
     lines.extend(f"- {name}: {value}" for name, value in checks.items())
@@ -1513,6 +1667,11 @@ def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str
         lines.append("")
         lines.append("## Threshold-Selected Checks")
         lines.extend(f"- {name}: {value}" for name, value in threshold_checks.items())
+    constrained_checks = report.get("checks_threshold_constrained", {})
+    if constrained_checks:
+        lines.append("")
+        lines.append("## Threshold-Constrained Checks")
+        lines.extend(f"- {name}: {value}" for name, value in constrained_checks.items())
     alerts = report.get("alerts", [])
     if alerts:
         lines.append("")
@@ -1548,7 +1707,7 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_json_safe(item) for item in value]
     if isinstance(value, np.generic):
-        return value.item()
+        return _json_safe(value.item())
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     if isinstance(value, float) and not np.isfinite(value):
