@@ -61,6 +61,43 @@ def test_train_one_fold_repeats_with_same_seed_on_cpu(synthetic_klines, tiny_con
     )
 
 
+def test_train_one_fold_supports_val_loss_early_stopping_as_explicit_experiment(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["training"]["early_stop_metric"] = "val_loss"
+    config["training"]["epochs"] = 2
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    result = train_one_fold(frame, fold, features.feature_columns, config, device="cpu")
+
+    history = result["history"]
+    assert set(history["early_stop_metric"]) == {"val_loss"}
+    assert history["early_stop_value"].notna().all()
+    assert history["val_loss"].notna().all()
+
+
+def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["training"]["early_stop_metric"] = "not_a_real_metric"
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    with pytest.raises(ValueError, match="Unsupported early_stop_metric"):
+        train_one_fold(frame, fold, features.feature_columns, config, device="cpu")
+
+
 def test_run_walk_forward_training_fails_fast_on_active_feature_nans(synthetic_klines, tiny_config) -> None:
     primary = synthetic_klines(190, "1h")
     htf = synthetic_klines(60, "4h")

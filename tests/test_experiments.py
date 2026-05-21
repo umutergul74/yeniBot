@@ -245,6 +245,11 @@ def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() 
 def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries() -> None:
     config = load_config("config.yaml")
     assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
+    assert config["model"]["dropout"] == 0.2
+    assert config["training"]["early_stop_metric"] == "rank_ic"
+    assert config["training"]["rank_ic_smoothing_epochs"] == 5
+    assert config["training"]["optimizer"]["weight_decay"] == 0.0001
+    assert config["walk_forward"]["val_bars"] == 1080
     assert (
         config["experiments"]["control_profile"]
         == "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility"
