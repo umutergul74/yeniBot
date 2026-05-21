@@ -181,11 +181,37 @@ def _add_regime_probs(part: pd.DataFrame, hmm: OnlineGaussianHMM, config: Any) -
     return out
 
 
-def _evaluate(model: HybridEncoder, dataset: SequenceDataset, source_part: pd.DataFrame, config: Any, device: torch.device) -> dict[str, float]:
+def _evaluate(
+    model: HybridEncoder,
+    dataset: SequenceDataset,
+    source_part: pd.DataFrame,
+    config: Any,
+    device: torch.device,
+    *,
+    focal: FocalLossWithLogits | None = None,
+    rank_loss: RankICLoss | None = None,
+    rank_weight: float = 0.2,
+) -> dict[str, float]:
     batch_size = int(_cfg(config, ["training", "batch_size"], 256))
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    val_losses = []
+    model.eval()
+    with torch.no_grad():
+        for x, y, fwd, _ in loader:
+            x = x.to(device)
+            y = y.to(device)
+            fwd = fwd.to(device)
+            logits = model(x, return_logits=True)
+            probs = torch.sigmoid(logits)
+            if focal is not None and rank_loss is not None:
+                loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
+                val_losses.append(float(loss.detach().cpu()))
+
     pred = _predict_dataset(model, dataset, source_part, batch_size=batch_size, device=device)
     metrics = classification_metrics(pred["label"], pred["prob_long"])
     metrics["rank_ic"] = rank_ic(pred["prob_long"], pred["forward_return"])
+    if val_losses:
+        metrics["val_loss"] = float(np.mean(val_losses))
     return metrics
 
 
@@ -247,7 +273,12 @@ def train_one_fold(
         generator=torch.Generator().manual_seed(fold_seed),
     )
 
-    best_rank_ic = -np.inf
+    early_stop_metric = str(_cfg(train_cfg, ["early_stop_metric"], "rank_ic"))
+    if early_stop_metric == "val_loss":
+        best_metric = np.inf
+    else:
+        best_metric = -np.inf
+
     best_state: dict[str, torch.Tensor] | None = None
     patience = int(_cfg(train_cfg, ["early_stop_patience"], 15))
     epochs = int(_cfg(train_cfg, ["epochs"], 100))
@@ -272,10 +303,37 @@ def train_one_fold(
             losses.append(float(loss.detach().cpu()))
         scheduler.step(epoch + 1)
 
-        val_metrics = _evaluate(model, val_dataset, val_part, config, torch_device)
+        val_metrics = _evaluate(
+            model,
+            val_dataset,
+            val_part,
+            config,
+            torch_device,
+            focal=focal,
+            rank_loss=rank_loss,
+            rank_weight=rank_weight,
+        )
+        
+        # Compute 5-epoch rolling Rank IC
+        recent_rank_ics = [h["rank_ic"] for h in history[-4:]] + [val_metrics["rank_ic"]]
+        val_rank_ic_rolling = float(np.mean(recent_rank_ics))
+        val_metrics["val_rank_ic_rolling"] = val_rank_ic_rolling
+
         history.append({"epoch": float(epoch), "train_loss": float(np.mean(losses)), **val_metrics})
-        if val_metrics["rank_ic"] > best_rank_ic:
-            best_rank_ic = val_metrics["rank_ic"]
+
+        # Early stopping metric evaluation
+        if early_stop_metric == "val_loss":
+            current_metric = val_metrics.get("val_loss", np.inf)
+            improved = current_metric < best_metric
+        elif early_stop_metric == "val_rank_ic_rolling":
+            current_metric = val_rank_ic_rolling
+            improved = current_metric > best_metric
+        else:  # default "rank_ic"
+            current_metric = val_metrics["rank_ic"]
+            improved = current_metric > best_metric
+
+        if improved:
+            best_metric = current_metric
             best_state = copy.deepcopy(model.state_dict())
             stale_epochs = 0
         else:
