@@ -1428,6 +1428,11 @@ experiments:
           - baseline_no_4h_tier1_4h_large_trade_pressure_long
         weights: [0.65, 0.35]
         description: "Slightly control-heavy version of the best current two-profile blend."
+  holdout:
+    enabled: true
+    holdout_bars: 4320
+    holdout_filename: holdout_1h.parquet
+    policy: "profile_selection_only_before_holdout; holdout is reserved for one-shot final validation"
   experiment_memory:
     enabled: true
     reject_retests: true

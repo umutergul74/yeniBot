@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import zipfile
 
 import numpy as np
@@ -265,6 +266,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     weighted_blends = config["experiments"]["profile_blends"]["weighted"]
     assert [item["name"] for item in weighted_blends] == ["control_long_pressure_65_35"]
     assert weighted_blends[0]["weights"] == [0.65, 0.35]
+    assert config["experiments"]["holdout"]["enabled"] is True
+    assert config["experiments"]["holdout"]["holdout_bars"] == 4320
+    assert config["experiments"]["holdout"]["holdout_filename"] == "holdout_1h.parquet"
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
@@ -1397,6 +1401,66 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/holdout_policy_evaluation.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names
+
+
+def test_experiment_diagnostics_recovers_standard_holdout_when_manifest_lacks_metadata(
+    synthetic_klines,
+    tiny_config,
+    tmp_path,
+) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["paths"] = {"data_dir": str(tmp_path / "data")}
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": ["4h_taker_buy_ratio"]},
+    }
+    config["experiments"] = {
+        "mode": "staged",
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "triage_fold_ids": [0],
+        "full_cv_profiles": ["control"],
+        "always_full_profiles": ["control"],
+        "resume_existing": True,
+        "force_retrain": False,
+        "holdout": {
+            "enabled": True,
+            "holdout_bars": 48,
+            "holdout_filename": "holdout_1h.parquet",
+            "policy": "profile_selection_only_before_holdout",
+        },
+    }
+    frame, _ = _labeled_frame(synthetic_klines, config, periods=260)
+    holdout = frame.tail(48).copy().reset_index(drop=True)
+    processed_dir = tmp_path / "data" / "processed"
+    processed_dir.mkdir(parents=True)
+    frame.to_parquet(processed_dir / "labeled_1h.parquet", index=False)
+    holdout.to_parquet(processed_dir / "holdout_1h.parquet", index=False)
+    holdout_start = pd.to_datetime(holdout["timestamp"], utc=True).min()
+
+    result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="auto_holdout", device="cpu")
+    full_rows = result["comparison"].loc[result["comparison"]["fold_scope"].eq("full")]
+    assert not full_rows.empty
+    assert (pd.to_datetime(full_rows["data_end"], utc=True) < holdout_start).all()
+
+    manifest_path = tmp_path / "experiments" / "auto_holdout" / "experiment_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["settings"].pop("holdout", None)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    diagnostics = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=config,
+        output_dir=tmp_path / "reports",
+        run_id="auto_holdout",
+    )
+
+    holdout_evaluation = diagnostics["holdout_evaluation"]
+    assert not holdout_evaluation.empty
+    assert diagnostics["decision"]["holdout_evaluation_available"] is True
+    assert diagnostics["decision"]["holdout_evaluation"]["available"] is True
+    reservation = diagnostics["holdout_reservation"]
+    assert reservation.loc[0, "holdout_rows"] == 48
+    assert str(reservation.loc[0, "holdout_path"]).endswith("holdout_1h.parquet")
 
 
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:

@@ -1044,6 +1044,83 @@ def _write_missing_selected_profiles(path: Path, missing: pd.DataFrame) -> None:
     _write_json(path / "missing_selected_profiles.json", {"rows": missing.to_dict(orient="records")})
 
 
+def _parquet_timestamps(path: Path) -> pd.Series:
+    try:
+        frame = pd.read_parquet(path, columns=["timestamp"])
+    except (TypeError, ValueError):
+        frame = pd.read_parquet(path)
+    if "timestamp" not in frame.columns:
+        return pd.Series(dtype="datetime64[ns, UTC]")
+    return pd.to_datetime(frame["timestamp"], utc=True).dropna()
+
+
+def _default_holdout_path(config: dict[str, Any], holdout: dict[str, Any]) -> Path | None:
+    explicit = str(holdout.get("holdout_path") or "").strip()
+    if explicit:
+        return Path(explicit)
+    data_dir = _cfg(config, ["paths", "data_dir"], None) or _cfg(config, ["paths", "local_data_dir"], None)
+    if not data_dir:
+        return None
+    filename = str(holdout.get("holdout_filename") or "holdout_1h.parquet")
+    return Path(str(data_dir)) / "processed" / filename
+
+
+def _resolve_holdout_settings(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Attach durable holdout metadata from config/default Drive paths.
+
+    Notebook 04 injects holdout metadata into its in-memory config before training,
+    but notebook 05 may be run in a fresh session. This resolver lets diagnostics
+    recover the reserved holdout from config and the standard parquet location.
+    """
+
+    updated = copy.deepcopy(settings)
+    holdout = copy.deepcopy(updated.get("holdout") or _cfg(config, ["experiments", "holdout"], {}) or {})
+    if not holdout:
+        return updated
+
+    holdout.setdefault("enabled", True)
+    holdout.setdefault("policy", "profile_selection_only_before_holdout; holdout is reserved for one-shot final validation")
+    holdout_path = _default_holdout_path(config, holdout)
+    if holdout_path is not None:
+        holdout["holdout_path"] = str(holdout_path)
+        if holdout_path.exists():
+            timestamps = _parquet_timestamps(holdout_path)
+            if not timestamps.empty:
+                holdout.setdefault("holdout_rows", int(len(timestamps)))
+                holdout.setdefault("holdout_bars", int(holdout.get("holdout_rows", len(timestamps))))
+                holdout.setdefault("holdout_data_start", str(timestamps.min()))
+                holdout.setdefault("holdout_data_end", str(timestamps.max()))
+
+                data_dir = _cfg(config, ["paths", "data_dir"], None) or _cfg(config, ["paths", "local_data_dir"], None)
+                labeled_path = Path(str(data_dir)) / "processed" / "labeled_1h.parquet" if data_dir else None
+                if labeled_path is not None and labeled_path.exists():
+                    labeled_timestamps = _parquet_timestamps(labeled_path)
+                    if not labeled_timestamps.empty:
+                        holdout_start = pd.to_datetime(holdout["holdout_data_start"], utc=True)
+                        selection_timestamps = labeled_timestamps.loc[labeled_timestamps < holdout_start]
+                        if not selection_timestamps.empty:
+                            holdout.setdefault("selection_rows", int(len(selection_timestamps)))
+                            holdout.setdefault("selection_data_start", str(selection_timestamps.min()))
+                            holdout.setdefault("selection_data_end", str(selection_timestamps.max()))
+
+    updated["holdout"] = holdout
+    return updated
+
+
+def _selection_frame_before_holdout(frame: pd.DataFrame, settings: dict[str, Any]) -> pd.DataFrame:
+    holdout = settings.get("holdout", {}) or {}
+    if not bool(holdout.get("enabled", False)) or "timestamp" not in frame.columns:
+        return frame
+    holdout_start = holdout.get("holdout_data_start")
+    if not holdout_start:
+        return frame
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+    start = pd.to_datetime(holdout_start, utc=True)
+    if not (timestamps >= start).any():
+        return frame
+    return frame.loc[timestamps < start].copy().reset_index(drop=True)
+
+
 def _holdout_reservation_frame(settings: dict[str, Any]) -> pd.DataFrame:
     holdout = settings.get("holdout", {}) or {}
     columns = [
@@ -2671,6 +2748,8 @@ def run_experiment_matrix(
     device: str | None = None,
 ) -> dict[str, Any]:
     settings = experiment_settings(config)
+    settings = _resolve_holdout_settings(settings, config)
+    frame = _selection_frame_before_holdout(frame, settings)
     settings = _preflight_experiment_profiles(settings, frame, config)
     signature = _experiment_signature(config, settings)
     signature_hash = _hash_payload(signature)
@@ -2836,6 +2915,7 @@ def write_experiment_diagnostics(
     run_manifest_path = run_dir / "experiment_manifest.json"
     run_manifest = _read_json(run_manifest_path) if run_manifest_path.exists() else {}
     settings = copy.deepcopy(run_manifest.get("settings") or experiment_settings(config))
+    settings = _resolve_holdout_settings(settings, config)
     diagnostic_config = copy.deepcopy(config)
     experiment_cfg = copy.deepcopy(_cfg(diagnostic_config, ["experiments"], default={}) or {})
     experiment_cfg.update(settings)
