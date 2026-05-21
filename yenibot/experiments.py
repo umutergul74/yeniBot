@@ -101,6 +101,18 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_")
 
 
+def _table_markdown(title: str, frame: pd.DataFrame) -> str:
+    lines = [f"# {title}", ""]
+    if frame.empty:
+        lines.append("No rows were produced.")
+        return "\n".join(lines)
+    lines.append("| " + " | ".join(frame.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(frame.columns)) + " |")
+    for _, row in frame.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in frame.columns) + " |")
+    return "\n".join(lines)
+
+
 def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:
     """Return an in-memory config copy with the requested active feature profile."""
 
@@ -1315,13 +1327,19 @@ def _holdout_markdown(holdout_evaluation: pd.DataFrame, holdout_decision: dict[s
         "calibration_separation",
         "top_10_lift_global",
         "top_10_forward_return_global",
+        "cv_policy_name",
+        "cv_policy_lift_vs_base",
+        "cv_policy_forward_return",
         "holdout_cv_threshold_f1",
         "holdout_cv_threshold_pred_long_rate",
         "holdout_cv_threshold_source",
         "holdout_policy_name",
         "holdout_policy_selection_rate",
+        "holdout_policy_lift_vs_base",
         "holdout_policy_forward_return",
         "holdout_policy_pass",
+        "holdout_policy_consistency_pass",
+        "holdout_policy_consistency_reject_reason",
         "mtf_leakage_passed",
         "holdout_signal_pass",
         "holdout_signal_reject_reason",
@@ -1357,6 +1375,17 @@ def _write_holdout_files(
         for column in (
             "candidate",
             "candidate_type",
+            "cv_policy_name",
+            "cv_policy_type",
+            "cv_policy_selection_rate",
+            "cv_policy_precision",
+            "cv_policy_f1",
+            "cv_policy_lift_vs_base",
+            "cv_policy_forward_return",
+            "cv_policy_positive_lift_fold_rate",
+            "cv_policy_positive_forward_return_fold_rate",
+            "cv_policy_pass",
+            "cv_policy_reject_reason",
             "holdout_policy_name",
             "holdout_policy_type",
             "holdout_policy_source",
@@ -1366,8 +1395,14 @@ def _write_holdout_files(
             "holdout_policy_f1",
             "holdout_policy_lift_vs_base",
             "holdout_policy_forward_return",
+            "holdout_policy_selection_rate_delta_vs_cv",
+            "holdout_policy_precision_delta_vs_cv",
+            "holdout_policy_lift_delta_vs_cv",
+            "holdout_policy_forward_return_delta_vs_cv",
             "holdout_policy_pass",
             "holdout_policy_reject_reason",
+            "holdout_policy_consistency_pass",
+            "holdout_policy_consistency_reject_reason",
             "holdout_signal_pass",
             "holdout_signal_reject_reason",
             "holdout_threshold_pass",
@@ -1384,6 +1419,46 @@ def _write_holdout_files(
         else pd.DataFrame()
     )
     holdout_policy_evaluation.to_csv(path / "holdout_policy_evaluation.csv", index=False)
+    consistency_columns = [
+        column
+        for column in (
+            "candidate",
+            "candidate_type",
+            "frozen_selection",
+            "cv_policy_name",
+            "cv_policy_type",
+            "cv_policy_lift_vs_base",
+            "cv_policy_forward_return",
+            "cv_policy_positive_lift_fold_rate",
+            "cv_policy_pass",
+            "holdout_policy_name",
+            "holdout_policy_type",
+            "holdout_policy_lift_vs_base",
+            "holdout_policy_forward_return",
+            "holdout_policy_lift_delta_vs_cv",
+            "holdout_policy_forward_return_delta_vs_cv",
+            "holdout_policy_pass",
+            "holdout_signal_pass",
+            "holdout_threshold_pass",
+            "holdout_policy_consistency_pass",
+            "holdout_policy_consistency_reject_reason",
+        )
+        if column in holdout_evaluation.columns
+    ]
+    holdout_policy_consistency = (
+        holdout_evaluation[consistency_columns].copy()
+        if consistency_columns
+        else pd.DataFrame()
+    )
+    holdout_policy_consistency.to_csv(path / "holdout_policy_consistency.csv", index=False)
+    (path / "holdout_policy_consistency.md").write_text(
+        _table_markdown("Holdout Policy Consistency", holdout_policy_consistency),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "holdout_policy_consistency.json",
+        {"rows": holdout_policy_consistency.to_dict(orient="records")},
+    )
     (path / "holdout_evaluation.md").write_text(
         _holdout_markdown(holdout_evaluation, holdout_decision),
         encoding="utf-8",
@@ -1396,6 +1471,7 @@ def _write_holdout_files(
             "score_bands": holdout_score_bands.to_dict(orient="records"),
             "thresholds": holdout_thresholds.to_dict(orient="records"),
             "policy_evaluation": holdout_policy_evaluation.to_dict(orient="records"),
+            "policy_consistency": holdout_policy_consistency.to_dict(orient="records"),
         },
     )
 
@@ -1591,6 +1667,18 @@ def _attach_holdout_policy_metrics(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     policy = _cv_score_policy(cv_entry)
+    row["cv_policy_name"] = str(policy.get("policy_name", ""))
+    row["cv_policy_type"] = str(policy.get("policy_type", ""))
+    row["cv_policy_selection_rate"] = _float(policy, "selection_rate")
+    row["cv_policy_precision"] = _float(policy, "precision")
+    row["cv_policy_recall"] = _float(policy, "recall")
+    row["cv_policy_f1"] = _float(policy, "f1")
+    row["cv_policy_lift_vs_base"] = _float(policy, "lift_vs_base")
+    row["cv_policy_forward_return"] = _float(policy, "forward_return")
+    row["cv_policy_positive_lift_fold_rate"] = _float(policy, "positive_lift_fold_rate")
+    row["cv_policy_positive_forward_return_fold_rate"] = _float(policy, "positive_forward_return_fold_rate")
+    row["cv_policy_pass"] = bool(policy.get("policy_pass", False))
+    row["cv_policy_reject_reason"] = str(policy.get("policy_reject_reason", ""))
     metrics = _evaluate_score_policy_on_holdout(predictions, policy, config)
     row["holdout_policy_name"] = metrics.get("name", "")
     row["holdout_policy_type"] = metrics.get("type", "")
@@ -1603,6 +1691,38 @@ def _attach_holdout_policy_metrics(
     row["holdout_policy_forward_return"] = metrics.get("forward_return", np.nan)
     row["holdout_policy_pass"] = bool(metrics.get("pass", False))
     row["holdout_policy_reject_reason"] = metrics.get("reject_reason", "")
+    return row
+
+
+def _attach_holdout_policy_consistency(row: dict[str, Any]) -> dict[str, Any]:
+    row["holdout_policy_selection_rate_delta_vs_cv"] = (
+        _float(row, "holdout_policy_selection_rate") - _float(row, "cv_policy_selection_rate")
+    )
+    row["holdout_policy_precision_delta_vs_cv"] = (
+        _float(row, "holdout_policy_precision") - _float(row, "cv_policy_precision")
+    )
+    row["holdout_policy_lift_delta_vs_cv"] = (
+        _float(row, "holdout_policy_lift_vs_base") - _float(row, "cv_policy_lift_vs_base")
+    )
+    row["holdout_policy_forward_return_delta_vs_cv"] = (
+        _float(row, "holdout_policy_forward_return") - _float(row, "cv_policy_forward_return")
+    )
+
+    reasons = []
+    if not str(row.get("cv_policy_name", "")).strip():
+        reasons.append("missing_cv_policy")
+    if not bool(row.get("cv_policy_pass", False)):
+        reasons.append("cv_policy")
+    if str(row.get("cv_policy_name", "")) != str(row.get("holdout_policy_name", "")):
+        reasons.append("policy_name_mismatch")
+    if str(row.get("cv_policy_type", "")) != str(row.get("holdout_policy_type", "")):
+        reasons.append("policy_type_mismatch")
+    if not bool(row.get("holdout_policy_pass", False)):
+        reasons.append("holdout_policy")
+    if not bool(row.get("holdout_signal_pass", False)):
+        reasons.append("holdout_signal")
+    row["holdout_policy_consistency_pass"] = len(reasons) == 0
+    row["holdout_policy_consistency_reject_reason"] = ";".join(reasons)
     return row
 
 
@@ -1713,6 +1833,7 @@ def _evaluate_holdout_candidates(
         row = _attach_holdout_cv_threshold_metrics(row, predictions, cv_entry)
         row = _attach_holdout_policy_metrics(row, predictions, cv_entry, config)
         row = _attach_holdout_soft_pass(row, config)
+        row = _attach_holdout_policy_consistency(row)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
         if not bands.empty:
@@ -1748,6 +1869,7 @@ def _evaluate_holdout_candidates(
         row = _attach_holdout_cv_threshold_metrics(row, entry["predictions"], cv_entry)
         row = _attach_holdout_policy_metrics(row, entry["predictions"], cv_entry, config)
         row = _attach_holdout_soft_pass(row, config)
+        row = _attach_holdout_policy_consistency(row)
         evaluation_rows.append(row)
         bands = diagnostics["score_band_summary"].copy()
         if not bands.empty:
@@ -1794,6 +1916,18 @@ def _evaluate_holdout_candidates(
     observed_best = sortable.iloc[0].to_dict()
     frozen_rows = holdout_evaluation.loc[holdout_evaluation["frozen_selection"].astype(bool)]
     frozen_row = frozen_rows.iloc[0].to_dict() if not frozen_rows.empty else {}
+    policy_sortable = holdout_evaluation.copy()
+    policy_sortable["policy_consistency_sort"] = policy_sortable["holdout_policy_consistency_pass"].astype(bool).astype(int)
+    policy_sortable = policy_sortable.sort_values(
+        [
+            "policy_consistency_sort",
+            "holdout_policy_forward_return",
+            "holdout_policy_lift_vs_base",
+            "mean_rank_ic",
+        ],
+        ascending=[False, False, False, False],
+    )
+    observed_best_policy = policy_sortable.iloc[0].to_dict()
     observed_best_name = str(observed_best.get("candidate", ""))
     observed_best_warning = ""
     if observed_best_name and observed_best_name != frozen_selection:
@@ -1801,6 +1935,19 @@ def _evaluate_holdout_candidates(
             "Observed-best holdout candidate is diagnostic only; do not promote it "
             "or tune blend weights against this same reserved holdout."
         )
+    observed_best_policy_name = str(observed_best_policy.get("candidate", ""))
+    observed_best_policy_warning = ""
+    if observed_best_policy_name and observed_best_policy_name != frozen_selection:
+        observed_best_policy_warning = (
+            "Observed-best holdout policy candidate is diagnostic only; keep the frozen "
+            "pre-holdout selection unless a future out-of-sample window confirms it."
+        )
+    if frozen_row and bool(frozen_row.get("holdout_policy_consistency_pass", False)):
+        score_policy_recommendation = "review_frozen_score_band_policy"
+    elif bool(observed_best_policy.get("holdout_policy_consistency_pass", False)):
+        score_policy_recommendation = "holdout_only_diagnostic_policy_candidate"
+    else:
+        score_policy_recommendation = "keep_control_profile"
     holdout_decision = {
         "available": True,
         "policy": "one_shot_final_validation; do not tune profiles or weights against this same holdout",
@@ -1809,8 +1956,12 @@ def _evaluate_holdout_candidates(
         "candidate_count": int(len(holdout_evaluation)),
         "frozen_selection": frozen_selection,
         "frozen_selection_metrics": _json_ready(frozen_row),
+        "frozen_policy_validation": _json_ready(frozen_row),
         "observed_best_holdout_candidate": _json_ready(observed_best),
         "observed_best_holdout_warning": observed_best_warning,
+        "observed_best_policy_candidate": _json_ready(observed_best_policy),
+        "observed_best_policy_warning": observed_best_policy_warning,
+        "score_policy_recommendation": score_policy_recommendation,
     }
     return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
 
@@ -2752,6 +2903,9 @@ def _write_experiment_bundle(
         "holdout_score_band_summary.csv",
         "holdout_threshold_summary.csv",
         "holdout_policy_evaluation.csv",
+        "holdout_policy_consistency.csv",
+        "holdout_policy_consistency.md",
+        "holdout_policy_consistency.json",
         "decision_report.json",
         "best_candidate.json",
     ]

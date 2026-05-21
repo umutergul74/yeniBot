@@ -1332,12 +1332,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/experiment_selection.csv" in archive.namelist()
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
         assert "matrix/holdout_reservation.csv" in archive.namelist()
+        assert "matrix/holdout_policy_consistency.csv" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names
+    assert "matrix/holdout_policy_consistency.csv" in names
     assert all("/diagnostics/" not in name for name in names)
 
 
@@ -1417,6 +1419,14 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
         "holdout_policy_selection_rate",
         "holdout_policy_forward_return",
         "holdout_policy_pass",
+        "cv_policy_name",
+        "cv_policy_lift_vs_base",
+        "cv_policy_forward_return",
+        "holdout_policy_lift_vs_base",
+        "holdout_policy_lift_delta_vs_cv",
+        "holdout_policy_forward_return_delta_vs_cv",
+        "holdout_policy_consistency_pass",
+        "holdout_policy_consistency_reject_reason",
         "holdout_signal_pass",
         "holdout_signal_reject_reason",
         "holdout_threshold_pass",
@@ -1438,13 +1448,22 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_evaluation.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_consistency.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
+    assert "frozen_policy_validation" in diagnostics["decision"]["holdout_evaluation"]
+    assert "observed_best_policy_candidate" in diagnostics["decision"]["holdout_evaluation"]
+    assert diagnostics["decision"]["holdout_evaluation"]["score_policy_recommendation"] in {
+        "review_frozen_score_band_policy",
+        "holdout_only_diagnostic_policy_candidate",
+        "keep_control_profile",
+    }
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_holdout_run.zip") as archive:
         names = set(archive.namelist())
     assert "holdout_run/holdout_evaluation.csv" in names
     assert "holdout_run/holdout_score_band_summary.csv" in names
     assert "holdout_run/holdout_threshold_summary.csv" in names
+    assert "holdout_run/holdout_policy_consistency.csv" in names
     assert "holdout_run/holdout_policy_evaluation.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names
