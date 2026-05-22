@@ -123,6 +123,9 @@ def _holdout_policy_action(
 ) -> str:
     if not holdout_boundary_passed:
         return "invalid_holdout_training_boundary_rerun_04"
+    policy_status = str(_cfg(config or {}, ["experiments", "policy_review", "status"], "")).lower()
+    if any(token in policy_status for token in ("failed", "invalidated", "retired")):
+        return "retired_frozen_policy_keep_control_profile"
     frozen_consistent = bool(frozen.get("holdout_policy_consistency_pass", False))
     frozen_signal = bool(frozen.get("holdout_signal_pass", False))
     frozen_threshold = bool(frozen.get("holdout_threshold_pass", False))
@@ -1600,6 +1603,7 @@ def _holdout_policy_decision_frame(
     columns = [
         "available",
         "frozen_selection",
+        "frozen_selection_source",
         "score_policy_recommendation",
         "policy_action",
         "holdout_boundary_passed",
@@ -1609,6 +1613,7 @@ def _holdout_policy_decision_frame(
         "configured_status",
         "configured_threshold_deployment_allowed",
         "configured_future_oos_candidates",
+        "configured_frozen_candidate_available",
         "configured_policy_match",
         "threshold_deployment_blocked_by_policy",
         "frozen_candidate",
@@ -1633,6 +1638,7 @@ def _holdout_policy_decision_frame(
     frozen = holdout_decision.get("frozen_policy_validation") or {}
     observed = holdout_decision.get("observed_best_policy_candidate") or {}
     frozen_selection = str(holdout_decision.get("frozen_selection", ""))
+    frozen_selection_source = str(holdout_decision.get("frozen_selection_source", ""))
     observed_name = str(observed.get("candidate", ""))
     holdout_boundary_passed = bool(holdout_decision.get("holdout_boundary_passed", True))
     policy_review = _cfg(config or {}, ["experiments", "policy_review"], {}) or {}
@@ -1642,8 +1648,10 @@ def _holdout_policy_decision_frame(
     configured_status = str(policy_review.get("status", ""))
     configured_threshold_allowed = bool(policy_review.get("threshold_deployment_allowed", False))
     future_candidates = ",".join(str(item) for item in policy_review.get("future_oos_candidates", []) or [])
+    configured_candidate_available = bool(holdout_decision.get("configured_frozen_candidate_available", False))
     configured_policy_match = bool(
         configured_candidate
+        and configured_candidate_available
         and configured_policy_name
         and frozen_selection == configured_candidate
         and str(frozen.get("cv_policy_name", "")) == configured_policy_name
@@ -1661,6 +1669,7 @@ def _holdout_policy_decision_frame(
     row = {
         "available": True,
         "frozen_selection": frozen_selection,
+        "frozen_selection_source": frozen_selection_source,
         "score_policy_recommendation": str(holdout_decision.get("score_policy_recommendation", "")),
         "policy_action": action,
         "holdout_boundary_passed": holdout_boundary_passed,
@@ -1670,6 +1679,7 @@ def _holdout_policy_decision_frame(
         "configured_status": configured_status,
         "configured_threshold_deployment_allowed": configured_threshold_allowed,
         "configured_future_oos_candidates": future_candidates,
+        "configured_frozen_candidate_available": configured_candidate_available,
         "configured_policy_match": configured_policy_match,
         "threshold_deployment_blocked_by_policy": not configured_threshold_allowed,
         "frozen_candidate": str(frozen.get("candidate", "")),
@@ -2340,13 +2350,25 @@ def _evaluate_holdout_candidates(
         }
         return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
 
+    available_candidates = set(holdout_evaluation["candidate"].astype(str))
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    configured_frozen = str(policy_review.get("frozen_candidate", "")).strip()
+    configured_available = bool(configured_frozen and configured_frozen in available_candidates)
     frozen_selection = str(settings.get("control_profile", ""))
+    frozen_selection_source = "control_profile"
     best_blend = decision.get("best_profile_blend") or {}
     best_candidate = decision.get("best_candidate") or {}
-    if best_blend:
+    if configured_available:
+        frozen_selection = configured_frozen
+        frozen_selection_source = "configured_policy_review"
+    elif configured_frozen:
+        frozen_selection_source = "configured_policy_review_missing_fallback_control_profile"
+    elif best_blend:
         frozen_selection = str(best_blend.get("profile") or frozen_selection)
+        frozen_selection_source = "best_profile_blend"
     elif best_candidate:
         frozen_selection = str(best_candidate.get("profile") or frozen_selection)
+        frozen_selection_source = "best_candidate"
     holdout_evaluation["frozen_selection"] = holdout_evaluation["candidate"].astype(str).eq(frozen_selection)
 
     sortable = holdout_evaluation.copy()
@@ -2405,6 +2427,8 @@ def _evaluate_holdout_candidates(
         "holdout_rows": int(len(holdout_context.loc[pd.to_datetime(holdout_context["timestamp"], utc=True) >= holdout_start])),
         "candidate_count": int(len(holdout_evaluation)),
         "frozen_selection": frozen_selection,
+        "frozen_selection_source": frozen_selection_source,
+        "configured_frozen_candidate_available": configured_available,
         "frozen_selection_metrics": _json_ready(frozen_row),
         "frozen_policy_validation": _json_ready(frozen_row),
         "observed_best_holdout_candidate": _json_ready(observed_best),

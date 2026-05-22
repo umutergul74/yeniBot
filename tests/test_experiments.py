@@ -399,7 +399,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["frozen_candidate"] == "blend_prob_mean_953a4ee825"
     assert config["experiments"]["policy_review"]["policy_type"] == "score_band"
     assert config["experiments"]["policy_review"]["policy_name"] == "top_10"
-    assert config["experiments"]["policy_review"]["status"] == "score_band_review_only"
+    assert config["experiments"]["policy_review"]["status"] == "failed_clean_holdout_review"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == ["blend_control_long_pressure_65_35"]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
@@ -1495,6 +1495,14 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
                 }
             ],
         },
+        "policy_review": {
+            "enabled": True,
+            "frozen_candidate": "blend_control_candidate_65_35",
+            "policy_type": "score_band",
+            "policy_name": "top_10",
+            "status": "score_band_review_only",
+            "threshold_deployment_allowed": False,
+        },
     }
     frame, _ = _labeled_frame(synthetic_klines, config, periods=260)
     holdout = frame.tail(48).copy().reset_index(drop=True)
@@ -1588,12 +1596,16 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "configured_policy_match" in policy_validation
     assert "threshold_deployment_blocked_by_policy" in policy_validation
     assert "holdout_boundary_passed" in policy_validation
+    assert policy_validation["frozen_selection"] == "blend_control_candidate_65_35"
+    assert policy_validation["frozen_selection_source"] == "configured_policy_review"
+    assert policy_validation["configured_frozen_candidate_available"] is True
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
         "review_frozen_score_band_policy_only_no_threshold_deployment",
         "holdout_only_candidate_do_not_promote_without_future_oos",
         "keep_control_profile",
         "invalid_holdout_training_boundary_rerun_04",
+        "retired_frozen_policy_keep_control_profile",
     }
     assert diagnostics["decision"]["holdout_evaluation"]["score_policy_recommendation"] in {
         "review_frozen_score_band_policy",
