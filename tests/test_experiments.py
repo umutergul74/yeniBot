@@ -1526,6 +1526,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     }
 
     run_experiment_matrix(selection, config, checkpoint_dir=tmp_path, run_id="holdout_run", device="cpu")
+    config["experiments"]["policy_review"]["status"] = "failed_clean_holdout_review"
     diagnostics = write_experiment_diagnostics(
         checkpoint_dir=tmp_path,
         config=config,
@@ -1599,6 +1600,10 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert policy_validation["frozen_selection"] == "blend_control_candidate_65_35"
     assert policy_validation["frozen_selection_source"] == "configured_policy_review"
     assert policy_validation["configured_frozen_candidate_available"] is True
+    assert policy_validation["configured_status"] == "failed_clean_holdout_review"
+    assert policy_validation["policy_action"] == "retired_frozen_policy_keep_control_profile"
+    monitoring = diagnostics["frozen_policy_monitoring_plan"].iloc[0].to_dict()
+    assert monitoring["status"] == "failed_clean_holdout_review"
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
         "review_frozen_score_band_policy_only_no_threshold_deployment",

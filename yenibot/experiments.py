@@ -3603,8 +3603,14 @@ def write_experiment_diagnostics(
     settings = copy.deepcopy(run_manifest.get("settings") or experiment_settings(config))
     settings = _resolve_holdout_settings(settings, config)
     diagnostic_config = copy.deepcopy(config)
-    experiment_cfg = copy.deepcopy(_cfg(diagnostic_config, ["experiments"], default={}) or {})
+    current_experiment_cfg = copy.deepcopy(_cfg(diagnostic_config, ["experiments"], default={}) or {})
+    experiment_cfg = copy.deepcopy(current_experiment_cfg)
     experiment_cfg.update(settings)
+    # Training run settings are historical metadata, but policy review is a
+    # diagnostics-time decision. Keep it sourced from the current config so a
+    # failed/retired frozen policy cannot be resurrected by an old run manifest.
+    if "policy_review" in current_experiment_cfg:
+        experiment_cfg["policy_review"] = copy.deepcopy(current_experiment_cfg["policy_review"])
     _set_cfg(diagnostic_config, ["experiments"], experiment_cfg)
     scope_dirs = _profile_dirs(run_dir)
     if not scope_dirs:
