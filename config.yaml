@@ -1445,6 +1445,8 @@ experiments:
       - blend_control_long_pressure_65_35
     future_oos_monitor:
       enabled: true
+      anchor_run_id: "20260522_135424"
+      anchor_data_end: "2026-05-13 08:00:00+00:00"
       min_new_bars: 720
       preferred_new_bars: 2160
       policy: "Monitor the failed frozen top_10 policy only as a historical benchmark. Do not change profile, blend weights, score band, or threshold from this holdout; define any replacement before a future unseen window."
@@ -1467,11 +1469,11 @@ experiments:
     allow_retest_profiles: []
     reference_notes:
       baseline_plus_4h_bounded_whale_no_4h_tier1: "Legacy baseline kept for continuity; latest full run mean IC 0.0575, std 0.1012, positive folds 78.6%."
-      baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest full run mean IC 0.0517, std 0.0938, top-10 lift 1.1681 but only 61.9% positive folds. Bundle 20260521_172341 holdout looked strong as a standalone profile, but that is diagnostic only; do not promote it from the same reserved holdout."
+      baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest clean holdout run 20260522_135424 was weak as a standalone profile: IC 0.0143, top-10 lift 0.9485, and negative top-10 forward return. Keep as a comparison source only."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; latest full run mean IC 0.0596, std 0.0738, positive folds 85.7%."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
-      blend_prob_mean_953a4ee825: "Frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Bundle 20260521_172341 holdout validated score-band signal, but CV threshold selected too many longs; treat as signal candidate, not a threshold deployment decision."
-      blend_control_long_pressure_65_35: "Control-heavy blend retained for future out-of-sample comparison. Bundle 20260521_172341 had strong holdout top-10 lift/return and better CV stability than equal blend, but it was not the frozen holdout selection."
+      blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
+      blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
     rejected_profiles:
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."

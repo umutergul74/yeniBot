@@ -403,6 +403,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == ["blend_control_long_pressure_65_35"]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_data_end"] == "2026-05-13 08:00:00+00:00"
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["preferred_new_bars"] == 2160
     robustness = config["experiments"]["policy_review"]["robustness"]
@@ -421,8 +423,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     notes = config["experiments"]["experiment_memory"]["reference_notes"]
-    assert "diagnostic only" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
-    assert "score-band signal" in notes["blend_prob_mean_953a4ee825"]
+    assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
+    assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
@@ -1524,6 +1526,14 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
         "holdout_path": str(holdout_path),
         "policy": "profile_selection_only_before_holdout",
     }
+    config["experiments"]["policy_review"]["future_oos_monitor"] = {
+        "enabled": True,
+        "anchor_run_id": "old_holdout_run",
+        "anchor_data_end": str(pd.to_datetime(selection["timestamp"], utc=True).max()),
+        "min_new_bars": 24,
+        "preferred_new_bars": 72,
+        "policy": "test monitor",
+    }
 
     run_experiment_matrix(selection, config, checkpoint_dir=tmp_path, run_id="holdout_run", device="cpu")
     config["experiments"]["policy_review"]["status"] = "failed_clean_holdout_review"
@@ -1604,6 +1614,11 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert policy_validation["policy_action"] == "retired_frozen_policy_keep_control_profile"
     monitoring = diagnostics["frozen_policy_monitoring_plan"].iloc[0].to_dict()
     assert monitoring["status"] == "failed_clean_holdout_review"
+    assert monitoring["anchor_run_id"] == "old_holdout_run"
+    assert monitoring["new_bars_since_anchor"] >= 47
+    assert monitoring["min_new_bars_remaining"] == 0
+    assert monitoring["future_oos_ready"] is True
+    assert monitoring["next_action"] == "future_oos_window_available"
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
         "review_frozen_score_band_policy_only_no_threshold_deployment",

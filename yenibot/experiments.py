@@ -2011,6 +2011,29 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     monitor = policy_review.get("future_oos_monitor", {}) or {}
     holdout = settings.get("holdout", {}) or {}
+    anchor_data_end = str(monitor.get("anchor_data_end", "") or "")
+    latest_data_end = str(holdout.get("holdout_data_end", "") or "")
+    new_bars_since_anchor = 0
+    if anchor_data_end and latest_data_end:
+        try:
+            anchor_ts = pd.to_datetime(anchor_data_end, utc=True)
+            latest_ts = pd.to_datetime(latest_data_end, utc=True)
+            if pd.notna(anchor_ts) and pd.notna(latest_ts) and latest_ts > anchor_ts:
+                new_bars_since_anchor = int((latest_ts - anchor_ts).total_seconds() // 3600)
+        except (TypeError, ValueError):
+            new_bars_since_anchor = 0
+    min_new_bars = int(monitor.get("min_new_bars", 0) or 0)
+    preferred_new_bars = int(monitor.get("preferred_new_bars", 0) or 0)
+    min_remaining = max(0, min_new_bars - new_bars_since_anchor)
+    preferred_remaining = max(0, preferred_new_bars - new_bars_since_anchor)
+    future_oos_ready = bool(min_new_bars > 0 and new_bars_since_anchor >= min_new_bars)
+    future_oos_preferred_ready = bool(preferred_new_bars > 0 and new_bars_since_anchor >= preferred_new_bars)
+    if not bool(monitor.get("enabled", False)):
+        next_action = "monitor_disabled"
+    elif future_oos_ready:
+        next_action = "future_oos_window_available"
+    else:
+        next_action = "wait_for_new_unseen_bars"
     row = {
         "enabled": bool(monitor.get("enabled", False)),
         "frozen_candidate": str(policy_review.get("frozen_candidate", "")),
@@ -2019,9 +2042,18 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
         "status": str(policy_review.get("status", "")),
         "threshold_deployment_allowed": bool(policy_review.get("threshold_deployment_allowed", False)),
         "future_oos_candidates": ",".join(str(item) for item in policy_review.get("future_oos_candidates", []) or []),
-        "min_new_bars": int(monitor.get("min_new_bars", 0) or 0),
-        "preferred_new_bars": int(monitor.get("preferred_new_bars", 0) or 0),
-        "current_holdout_data_end": str(holdout.get("holdout_data_end", "")),
+        "anchor_run_id": str(monitor.get("anchor_run_id", "")),
+        "anchor_data_end": anchor_data_end,
+        "latest_available_data_end": latest_data_end,
+        "new_bars_since_anchor": new_bars_since_anchor,
+        "min_new_bars": min_new_bars,
+        "preferred_new_bars": preferred_new_bars,
+        "min_new_bars_remaining": min_remaining,
+        "preferred_new_bars_remaining": preferred_remaining,
+        "future_oos_ready": future_oos_ready,
+        "future_oos_preferred_ready": future_oos_preferred_ready,
+        "current_holdout_data_end": latest_data_end,
+        "next_action": next_action,
         "policy": str(monitor.get("policy", "")),
     }
     return pd.DataFrame([row])
