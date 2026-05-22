@@ -1443,6 +1443,24 @@ experiments:
     note: "Frozen pre-holdout selection validates as a score-band signal only; threshold deployment remains blocked until a future out-of-sample window confirms it."
     future_oos_candidates:
       - blend_control_long_pressure_65_35
+    future_oos_monitor:
+      enabled: true
+      min_new_bars: 720
+      preferred_new_bars: 2160
+      policy: "Do not change profile, blend weights, score band, or threshold from this holdout; evaluate the frozen top_10 policy only on future unseen data."
+    robustness:
+      enabled: true
+      min_rows: 720
+      min_selected_rows: 50
+      min_rank_ic: 0.0
+      min_lift_vs_base: 1.0
+      min_forward_return: 0.0
+      windows:
+        - {name: post_ftx_rebuild, start: "2022-11-15 00:00:00+00:00", end: "2023-06-30 23:00:00+00:00"}
+        - {name: pre_etf_recovery, start: "2023-07-01 00:00:00+00:00", end: "2024-01-10 23:00:00+00:00"}
+        - {name: etf_to_halving_cycle, start: "2024-01-11 00:00:00+00:00", end: "2024-08-31 23:00:00+00:00"}
+        - {name: late_2024_to_q1_2025, start: "2024-09-01 00:00:00+00:00", end: "2025-03-31 23:00:00+00:00"}
+        - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
   experiment_memory:
     enabled: true
     reject_retests: true

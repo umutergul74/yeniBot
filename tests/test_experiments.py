@@ -14,6 +14,8 @@ from yenibot.experiments import (
     _auto_full_profiles,
     _best_profile_blend,
     _experiment_selection_frame,
+    _frozen_policy_robustness_frame,
+    _holdout_boundary_audit_frame,
     _holdout_reservation_frame,
     _missing_selected_profiles,
     _preflight_experiment_profiles,
@@ -181,6 +183,100 @@ def test_holdout_reservation_frame_records_selection_and_holdout_window() -> Non
     assert frame.loc[0, "selection_data_end"] < frame.loc[0, "holdout_data_start"]
 
 
+def test_holdout_boundary_audit_rejects_entries_inside_reserved_holdout() -> None:
+    settings = {
+        "holdout": {
+            "enabled": True,
+            "holdout_data_start": "2025-11-01 01:00:00+00:00",
+        }
+    }
+    entries = [
+        {
+            "profile": "control",
+            "fold_scope": "full",
+            "diagnostics": {
+                "row": {
+                    "data_start": "2024-01-01 00:00:00+00:00",
+                    "data_end": "2025-10-31 23:00:00+00:00",
+                }
+            },
+        },
+        {
+            "profile": "old_run",
+            "fold_scope": "full",
+            "diagnostics": {
+                "row": {
+                    "data_start": "2024-01-01 00:00:00+00:00",
+                    "data_end": "2026-04-25 09:00:00+00:00",
+                }
+            },
+        },
+    ]
+
+    audit = _holdout_boundary_audit_frame(entries, settings)
+
+    assert bool(audit.loc[audit["profile"].eq("control"), "passed"].iloc[0]) is True
+    rejected = audit.loc[audit["profile"].eq("old_run")].iloc[0]
+    assert bool(rejected["passed"]) is False
+    assert rejected["reason"] == "entry_data_end_reaches_reserved_holdout"
+
+
+def test_frozen_policy_robustness_uses_configured_score_band() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=100, freq="h", tz="UTC")
+    labels = np.zeros(100, dtype=int)
+    labels[-10:] = 1
+    predictions = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "split": "test",
+            "fold": 0,
+            "label": labels,
+            "prob_long": np.linspace(0.0, 1.0, 100),
+            "forward_return": np.linspace(-0.01, 0.02, 100),
+        }
+    )
+    config = {
+        "validation": {
+            "score_lift_bins": 10,
+            "calibration_bins": 10,
+            "threshold_checks": {"min_precision": 0.30, "max_pred_long_rate": 0.70},
+            "score_bands": [{"name": "top_10", "min_bin": 9, "max_bin": 9}],
+        },
+        "experiments": {
+            "policy_review": {
+                "enabled": True,
+                "frozen_candidate": "blend_prob_mean_test",
+                "policy_type": "score_band",
+                "policy_name": "top_10",
+                "robustness": {
+                    "enabled": True,
+                    "min_rows": 80,
+                    "min_selected_rows": 5,
+                    "min_rank_ic": 0.0,
+                    "min_lift_vs_base": 1.0,
+                    "min_forward_return": 0.0,
+                    "windows": [
+                        {
+                            "name": "synthetic",
+                            "start": "2024-01-01 00:00:00+00:00",
+                            "end": "2024-01-05 03:00:00+00:00",
+                        }
+                    ],
+                },
+            }
+        },
+    }
+    entries = [{"profile": "blend_prob_mean_test", "predictions": predictions}]
+
+    frame = _frozen_policy_robustness_frame(entries, config)
+
+    assert frame.loc[0, "window"] == "synthetic"
+    assert frame.loc[0, "policy_name"] == "top_10"
+    assert frame.loc[0, "selected_rows"] == 10
+    assert frame.loc[0, "policy_lift_vs_base"] > 1.0
+    assert bool(frame.loc[0, "window_pass"]) is True
+
+
 def test_experiment_preflight_skips_intrahour_candidates_until_features_exist() -> None:
     config = {
         "features": {
@@ -306,6 +402,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["status"] == "score_band_review_only"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == ["blend_control_long_pressure_65_35"]
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["preferred_new_bars"] == 2160
+    robustness = config["experiments"]["policy_review"]["robustness"]
+    assert robustness["enabled"] is True
+    assert robustness["min_rows"] == 720
+    assert [item["name"] for item in robustness["windows"]] == [
+        "post_ftx_rebuild",
+        "pre_etf_recovery",
+        "etf_to_halving_cycle",
+        "late_2024_to_q1_2025",
+        "pre_holdout_recent",
+    ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
@@ -1330,6 +1439,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "keep_control_profile",
         "promote_best_candidate",
         "review_profile_blend",
+        "rerun_training_with_holdout_split",
     }
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
@@ -1338,16 +1448,22 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/experiment_selection.csv" in archive.namelist()
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
         assert "matrix/holdout_reservation.csv" in archive.namelist()
+        assert "matrix/holdout_boundary_audit.csv" in archive.namelist()
         assert "matrix/holdout_policy_consistency.csv" in archive.namelist()
         assert "matrix/holdout_policy_decision.csv" in archive.namelist()
+        assert "matrix/frozen_policy_robustness.csv" in archive.namelist()
+        assert "matrix/frozen_policy_monitoring_plan.csv" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names
+    assert "matrix/holdout_boundary_audit.csv" in names
     assert "matrix/holdout_policy_consistency.csv" in names
     assert "matrix/holdout_policy_decision.csv" in names
+    assert "matrix/frozen_policy_robustness.csv" in names
+    assert "matrix/frozen_policy_monitoring_plan.csv" in names
     assert all("/diagnostics/" not in name for name in names)
 
 
@@ -1452,12 +1568,17 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
         )
     ).all()
     assert holdout_evaluation["mtf_leakage_passed"].all()
+    assert diagnostics["decision"]["holdout_boundary_passed"] is True
+    assert diagnostics["holdout_boundary_audit"]["passed"].astype(bool).all()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_score_band_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_consistency.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_decision.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_boundary_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "frozen_policy_robustness.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "frozen_policy_monitoring_plan.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
     assert "frozen_policy_validation" in diagnostics["decision"]["holdout_evaluation"]
@@ -1466,11 +1587,13 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     policy_validation = diagnostics["decision"]["holdout_evaluation"]["policy_validation"]
     assert "configured_policy_match" in policy_validation
     assert "threshold_deployment_blocked_by_policy" in policy_validation
+    assert "holdout_boundary_passed" in policy_validation
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
         "review_frozen_score_band_policy_only_no_threshold_deployment",
         "holdout_only_candidate_do_not_promote_without_future_oos",
         "keep_control_profile",
+        "invalid_holdout_training_boundary_rerun_04",
     }
     assert diagnostics["decision"]["holdout_evaluation"]["score_policy_recommendation"] in {
         "review_frozen_score_band_policy",
@@ -1485,6 +1608,9 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/holdout_policy_consistency.csv" in names
     assert "holdout_run/holdout_policy_decision.csv" in names
     assert "holdout_run/holdout_policy_evaluation.csv" in names
+    assert "holdout_run/holdout_boundary_audit.csv" in names
+    assert "holdout_run/frozen_policy_robustness.csv" in names
+    assert "holdout_run/frozen_policy_monitoring_plan.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names
 

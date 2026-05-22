@@ -119,7 +119,10 @@ def _holdout_policy_action(
     observed_policy: dict[str, Any],
     frozen_selection: str,
     config: dict[str, Any] | None = None,
+    holdout_boundary_passed: bool = True,
 ) -> str:
+    if not holdout_boundary_passed:
+        return "invalid_holdout_training_boundary_rerun_04"
     frozen_consistent = bool(frozen.get("holdout_policy_consistency_pass", False))
     frozen_signal = bool(frozen.get("holdout_signal_pass", False))
     frozen_threshold = bool(frozen.get("holdout_threshold_pass", False))
@@ -1198,6 +1201,86 @@ def _write_holdout_reservation(path: Path, settings: dict[str, Any]) -> pd.DataF
     return frame
 
 
+def _holdout_boundary_audit_frame(entries: list[dict[str, Any]], settings: dict[str, Any]) -> pd.DataFrame:
+    """Verify experiment outputs stop before the reserved holdout window.
+
+    This guards against accidentally diagnosing an old run that was trained before
+    the holdout split existed. If any CV/blend/seed entry reaches into the reserved
+    holdout period, holdout policy decisions must be treated as invalid.
+    """
+
+    columns = [
+        "profile",
+        "fold_scope",
+        "data_start",
+        "data_end",
+        "holdout_data_start",
+        "passed",
+        "reason",
+    ]
+    holdout = settings.get("holdout", {}) or {}
+    if not bool(holdout.get("enabled", False)):
+        return pd.DataFrame(columns=columns)
+
+    holdout_start_raw = holdout.get("holdout_data_start")
+    if not holdout_start_raw:
+        return pd.DataFrame(
+            [
+                {
+                    "profile": "",
+                    "fold_scope": "",
+                    "data_start": "",
+                    "data_end": "",
+                    "holdout_data_start": "",
+                    "passed": False,
+                    "reason": "missing_holdout_data_start",
+                }
+            ],
+            columns=columns,
+        )
+
+    holdout_start = pd.to_datetime(holdout_start_raw, utc=True)
+    rows = []
+    for entry in entries:
+        row = entry.get("diagnostics", {}).get("row", {}) or {}
+        data_start = str(row.get("data_start", ""))
+        data_end = str(row.get("data_end", ""))
+        reason = ""
+        passed = False
+        if not data_end:
+            reason = "missing_entry_data_end"
+        else:
+            try:
+                end_ts = pd.to_datetime(data_end, utc=True)
+                passed = bool(end_ts < holdout_start)
+                if not passed:
+                    reason = "entry_data_end_reaches_reserved_holdout"
+            except (TypeError, ValueError):
+                reason = "invalid_entry_data_end"
+        rows.append(
+            {
+                "profile": str(entry.get("profile", "")),
+                "fold_scope": str(entry.get("fold_scope", "")),
+                "data_start": data_start,
+                "data_end": data_end,
+                "holdout_data_start": str(holdout_start),
+                "passed": passed,
+                "reason": reason,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _write_holdout_boundary_audit(path: Path, audit: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    audit.to_csv(path / "holdout_boundary_audit.csv", index=False)
+    (path / "holdout_boundary_audit.md").write_text(
+        _table_markdown("Holdout Boundary Audit", audit),
+        encoding="utf-8",
+    )
+    _write_json(path / "holdout_boundary_audit.json", {"rows": audit.to_dict(orient="records")})
+
+
 def _read_holdout_context(settings: dict[str, Any], config: dict[str, Any]) -> tuple[pd.DataFrame, pd.Timestamp | None]:
     holdout = settings.get("holdout", {}) or {}
     if not bool(holdout.get("enabled", False)):
@@ -1519,6 +1602,7 @@ def _holdout_policy_decision_frame(
         "frozen_selection",
         "score_policy_recommendation",
         "policy_action",
+        "holdout_boundary_passed",
         "configured_frozen_candidate",
         "configured_policy_type",
         "configured_policy_name",
@@ -1550,6 +1634,7 @@ def _holdout_policy_decision_frame(
     observed = holdout_decision.get("observed_best_policy_candidate") or {}
     frozen_selection = str(holdout_decision.get("frozen_selection", ""))
     observed_name = str(observed.get("candidate", ""))
+    holdout_boundary_passed = bool(holdout_decision.get("holdout_boundary_passed", True))
     policy_review = _cfg(config or {}, ["experiments", "policy_review"], {}) or {}
     configured_candidate = str(policy_review.get("frozen_candidate", ""))
     configured_policy_type = str(policy_review.get("policy_type", ""))
@@ -1571,12 +1656,14 @@ def _holdout_policy_decision_frame(
         observed_policy=observed,
         frozen_selection=frozen_selection,
         config=config,
+        holdout_boundary_passed=holdout_boundary_passed,
     )
     row = {
         "available": True,
         "frozen_selection": frozen_selection,
         "score_policy_recommendation": str(holdout_decision.get("score_policy_recommendation", "")),
         "policy_action": action,
+        "holdout_boundary_passed": holdout_boundary_passed,
         "configured_frozen_candidate": configured_candidate,
         "configured_policy_type": configured_policy_type,
         "configured_policy_name": configured_policy_name,
@@ -1898,6 +1985,237 @@ def _attach_holdout_soft_pass(row: dict[str, Any], config: dict[str, Any]) -> di
     return row
 
 
+def _rank_ic_for_frame(predictions: pd.DataFrame) -> float:
+    if predictions.empty or "prob_long" not in predictions.columns or "forward_return" not in predictions.columns:
+        return np.nan
+    frame = predictions[["prob_long", "forward_return"]].copy()
+    frame["prob_long"] = pd.to_numeric(frame["prob_long"], errors="coerce")
+    frame["forward_return"] = pd.to_numeric(frame["forward_return"], errors="coerce")
+    frame = frame.dropna()
+    if len(frame) < 3 or frame["prob_long"].nunique() < 2 or frame["forward_return"].nunique() < 2:
+        return np.nan
+    return float(frame["prob_long"].corr(frame["forward_return"], method="spearman"))
+
+
+def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[str, Any]) -> pd.DataFrame:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    monitor = policy_review.get("future_oos_monitor", {}) or {}
+    holdout = settings.get("holdout", {}) or {}
+    row = {
+        "enabled": bool(monitor.get("enabled", False)),
+        "frozen_candidate": str(policy_review.get("frozen_candidate", "")),
+        "policy_type": str(policy_review.get("policy_type", "")),
+        "policy_name": str(policy_review.get("policy_name", "")),
+        "status": str(policy_review.get("status", "")),
+        "threshold_deployment_allowed": bool(policy_review.get("threshold_deployment_allowed", False)),
+        "future_oos_candidates": ",".join(str(item) for item in policy_review.get("future_oos_candidates", []) or []),
+        "min_new_bars": int(monitor.get("min_new_bars", 0) or 0),
+        "preferred_new_bars": int(monitor.get("preferred_new_bars", 0) or 0),
+        "current_holdout_data_end": str(holdout.get("holdout_data_end", "")),
+        "policy": str(monitor.get("policy", "")),
+    }
+    return pd.DataFrame([row])
+
+
+def _write_frozen_policy_monitoring_plan(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "frozen_policy_monitoring_plan.csv", index=False)
+    (path / "frozen_policy_monitoring_plan.md").write_text(
+        _table_markdown("Frozen Policy Monitoring Plan", frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "frozen_policy_monitoring_plan.json", {"rows": frame.to_dict(orient="records")})
+
+
+def _frozen_policy_robustness_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    robustness = policy_review.get("robustness", {}) or {}
+    columns = [
+        "window",
+        "start",
+        "end",
+        "candidate",
+        "policy_type",
+        "policy_name",
+        "rows",
+        "selected_rows",
+        "base_long_rate",
+        "policy_precision",
+        "policy_recall",
+        "policy_f1",
+        "policy_lift_vs_base",
+        "policy_forward_return",
+        "rank_ic",
+        "window_pass",
+        "reject_reason",
+    ]
+    if not bool(policy_review.get("enabled", False)) or not bool(robustness.get("enabled", False)):
+        return pd.DataFrame(columns=columns)
+
+    frozen_candidate = str(policy_review.get("frozen_candidate", ""))
+    policy_type = str(policy_review.get("policy_type", ""))
+    policy_name = str(policy_review.get("policy_name", ""))
+    entry = next((item for item in entries if str(item.get("profile", "")) == frozen_candidate), None)
+    if entry is None:
+        return pd.DataFrame(
+            [
+                {
+                    "window": "all",
+                    "start": "",
+                    "end": "",
+                    "candidate": frozen_candidate,
+                    "policy_type": policy_type,
+                    "policy_name": policy_name,
+                    "rows": 0,
+                    "selected_rows": 0,
+                    "base_long_rate": np.nan,
+                    "policy_precision": np.nan,
+                    "policy_recall": np.nan,
+                    "policy_f1": np.nan,
+                    "policy_lift_vs_base": np.nan,
+                    "policy_forward_return": np.nan,
+                    "rank_ic": np.nan,
+                    "window_pass": False,
+                    "reject_reason": "missing_frozen_candidate_predictions",
+                }
+            ],
+            columns=columns,
+        )
+
+    predictions = _test_predictions(entry.get("predictions", pd.DataFrame())).copy()
+    if predictions.empty or "timestamp" not in predictions.columns:
+        return pd.DataFrame(
+            [
+                {
+                    "window": "all",
+                    "start": "",
+                    "end": "",
+                    "candidate": frozen_candidate,
+                    "policy_type": policy_type,
+                    "policy_name": policy_name,
+                    "rows": int(len(predictions)),
+                    "selected_rows": 0,
+                    "base_long_rate": np.nan,
+                    "policy_precision": np.nan,
+                    "policy_recall": np.nan,
+                    "policy_f1": np.nan,
+                    "policy_lift_vs_base": np.nan,
+                    "policy_forward_return": np.nan,
+                    "rank_ic": np.nan,
+                    "window_pass": False,
+                    "reject_reason": "missing_frozen_candidate_timestamps",
+                }
+            ],
+            columns=columns,
+        )
+
+    predictions["timestamp"] = pd.to_datetime(predictions["timestamp"], utc=True)
+    windows = robustness.get("windows", []) or []
+    if not windows:
+        windows = [
+            {
+                "name": "all_available_cv",
+                "start": str(predictions["timestamp"].min()),
+                "end": str(predictions["timestamp"].max()),
+            }
+        ]
+
+    min_rows = int(robustness.get("min_rows", 0) or 0)
+    min_selected_rows = int(robustness.get("min_selected_rows", 0) or 0)
+    min_rank_ic = float(robustness.get("min_rank_ic", 0.0))
+    min_lift = float(robustness.get("min_lift_vs_base", 1.0))
+    min_forward_return = float(robustness.get("min_forward_return", 0.0))
+    policy = {"policy_type": policy_type, "policy_name": policy_name}
+    rows = []
+    for spec in windows:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name", "window"))
+        start_raw = str(spec.get("start", ""))
+        end_raw = str(spec.get("end", ""))
+        try:
+            start = pd.to_datetime(start_raw, utc=True)
+            end = pd.to_datetime(end_raw, utc=True)
+        except (TypeError, ValueError):
+            rows.append(
+                {
+                    "window": name,
+                    "start": start_raw,
+                    "end": end_raw,
+                    "candidate": frozen_candidate,
+                    "policy_type": policy_type,
+                    "policy_name": policy_name,
+                    "rows": 0,
+                    "selected_rows": 0,
+                    "base_long_rate": np.nan,
+                    "policy_precision": np.nan,
+                    "policy_recall": np.nan,
+                    "policy_f1": np.nan,
+                    "policy_lift_vs_base": np.nan,
+                    "policy_forward_return": np.nan,
+                    "rank_ic": np.nan,
+                    "window_pass": False,
+                    "reject_reason": "invalid_window_bounds",
+                }
+            )
+            continue
+
+        part = predictions.loc[(predictions["timestamp"] >= start) & (predictions["timestamp"] <= end)].copy()
+        metrics = _evaluate_score_policy_on_holdout(part, policy, config) if not part.empty else {}
+        rows_count = int(len(part))
+        selection_rate = _float(metrics, "selection_rate", 0.0)
+        selected_rows = int(round(rows_count * selection_rate))
+        rank_ic = _rank_ic_for_frame(part)
+        base_long_rate = float(part["label"].mean()) if rows_count and "label" in part.columns else np.nan
+        reasons = []
+        if rows_count < min_rows:
+            reasons.append("rows")
+        if selected_rows < min_selected_rows:
+            reasons.append("selected_rows")
+        if not bool(metrics.get("pass", False)):
+            reasons.append(str(metrics.get("reject_reason", "policy")).strip(";") or "policy")
+        if not np.isfinite(rank_ic) or rank_ic <= min_rank_ic:
+            reasons.append("rank_ic")
+        lift = _float(metrics, "lift_vs_base")
+        forward_return = _float(metrics, "forward_return")
+        if not np.isfinite(lift) or lift <= min_lift:
+            reasons.append("lift_vs_base")
+        if not np.isfinite(forward_return) or forward_return <= min_forward_return:
+            reasons.append("forward_return")
+        rows.append(
+            {
+                "window": name,
+                "start": str(start),
+                "end": str(end),
+                "candidate": frozen_candidate,
+                "policy_type": policy_type,
+                "policy_name": policy_name,
+                "rows": rows_count,
+                "selected_rows": selected_rows,
+                "base_long_rate": base_long_rate,
+                "policy_precision": _float(metrics, "precision"),
+                "policy_recall": _float(metrics, "recall"),
+                "policy_f1": _float(metrics, "f1"),
+                "policy_lift_vs_base": lift,
+                "policy_forward_return": forward_return,
+                "rank_ic": rank_ic,
+                "window_pass": len(reasons) == 0,
+                "reject_reason": ";".join(reason for reason in reasons if reason),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _write_frozen_policy_robustness(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "frozen_policy_robustness.csv", index=False)
+    (path / "frozen_policy_robustness.md").write_text(
+        _table_markdown("Frozen Policy Robustness", frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "frozen_policy_robustness.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _evaluate_holdout_candidates(
     *,
     profile_entries: list[dict[str, Any]],
@@ -1905,6 +2223,7 @@ def _evaluate_holdout_candidates(
     settings: dict[str, Any],
     config: dict[str, Any],
     decision: dict[str, Any],
+    holdout_boundary_passed: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any], list[dict[str, Any]]]:
     holdout_context, holdout_start = _read_holdout_context(settings, config)
     if holdout_context.empty or holdout_start is None:
@@ -1912,6 +2231,7 @@ def _evaluate_holdout_candidates(
             "available": False,
             "reason": "missing_holdout_frame_or_metadata",
             "policy": "holdout result must remain separate from profile selection",
+            "holdout_boundary_passed": bool(holdout_boundary_passed),
         }
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), holdout_decision, []
 
@@ -2016,6 +2336,7 @@ def _evaluate_holdout_candidates(
             "available": False,
             "reason": "no_holdout_predictions",
             "policy": "holdout result must remain separate from profile selection",
+            "holdout_boundary_passed": bool(holdout_boundary_passed),
         }
         return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
 
@@ -2079,6 +2400,7 @@ def _evaluate_holdout_candidates(
     holdout_decision = {
         "available": True,
         "policy": "one_shot_final_validation; do not tune profiles or weights against this same holdout",
+        "holdout_boundary_passed": bool(holdout_boundary_passed),
         "holdout_start": str(pd.to_datetime(holdout_start, utc=True)),
         "holdout_rows": int(len(holdout_context.loc[pd.to_datetime(holdout_context["timestamp"], utc=True) >= holdout_start])),
         "candidate_count": int(len(holdout_evaluation)),
@@ -3031,6 +3353,9 @@ def _write_experiment_bundle(
         "holdout_reservation.csv",
         "holdout_reservation.md",
         "holdout_reservation.json",
+        "holdout_boundary_audit.csv",
+        "holdout_boundary_audit.md",
+        "holdout_boundary_audit.json",
         "holdout_evaluation.csv",
         "holdout_evaluation.md",
         "holdout_evaluation.json",
@@ -3043,6 +3368,12 @@ def _write_experiment_bundle(
         "holdout_policy_decision.csv",
         "holdout_policy_decision.md",
         "holdout_policy_decision.json",
+        "frozen_policy_robustness.csv",
+        "frozen_policy_robustness.md",
+        "frozen_policy_robustness.json",
+        "frozen_policy_monitoring_plan.csv",
+        "frozen_policy_monitoring_plan.md",
+        "frozen_policy_monitoring_plan.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -3309,6 +3640,10 @@ def write_experiment_diagnostics(
     seed_ensemble = _seed_ensemble_frame(entries)
     profile_blend = _profile_blend_frame(entries)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
+    holdout_boundary_audit = _holdout_boundary_audit_frame(entries, settings)
+    holdout_boundary_passed = bool(holdout_boundary_audit.empty or holdout_boundary_audit["passed"].astype(bool).all())
+    frozen_policy_robustness = _frozen_policy_robustness_frame(entries, diagnostic_config)
+    frozen_policy_monitoring_plan = _frozen_policy_monitoring_plan_frame(diagnostic_config, settings)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -3367,6 +3702,16 @@ def write_experiment_diagnostics(
     holdout_reservation = _write_holdout_reservation(report_dir, settings)
     missing_selected = _missing_selected_profiles(experiment_selection, comparison)
     _write_missing_selected_profiles(report_dir, missing_selected)
+    if not missing_selected.empty:
+        recommendation = "fix_missing_selected_profiles"
+    elif not holdout_boundary_passed:
+        recommendation = "rerun_training_with_holdout_split"
+    elif best:
+        recommendation = "promote_best_candidate"
+    elif best_blend:
+        recommendation = "review_profile_blend"
+    else:
+        recommendation = "keep_control_profile"
     decision = {
         "run_id": run_dir.name,
         "control_profile": settings["control_profile"],
@@ -3381,10 +3726,12 @@ def write_experiment_diagnostics(
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
         "missing_selected_profiles": missing_selected.to_dict(orient="records"),
         "experiment_complete": bool(missing_selected.empty),
+        "holdout_boundary_passed": holdout_boundary_passed,
+        "holdout_boundary_audit": holdout_boundary_audit.to_dict(orient="records"),
+        "frozen_policy_robustness": frozen_policy_robustness.to_dict(orient="records"),
+        "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan.to_dict(orient="records"),
         "holdout": settings.get("holdout", {}) or {},
-        "recommendation": "fix_missing_selected_profiles"
-        if not missing_selected.empty
-        else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
+        "recommendation": recommendation,
         "diagnostic_zips": zip_paths,
     }
     holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries = (
@@ -3394,6 +3741,7 @@ def write_experiment_diagnostics(
             settings=settings,
             config=diagnostic_config,
             decision=decision,
+            holdout_boundary_passed=holdout_boundary_passed,
         )
     )
     decision["holdout_evaluation"] = holdout_decision
@@ -3412,6 +3760,9 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_profile_diagnostic_summaries(report_dir, entries)
+    _write_holdout_boundary_audit(report_dir, holdout_boundary_audit)
+    _write_frozen_policy_robustness(report_dir, frozen_policy_robustness)
+    _write_frozen_policy_monitoring_plan(report_dir, frozen_policy_monitoring_plan)
     _write_holdout_files(
         report_dir,
         holdout_evaluation=holdout_evaluation,
@@ -3429,6 +3780,9 @@ def write_experiment_diagnostics(
     _write_experiment_selection(run_dir, settings)
     _write_holdout_reservation(run_dir, settings)
     _write_missing_selected_profiles(run_dir, missing_selected)
+    _write_holdout_boundary_audit(run_dir, holdout_boundary_audit)
+    _write_frozen_policy_robustness(run_dir, frozen_policy_robustness)
+    _write_frozen_policy_monitoring_plan(run_dir, frozen_policy_monitoring_plan)
     _write_holdout_files(
         run_dir,
         holdout_evaluation=holdout_evaluation,
@@ -3459,6 +3813,9 @@ def write_experiment_diagnostics(
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
+        "holdout_boundary_audit": holdout_boundary_audit,
+        "frozen_policy_robustness": frozen_policy_robustness,
+        "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan,
         "holdout_evaluation": holdout_evaluation,
         "holdout_score_bands": holdout_score_bands,
         "holdout_thresholds": holdout_thresholds,
