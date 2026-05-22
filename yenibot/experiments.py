@@ -118,13 +118,15 @@ def _holdout_policy_action(
     frozen: dict[str, Any],
     observed_policy: dict[str, Any],
     frozen_selection: str,
+    config: dict[str, Any] | None = None,
 ) -> str:
     frozen_consistent = bool(frozen.get("holdout_policy_consistency_pass", False))
     frozen_signal = bool(frozen.get("holdout_signal_pass", False))
     frozen_threshold = bool(frozen.get("holdout_threshold_pass", False))
     observed_consistent = bool(observed_policy.get("holdout_policy_consistency_pass", False))
     observed_name = str(observed_policy.get("candidate", ""))
-    if frozen_consistent and frozen_signal and frozen_threshold:
+    threshold_allowed = bool(_cfg(config or {}, ["experiments", "policy_review", "threshold_deployment_allowed"], False))
+    if frozen_consistent and frozen_signal and frozen_threshold and threshold_allowed:
         return "review_frozen_threshold_and_score_policy"
     if frozen_consistent and frozen_signal:
         return "review_frozen_score_band_policy_only_no_threshold_deployment"
@@ -1385,6 +1387,7 @@ def _write_holdout_files(
     holdout_score_bands: pd.DataFrame,
     holdout_thresholds: pd.DataFrame,
     holdout_decision: dict[str, Any],
+    config: dict[str, Any] | None = None,
 ) -> None:
     path.mkdir(parents=True, exist_ok=True)
     holdout_evaluation.to_csv(path / "holdout_evaluation.csv", index=False)
@@ -1479,7 +1482,7 @@ def _write_holdout_files(
         path / "holdout_policy_consistency.json",
         {"rows": holdout_policy_consistency.to_dict(orient="records")},
     )
-    holdout_policy_decision = _holdout_policy_decision_frame(holdout_decision)
+    holdout_policy_decision = _holdout_policy_decision_frame(holdout_decision, config)
     holdout_policy_decision.to_csv(path / "holdout_policy_decision.csv", index=False)
     (path / "holdout_policy_decision.md").write_text(
         _table_markdown("Holdout Policy Decision", holdout_policy_decision),
@@ -1507,12 +1510,23 @@ def _write_holdout_files(
     )
 
 
-def _holdout_policy_decision_frame(holdout_decision: dict[str, Any]) -> pd.DataFrame:
+def _holdout_policy_decision_frame(
+    holdout_decision: dict[str, Any],
+    config: dict[str, Any] | None = None,
+) -> pd.DataFrame:
     columns = [
         "available",
         "frozen_selection",
         "score_policy_recommendation",
         "policy_action",
+        "configured_frozen_candidate",
+        "configured_policy_type",
+        "configured_policy_name",
+        "configured_status",
+        "configured_threshold_deployment_allowed",
+        "configured_future_oos_candidates",
+        "configured_policy_match",
+        "threshold_deployment_blocked_by_policy",
         "frozen_candidate",
         "frozen_cv_policy_name",
         "frozen_holdout_policy_name",
@@ -1536,16 +1550,41 @@ def _holdout_policy_decision_frame(holdout_decision: dict[str, Any]) -> pd.DataF
     observed = holdout_decision.get("observed_best_policy_candidate") or {}
     frozen_selection = str(holdout_decision.get("frozen_selection", ""))
     observed_name = str(observed.get("candidate", ""))
+    policy_review = _cfg(config or {}, ["experiments", "policy_review"], {}) or {}
+    configured_candidate = str(policy_review.get("frozen_candidate", ""))
+    configured_policy_type = str(policy_review.get("policy_type", ""))
+    configured_policy_name = str(policy_review.get("policy_name", ""))
+    configured_status = str(policy_review.get("status", ""))
+    configured_threshold_allowed = bool(policy_review.get("threshold_deployment_allowed", False))
+    future_candidates = ",".join(str(item) for item in policy_review.get("future_oos_candidates", []) or [])
+    configured_policy_match = bool(
+        configured_candidate
+        and configured_policy_name
+        and frozen_selection == configured_candidate
+        and str(frozen.get("cv_policy_name", "")) == configured_policy_name
+        and str(frozen.get("holdout_policy_name", "")) == configured_policy_name
+        and (not configured_policy_type or str(frozen.get("cv_policy_type", "")) == configured_policy_type)
+        and (not configured_policy_type or str(frozen.get("holdout_policy_type", "")) == configured_policy_type)
+    )
     action = _holdout_policy_action(
         frozen=frozen,
         observed_policy=observed,
         frozen_selection=frozen_selection,
+        config=config,
     )
     row = {
         "available": True,
         "frozen_selection": frozen_selection,
         "score_policy_recommendation": str(holdout_decision.get("score_policy_recommendation", "")),
         "policy_action": action,
+        "configured_frozen_candidate": configured_candidate,
+        "configured_policy_type": configured_policy_type,
+        "configured_policy_name": configured_policy_name,
+        "configured_status": configured_status,
+        "configured_threshold_deployment_allowed": configured_threshold_allowed,
+        "configured_future_oos_candidates": future_candidates,
+        "configured_policy_match": configured_policy_match,
+        "threshold_deployment_blocked_by_policy": not configured_threshold_allowed,
         "frozen_candidate": str(frozen.get("candidate", "")),
         "frozen_cv_policy_name": str(frozen.get("cv_policy_name", "")),
         "frozen_holdout_policy_name": str(frozen.get("holdout_policy_name", "")),
@@ -2052,7 +2091,7 @@ def _evaluate_holdout_candidates(
         "observed_best_policy_warning": observed_best_policy_warning,
         "score_policy_recommendation": score_policy_recommendation,
     }
-    policy_validation = _holdout_policy_decision_frame(holdout_decision)
+    policy_validation = _holdout_policy_decision_frame(holdout_decision, config)
     holdout_decision["policy_validation"] = (
         _json_ready(policy_validation.iloc[0].to_dict())
         if not policy_validation.empty
@@ -3379,6 +3418,7 @@ def write_experiment_diagnostics(
         holdout_score_bands=holdout_score_bands,
         holdout_thresholds=holdout_thresholds,
         holdout_decision=holdout_decision,
+        config=diagnostic_config,
     )
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
@@ -3395,6 +3435,7 @@ def write_experiment_diagnostics(
         holdout_score_bands=holdout_score_bands,
         holdout_thresholds=holdout_thresholds,
         holdout_decision=holdout_decision,
+        config=diagnostic_config,
     )
     bundle_path, latest_bundle_path = _write_experiment_bundle(
         output_dir=Path(output_dir),

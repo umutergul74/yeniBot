@@ -300,6 +300,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["holdout"]["enabled"] is True
     assert config["experiments"]["holdout"]["holdout_bars"] == 4320
     assert config["experiments"]["holdout"]["holdout_filename"] == "holdout_1h.parquet"
+    assert config["experiments"]["policy_review"]["frozen_candidate"] == "blend_prob_mean_953a4ee825"
+    assert config["experiments"]["policy_review"]["policy_type"] == "score_band"
+    assert config["experiments"]["policy_review"]["policy_name"] == "top_10"
+    assert config["experiments"]["policy_review"]["status"] == "score_band_review_only"
+    assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
+    assert config["experiments"]["policy_review"]["future_oos_candidates"] == ["blend_control_long_pressure_65_35"]
     assert config["experiments"]["seed_audit"]["enabled"] is True
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
@@ -1458,6 +1464,8 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "observed_best_policy_candidate" in diagnostics["decision"]["holdout_evaluation"]
     assert "policy_validation" in diagnostics["decision"]["holdout_evaluation"]
     policy_validation = diagnostics["decision"]["holdout_evaluation"]["policy_validation"]
+    assert "configured_policy_match" in policy_validation
+    assert "threshold_deployment_blocked_by_policy" in policy_validation
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
         "review_frozen_score_band_policy_only_no_threshold_deployment",

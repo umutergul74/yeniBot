@@ -1433,6 +1433,16 @@ experiments:
     holdout_bars: 4320
     holdout_filename: holdout_1h.parquet
     policy: "profile_selection_only_before_holdout; holdout is reserved for one-shot final validation"
+  policy_review:
+    enabled: true
+    frozen_candidate: blend_prob_mean_953a4ee825
+    policy_type: score_band
+    policy_name: top_10
+    status: score_band_review_only
+    threshold_deployment_allowed: false
+    note: "Frozen pre-holdout selection validates as a score-band signal only; threshold deployment remains blocked until a future out-of-sample window confirms it."
+    future_oos_candidates:
+      - blend_control_long_pressure_65_35
   experiment_memory:
     enabled: true
     reject_retests: true
