@@ -1333,6 +1333,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
         assert "matrix/holdout_reservation.csv" in archive.namelist()
         assert "matrix/holdout_policy_consistency.csv" in archive.namelist()
+        assert "matrix/holdout_policy_decision.csv" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -1340,6 +1341,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names
     assert "matrix/holdout_policy_consistency.csv" in names
+    assert "matrix/holdout_policy_decision.csv" in names
     assert all("/diagnostics/" not in name for name in names)
 
 
@@ -1449,10 +1451,19 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_threshold_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_consistency.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_policy_decision.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
     assert "frozen_policy_validation" in diagnostics["decision"]["holdout_evaluation"]
     assert "observed_best_policy_candidate" in diagnostics["decision"]["holdout_evaluation"]
+    assert "policy_validation" in diagnostics["decision"]["holdout_evaluation"]
+    policy_validation = diagnostics["decision"]["holdout_evaluation"]["policy_validation"]
+    assert policy_validation["policy_action"] in {
+        "review_frozen_threshold_and_score_policy",
+        "review_frozen_score_band_policy_only_no_threshold_deployment",
+        "holdout_only_candidate_do_not_promote_without_future_oos",
+        "keep_control_profile",
+    }
     assert diagnostics["decision"]["holdout_evaluation"]["score_policy_recommendation"] in {
         "review_frozen_score_band_policy",
         "holdout_only_diagnostic_policy_candidate",
@@ -1464,6 +1475,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/holdout_score_band_summary.csv" in names
     assert "holdout_run/holdout_threshold_summary.csv" in names
     assert "holdout_run/holdout_policy_consistency.csv" in names
+    assert "holdout_run/holdout_policy_decision.csv" in names
     assert "holdout_run/holdout_policy_evaluation.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names

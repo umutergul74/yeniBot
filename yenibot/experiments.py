@@ -113,6 +113,26 @@ def _table_markdown(title: str, frame: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _holdout_policy_action(
+    *,
+    frozen: dict[str, Any],
+    observed_policy: dict[str, Any],
+    frozen_selection: str,
+) -> str:
+    frozen_consistent = bool(frozen.get("holdout_policy_consistency_pass", False))
+    frozen_signal = bool(frozen.get("holdout_signal_pass", False))
+    frozen_threshold = bool(frozen.get("holdout_threshold_pass", False))
+    observed_consistent = bool(observed_policy.get("holdout_policy_consistency_pass", False))
+    observed_name = str(observed_policy.get("candidate", ""))
+    if frozen_consistent and frozen_signal and frozen_threshold:
+        return "review_frozen_threshold_and_score_policy"
+    if frozen_consistent and frozen_signal:
+        return "review_frozen_score_band_policy_only_no_threshold_deployment"
+    if observed_consistent and observed_name and observed_name != frozen_selection:
+        return "holdout_only_candidate_do_not_promote_without_future_oos"
+    return "keep_control_profile"
+
+
 def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:
     """Return an in-memory config copy with the requested active feature profile."""
 
@@ -1459,6 +1479,16 @@ def _write_holdout_files(
         path / "holdout_policy_consistency.json",
         {"rows": holdout_policy_consistency.to_dict(orient="records")},
     )
+    holdout_policy_decision = _holdout_policy_decision_frame(holdout_decision)
+    holdout_policy_decision.to_csv(path / "holdout_policy_decision.csv", index=False)
+    (path / "holdout_policy_decision.md").write_text(
+        _table_markdown("Holdout Policy Decision", holdout_policy_decision),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "holdout_policy_decision.json",
+        {"rows": holdout_policy_decision.to_dict(orient="records")},
+    )
     (path / "holdout_evaluation.md").write_text(
         _holdout_markdown(holdout_evaluation, holdout_decision),
         encoding="utf-8",
@@ -1472,8 +1502,67 @@ def _write_holdout_files(
             "thresholds": holdout_thresholds.to_dict(orient="records"),
             "policy_evaluation": holdout_policy_evaluation.to_dict(orient="records"),
             "policy_consistency": holdout_policy_consistency.to_dict(orient="records"),
+            "policy_decision": holdout_policy_decision.to_dict(orient="records"),
         },
     )
+
+
+def _holdout_policy_decision_frame(holdout_decision: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "available",
+        "frozen_selection",
+        "score_policy_recommendation",
+        "policy_action",
+        "frozen_candidate",
+        "frozen_cv_policy_name",
+        "frozen_holdout_policy_name",
+        "frozen_policy_consistency_pass",
+        "frozen_signal_pass",
+        "frozen_threshold_pass",
+        "frozen_soft_pass",
+        "frozen_holdout_policy_lift_vs_base",
+        "frozen_holdout_policy_forward_return",
+        "observed_best_policy_candidate",
+        "observed_best_policy_is_frozen",
+        "observed_best_policy_lift_vs_base",
+        "observed_best_policy_forward_return",
+        "do_not_promote_observed_best_from_same_holdout",
+        "warning",
+    ]
+    if not bool(holdout_decision.get("available", False)):
+        return pd.DataFrame(columns=columns)
+
+    frozen = holdout_decision.get("frozen_policy_validation") or {}
+    observed = holdout_decision.get("observed_best_policy_candidate") or {}
+    frozen_selection = str(holdout_decision.get("frozen_selection", ""))
+    observed_name = str(observed.get("candidate", ""))
+    action = _holdout_policy_action(
+        frozen=frozen,
+        observed_policy=observed,
+        frozen_selection=frozen_selection,
+    )
+    row = {
+        "available": True,
+        "frozen_selection": frozen_selection,
+        "score_policy_recommendation": str(holdout_decision.get("score_policy_recommendation", "")),
+        "policy_action": action,
+        "frozen_candidate": str(frozen.get("candidate", "")),
+        "frozen_cv_policy_name": str(frozen.get("cv_policy_name", "")),
+        "frozen_holdout_policy_name": str(frozen.get("holdout_policy_name", "")),
+        "frozen_policy_consistency_pass": bool(frozen.get("holdout_policy_consistency_pass", False)),
+        "frozen_signal_pass": bool(frozen.get("holdout_signal_pass", False)),
+        "frozen_threshold_pass": bool(frozen.get("holdout_threshold_pass", False)),
+        "frozen_soft_pass": bool(frozen.get("holdout_soft_pass", False)),
+        "frozen_holdout_policy_lift_vs_base": _float(frozen, "holdout_policy_lift_vs_base"),
+        "frozen_holdout_policy_forward_return": _float(frozen, "holdout_policy_forward_return"),
+        "observed_best_policy_candidate": observed_name,
+        "observed_best_policy_is_frozen": bool(observed_name and observed_name == frozen_selection),
+        "observed_best_policy_lift_vs_base": _float(observed, "holdout_policy_lift_vs_base"),
+        "observed_best_policy_forward_return": _float(observed, "holdout_policy_forward_return"),
+        "do_not_promote_observed_best_from_same_holdout": bool(observed_name and observed_name != frozen_selection),
+        "warning": str(holdout_decision.get("observed_best_policy_warning", "")),
+    }
+    return pd.DataFrame([row], columns=columns)
 
 
 def _threshold_summary_value(threshold_summary: pd.DataFrame | None, metric: str) -> float:
@@ -1963,6 +2052,12 @@ def _evaluate_holdout_candidates(
         "observed_best_policy_warning": observed_best_policy_warning,
         "score_policy_recommendation": score_policy_recommendation,
     }
+    policy_validation = _holdout_policy_decision_frame(holdout_decision)
+    holdout_decision["policy_validation"] = (
+        _json_ready(policy_validation.iloc[0].to_dict())
+        if not policy_validation.empty
+        else {}
+    )
     return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
 
 
@@ -2906,6 +3001,9 @@ def _write_experiment_bundle(
         "holdout_policy_consistency.csv",
         "holdout_policy_consistency.md",
         "holdout_policy_consistency.json",
+        "holdout_policy_decision.csv",
+        "holdout_policy_decision.md",
+        "holdout_policy_decision.json",
         "decision_report.json",
         "best_candidate.json",
     ]
