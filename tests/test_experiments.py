@@ -1543,12 +1543,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "holdout_reservation.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "future_oos_candidate_plan.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "holdout_reservation.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "future_oos_candidate_plan.csv").exists()
     assert diagnostics["zip_paths"]
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
@@ -1581,6 +1583,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "promote_best_candidate",
         "review_profile_blend",
         "rerun_training_with_holdout_split",
+        "wait_for_new_unseen_bars_keep_control_profile",
     }
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
@@ -1594,6 +1597,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/holdout_policy_decision.csv" in archive.namelist()
         assert "matrix/frozen_policy_robustness.csv" in archive.namelist()
         assert "matrix/frozen_policy_monitoring_plan.csv" in archive.namelist()
+        assert "matrix/future_oos_candidate_plan.csv" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -1605,6 +1609,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/holdout_policy_decision.csv" in names
     assert "matrix/frozen_policy_robustness.csv" in names
     assert "matrix/frozen_policy_monitoring_plan.csv" in names
+    assert "matrix/future_oos_candidate_plan.csv" in names
     assert all("/diagnostics/" not in name for name in names)
 
 
@@ -1944,10 +1949,12 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
     assert diagnostics["decision"]["training_execution_metadata_source"] == "training_execution_summary"
     assert diagnostics["decision"]["training_execution_metadata_available"] is True
     assert diagnostics["experiment_policy_guard"].loc[0, "action"] == "normal_experiment_flow"
+    assert not diagnostics["future_oos_candidate_plan"].empty
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_stable_run.zip") as archive:
         names = set(archive.namelist())
     assert "stable_run/training_execution_summary.json" in names
     assert "stable_run/experiment_policy_guard.csv" in names
+    assert "stable_run/future_oos_candidate_plan.csv" in names
 
 
 def test_write_experiment_diagnostics_raises_when_run_has_no_completed_profiles(tmp_path, tiny_config) -> None:

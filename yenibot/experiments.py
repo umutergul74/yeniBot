@@ -2424,6 +2424,111 @@ def _write_experiment_policy_guard(path: Path, frame: pd.DataFrame) -> None:
     _write_json(path / "experiment_policy_guard.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _recommendation_with_policy_guard(recommendation: str, settings: dict[str, Any]) -> str:
+    guard = settings.get("experiment_policy_guard", {}) or {}
+    if bool(guard.get("profile_search_locked", False)) and recommendation not in {
+        "fix_missing_selected_profiles",
+        "rerun_training_with_holdout_split",
+    }:
+        return str(guard.get("action") or "wait_for_new_unseen_bars_keep_control_profile")
+    return recommendation
+
+
+def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
+    profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
+    weighted_blends = _cfg(config, ["experiments", "profile_blends", "weighted"], []) or []
+    rows: list[dict[str, Any]] = []
+
+    def add_row(
+        *,
+        candidate: str,
+        candidate_type: str,
+        stage: str,
+        required_profiles: list[str] | None = None,
+        note: str = "",
+    ) -> None:
+        required = [str(profile) for profile in required_profiles or [] if str(profile)]
+        missing_profiles = [profile for profile in required if profile not in profiles_cfg]
+        allowed = set(str(item) for item in guard.get("allowed_benchmark_profiles", []) or [])
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "stage": stage,
+                "required_profiles": ",".join(required),
+                "missing_required_profiles": ",".join(missing_profiles),
+                "all_required_profiles_allowed": all(profile in allowed for profile in required) if required else candidate in allowed,
+                "profile_search_locked": bool(guard.get("profile_search_locked", False)),
+                "future_oos_ready": bool(guard.get("future_oos_ready", False)),
+                "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
+                "action": str(guard.get("action", "")),
+                "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
+                "note": note,
+            }
+        )
+
+    control = str(settings.get("control_profile", ""))
+    if control:
+        add_row(
+            candidate=control,
+            candidate_type="profile",
+            stage="control_profile",
+            required_profiles=[control],
+            note="Current control profile remains the safe baseline.",
+        )
+
+    frozen = str(policy_review.get("frozen_candidate", "")).strip()
+    if frozen:
+        add_row(
+            candidate=frozen,
+            candidate_type=str(policy_review.get("policy_type", "score_policy")),
+            stage="retired_frozen_policy",
+            note=str(policy_review.get("note", "")),
+        )
+
+    future_items = [str(item) for item in policy_review.get("future_oos_candidates", []) or []]
+    for item in future_items:
+        matched = False
+        for blend in weighted_blends:
+            if not isinstance(blend, dict):
+                continue
+            name = str(blend.get("name", ""))
+            if item not in {name, f"blend_{name}"}:
+                continue
+            add_row(
+                candidate=item,
+                candidate_type="weighted_blend",
+                stage="future_oos_candidate",
+                required_profiles=[str(profile) for profile in blend.get("profiles", []) or []],
+                note=str(blend.get("description", "")),
+            )
+            matched = True
+            break
+        if matched:
+            continue
+        add_row(
+            candidate=item,
+            candidate_type="profile" if item in profiles_cfg else "unknown",
+            stage="future_oos_candidate",
+            required_profiles=[item] if item in profiles_cfg else [],
+            note="" if item in profiles_cfg else "Candidate is not a known feature profile or configured weighted blend.",
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _write_future_oos_candidate_plan(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "future_oos_candidate_plan.csv", index=False)
+    (path / "future_oos_candidate_plan.md").write_text(
+        _table_markdown("Future OOS Candidate Plan", frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "future_oos_candidate_plan.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _frozen_policy_robustness_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     robustness = policy_review.get("robustness", {}) or {}
@@ -3788,6 +3893,9 @@ def _write_experiment_bundle(
         "experiment_policy_guard.csv",
         "experiment_policy_guard.md",
         "experiment_policy_guard.json",
+        "future_oos_candidate_plan.csv",
+        "future_oos_candidate_plan.md",
+        "future_oos_candidate_plan.json",
         "training_execution_summary.json",
         "decision_report.json",
         "best_candidate.json",
@@ -3849,6 +3957,8 @@ def run_experiment_matrix(
     holdout_reservation = _write_holdout_reservation(run_dir, settings)
     experiment_policy_guard = _experiment_policy_guard_frame(settings, config)
     _write_experiment_policy_guard(run_dir, experiment_policy_guard)
+    future_oos_candidate_plan = _future_oos_candidate_plan_frame(settings, config)
+    _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
 
     triage_fold_ids = [int(fold_id) for fold_id in settings.get("triage_fold_ids", [])]
     resume_existing = bool(settings.get("resume_existing", True))
@@ -3949,6 +4059,9 @@ def run_experiment_matrix(
         seed_results=seed_results,
     )
     _write_json(_training_execution_summary_path(run_dir), training_execution)
+    recommendation = "fix_missing_selected_profiles" if not missing_selected.empty else (
+        "promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")
+    )
     decision = {
         "run_id": run_id,
         "control_profile": settings["control_profile"],
@@ -3967,9 +4080,8 @@ def run_experiment_matrix(
         "experiment_complete": bool(missing_selected.empty),
         "holdout": settings.get("holdout", {}) or {},
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
-        "recommendation": "fix_missing_selected_profiles"
-        if not missing_selected.empty
-        else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
+        "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
+        "recommendation": _recommendation_with_policy_guard(recommendation, settings),
     }
     _write_decision_files(run_dir, comparison, decision)
     _write_profile_delta(run_dir, profile_delta)
@@ -3986,6 +4098,7 @@ def run_experiment_matrix(
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
         "experiment_policy_guard": experiment_policy_guard,
+        "future_oos_candidate_plan": future_oos_candidate_plan,
         **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
         "executed_training_scopes": training_execution["executed_training_scopes"],
         "training_execution_metadata_source": "run_experiment_matrix",
@@ -4093,6 +4206,7 @@ def write_experiment_diagnostics(
     frozen_policy_robustness = _frozen_policy_robustness_frame(entries, diagnostic_config)
     frozen_policy_monitoring_plan = _frozen_policy_monitoring_plan_frame(diagnostic_config, settings)
     experiment_policy_guard = _experiment_policy_guard_frame(settings, diagnostic_config)
+    future_oos_candidate_plan = _future_oos_candidate_plan_frame(settings, diagnostic_config)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -4161,6 +4275,7 @@ def write_experiment_diagnostics(
         recommendation = "review_profile_blend"
     else:
         recommendation = "keep_control_profile"
+    guarded_recommendation = _recommendation_with_policy_guard(recommendation, settings)
     decision = {
         "run_id": run_dir.name,
         "control_profile": settings["control_profile"],
@@ -4184,8 +4299,9 @@ def write_experiment_diagnostics(
         "frozen_policy_robustness": frozen_policy_robustness.to_dict(orient="records"),
         "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan.to_dict(orient="records"),
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
+        "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
         "holdout": settings.get("holdout", {}) or {},
-        "recommendation": recommendation,
+        "recommendation": guarded_recommendation,
         "diagnostic_zips": zip_paths,
     }
     holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries = (
@@ -4219,6 +4335,7 @@ def write_experiment_diagnostics(
     _write_frozen_policy_robustness(report_dir, frozen_policy_robustness)
     _write_frozen_policy_monitoring_plan(report_dir, frozen_policy_monitoring_plan)
     _write_experiment_policy_guard(report_dir, experiment_policy_guard)
+    _write_future_oos_candidate_plan(report_dir, future_oos_candidate_plan)
     _write_holdout_files(
         report_dir,
         holdout_evaluation=holdout_evaluation,
@@ -4241,6 +4358,7 @@ def write_experiment_diagnostics(
     _write_frozen_policy_robustness(run_dir, frozen_policy_robustness)
     _write_frozen_policy_monitoring_plan(run_dir, frozen_policy_monitoring_plan)
     _write_experiment_policy_guard(run_dir, experiment_policy_guard)
+    _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
     _write_holdout_files(
         run_dir,
         holdout_evaluation=holdout_evaluation,
@@ -4275,6 +4393,7 @@ def write_experiment_diagnostics(
         "frozen_policy_robustness": frozen_policy_robustness,
         "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan,
         "experiment_policy_guard": experiment_policy_guard,
+        "future_oos_candidate_plan": future_oos_candidate_plan,
         "holdout_evaluation": holdout_evaluation,
         "holdout_score_bands": holdout_score_bands,
         "holdout_thresholds": holdout_thresholds,
