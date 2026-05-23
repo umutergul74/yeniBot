@@ -871,6 +871,14 @@ def _float(row: dict[str, Any], key: str, default: float = np.nan) -> float:
         return default
 
 
+def _optional_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
 def _optional_gate_float(gates: dict[str, Any], key: str, default: float | None = None) -> float | None:
     value = gates.get(key, default)
     if value is None:
@@ -2460,13 +2468,27 @@ def _recommendation_with_policy_guard(recommendation: str, settings: dict[str, A
     return recommendation
 
 
-def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
+def _future_oos_candidate_plan_frame(
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    payoff_policy_robustness_summary: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
     ready_at = _future_oos_ready_at_fields(guard)
     profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
     weighted_blends = _cfg(config, ["experiments", "profile_blends", "weighted"], []) or []
     rows: list[dict[str, Any]] = []
+
+    def weighted_blend_profiles(candidate: str) -> list[str]:
+        for blend in weighted_blends:
+            if not isinstance(blend, dict):
+                continue
+            name = str(blend.get("name", ""))
+            if candidate not in {name, f"blend_{name}"}:
+                continue
+            return [str(profile) for profile in blend.get("profiles", []) or [] if str(profile)]
+        return []
 
     def add_row(
         *,
@@ -2475,6 +2497,12 @@ def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str,
         stage: str,
         required_profiles: list[str] | None = None,
         note: str = "",
+        policy_name: str = "",
+        policy_type: str = "",
+        selection_source: str = "",
+        cv_mean_label_lift_vs_base: float | None = None,
+        cv_mean_forward_return: float | None = None,
+        cv_payoff_alignment_fold_rate: float | None = None,
     ) -> None:
         required = [str(profile) for profile in required_profiles or [] if str(profile)]
         missing_profiles = [profile for profile in required if profile not in profiles_cfg]
@@ -2495,6 +2523,12 @@ def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str,
                 "action": str(guard.get("action", "")),
                 "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
                 "note": note,
+                "policy_name": policy_name,
+                "policy_type": policy_type,
+                "selection_source": selection_source,
+                "cv_mean_label_lift_vs_base": cv_mean_label_lift_vs_base,
+                "cv_mean_forward_return": cv_mean_forward_return,
+                "cv_payoff_alignment_fold_rate": cv_payoff_alignment_fold_rate,
             }
         )
 
@@ -2544,6 +2578,54 @@ def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str,
             required_profiles=[item] if item in profiles_cfg else [],
             note="" if item in profiles_cfg else "Candidate is not a known feature profile or configured weighted blend.",
         )
+
+    if payoff_policy_robustness_summary is not None and not payoff_policy_robustness_summary.empty:
+        policy_rows = payoff_policy_robustness_summary.copy()
+        if "future_oos_policy_candidate" in policy_rows.columns:
+            candidate_mask = policy_rows["future_oos_policy_candidate"].map(
+                lambda value: bool(value) if isinstance(value, (bool, np.bool_)) else str(value).strip().lower() in {"1", "true", "yes"}
+            )
+            policy_rows = policy_rows[
+                (policy_rows.get("evaluation_scope", "").astype(str) == "cv_test")
+                & candidate_mask
+            ]
+        else:
+            policy_rows = policy_rows.iloc[0:0]
+        existing_policy_keys = {
+            (str(row.get("candidate", "")), str(row.get("stage", "")), str(row.get("policy_name", "")))
+            for row in rows
+        }
+        for _, policy_row in policy_rows.iterrows():
+            candidate = str(policy_row.get("candidate", "")).strip()
+            band = str(policy_row.get("band", "")).strip()
+            if not candidate or not band:
+                continue
+            key = (candidate, "future_oos_score_band_policy", band)
+            if key in existing_policy_keys:
+                continue
+            if candidate in profiles_cfg:
+                required_profiles = [candidate]
+                candidate_type = "profile_score_band"
+            else:
+                required_profiles = weighted_blend_profiles(candidate)
+                candidate_type = "weighted_blend_score_band" if required_profiles else "score_band_policy"
+            add_row(
+                candidate=candidate,
+                candidate_type=candidate_type,
+                stage="future_oos_score_band_policy",
+                required_profiles=required_profiles,
+                note=(
+                    "CV payoff-policy robustness pre-registered this score band for future unseen OOS review. "
+                    "Current holdout remains diagnostic-only and must not be used for promotion."
+                ),
+                policy_name=band,
+                policy_type="score_band",
+                selection_source="cv_payoff_policy_robustness",
+                cv_mean_label_lift_vs_base=_optional_float(policy_row.get("mean_label_lift_vs_base")),
+                cv_mean_forward_return=_optional_float(policy_row.get("mean_forward_return")),
+                cv_payoff_alignment_fold_rate=_optional_float(policy_row.get("payoff_alignment_fold_rate")),
+            )
+            existing_policy_keys.add(key)
 
     return pd.DataFrame(rows)
 
@@ -5020,6 +5102,12 @@ def run_experiment_matrix(
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(all_results, [], config)
     payoff_policy_robustness_summary = _payoff_policy_robustness_summary_frame(payoff_policy_robustness, config)
+    future_oos_candidate_plan = _future_oos_candidate_plan_frame(
+        settings,
+        config,
+        payoff_policy_robustness_summary,
+    )
+    _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
@@ -5316,6 +5404,12 @@ def write_experiment_diagnostics(
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
     payoff_policy_robustness_summary = _payoff_policy_robustness_summary_frame(payoff_policy_robustness, diagnostic_config)
+    future_oos_candidate_plan = _future_oos_candidate_plan_frame(
+        settings,
+        diagnostic_config,
+        payoff_policy_robustness_summary,
+    )
+    decision["future_oos_candidate_plan"] = future_oos_candidate_plan.to_dict(orient="records")
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")

@@ -247,6 +247,100 @@ def test_future_oos_candidate_plan_records_ready_dates() -> None:
     assert future["evaluation_status"] == "wait_for_future_oos"
 
 
+def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["*"], "exclude_patterns": []},
+                "benchmark": {"include_patterns": ["*"], "exclude_patterns": []},
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control", "benchmark"],
+            "profile_blends": {
+                "weighted": [
+                    {
+                        "name": "control_benchmark_65_35",
+                        "method": "prob_weighted",
+                        "profiles": ["control", "benchmark"],
+                        "weights": [0.65, 0.35],
+                    }
+                ]
+            },
+            "holdout": {"holdout_data_end": "2026-05-13 08:00:00+00:00"},
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_candidates": ["blend_control_benchmark_65_35"],
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        },
+    }
+    summary = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "evaluation_scope": "cv_test",
+                "band": "top_30",
+                "future_oos_policy_candidate": True,
+                "mean_label_lift_vs_base": 1.11,
+                "mean_forward_return": 0.0017,
+                "payoff_alignment_fold_rate": 0.50,
+            },
+            {
+                "candidate": "blend_control_benchmark_65_35",
+                "candidate_type": "blend",
+                "evaluation_scope": "cv_test",
+                "band": "top_10",
+                "future_oos_policy_candidate": "True",
+                "mean_label_lift_vs_base": 1.15,
+                "mean_forward_return": 0.0025,
+                "payoff_alignment_fold_rate": 0.53,
+            },
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "evaluation_scope": "holdout",
+                "band": "top_20",
+                "future_oos_policy_candidate": True,
+            },
+            {
+                "candidate": "benchmark",
+                "candidate_type": "profile",
+                "evaluation_scope": "cv_test",
+                "band": "top_10",
+                "future_oos_policy_candidate": False,
+            },
+        ]
+    )
+
+    settings = experiment_settings(config)
+    plan = _future_oos_candidate_plan_frame(settings, config, summary)
+    policy_rows = plan.loc[plan["stage"] == "future_oos_score_band_policy"]
+
+    assert set(policy_rows["candidate"]) == {"control", "blend_control_benchmark_65_35"}
+    control_policy = policy_rows.loc[policy_rows["candidate"] == "control"].iloc[0]
+    assert control_policy["policy_name"] == "top_30"
+    assert control_policy["required_profiles"] == "control"
+    assert control_policy["selection_source"] == "cv_payoff_policy_robustness"
+    assert float(control_policy["cv_mean_forward_return"]) == pytest.approx(0.0017)
+    blend_policy = policy_rows.loc[policy_rows["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
+    assert blend_policy["candidate_type"] == "weighted_blend_score_band"
+    assert blend_policy["required_profiles"] == "control,benchmark"
+    assert bool(blend_policy["all_required_profiles_allowed"]) is True
+
+
 def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
     config = {
         "validation": {
