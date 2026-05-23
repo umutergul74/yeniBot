@@ -104,6 +104,94 @@ def test_experiment_settings_skips_historically_rejected_candidates() -> None:
     ]
 
 
+def test_experiment_policy_guard_locks_profile_search_until_future_oos() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["*"], "exclude_patterns": []},
+                "benchmark": {"include_patterns": ["*"], "exclude_patterns": []},
+                "new_candidate": {"include_patterns": ["*"], "exclude_patterns": []},
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["new_candidate"],
+            "always_full_profiles": ["control", "benchmark", "new_candidate"],
+            "profile_blends": {
+                "weighted": [
+                    {
+                        "name": "control_benchmark_65_35",
+                        "method": "prob_weighted",
+                        "profiles": ["control", "benchmark"],
+                        "weights": [0.65, 0.35],
+                    }
+                ]
+            },
+            "holdout": {"holdout_data_end": "2026-05-13 08:00:00+00:00"},
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_candidates": ["blend_control_benchmark_65_35"],
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+
+    assert settings["candidate_profiles"] == []
+    assert settings["profiles"] == ["control"]
+    assert settings["always_full_profiles"] == ["control", "benchmark"]
+    guard = settings["experiment_policy_guard"]
+    assert guard["profile_search_locked"] is True
+    assert guard["action"] == "wait_for_new_unseen_bars_keep_control_profile"
+    assert guard["future_oos_ready"] is False
+    assert guard["blocked_candidate_profiles"] == ["new_candidate"]
+    assert guard["blocked_full_profiles"] == ["new_candidate"]
+    skipped = settings["skipped_profiles"]
+    assert any(item["profile"] == "new_candidate" and item["role"] == "candidate_profile" for item in skipped)
+    assert any(item["profile"] == "new_candidate" and item["role"] == "always_full_profile" for item in skipped)
+
+
+def test_experiment_policy_guard_unlocks_after_future_oos_minimum_window() -> None:
+    config = {
+        "features": {"active_profile": "control"},
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["new_candidate"],
+            "always_full_profiles": ["control", "new_candidate"],
+            "holdout": {"holdout_data_end": "2026-06-13 08:00:00+00:00"},
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+
+    assert settings["candidate_profiles"] == ["new_candidate"]
+    assert settings["always_full_profiles"] == ["control", "new_candidate"]
+    assert settings["experiment_policy_guard"]["profile_search_locked"] is False
+    assert settings["experiment_policy_guard"]["future_oos_ready"] is True
+
+
 def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
     config = {
         "validation": {
@@ -1855,9 +1943,11 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
     assert diagnostics["decision"]["all_training_scopes_reused"] is True
     assert diagnostics["decision"]["training_execution_metadata_source"] == "training_execution_summary"
     assert diagnostics["decision"]["training_execution_metadata_available"] is True
+    assert diagnostics["experiment_policy_guard"].loc[0, "action"] == "normal_experiment_flow"
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_stable_run.zip") as archive:
         names = set(archive.namelist())
     assert "stable_run/training_execution_summary.json" in names
+    assert "stable_run/experiment_policy_guard.csv" in names
 
 
 def test_write_experiment_diagnostics_raises_when_run_has_no_completed_profiles(tmp_path, tiny_config) -> None:

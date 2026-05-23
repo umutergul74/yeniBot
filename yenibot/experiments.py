@@ -200,6 +200,134 @@ def _filter_memory_rejected_profiles(
     return selected, skipped
 
 
+def _policy_status_is_retired_or_failed(status: str) -> bool:
+    return any(token in str(status).lower() for token in ("failed", "invalidated", "retired"))
+
+
+def _future_oos_allowed_benchmark_profiles(config: dict[str, Any], control_profile: str) -> list[str]:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    future_items = {str(item) for item in policy_review.get("future_oos_candidates", []) or []}
+    profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
+    allowed = [str(control_profile)]
+
+    for item in future_items:
+        if item in profiles_cfg and item not in allowed:
+            allowed.append(item)
+
+    for blend in (_cfg(config, ["experiments", "profile_blends", "weighted"], []) or []):
+        if not isinstance(blend, dict):
+            continue
+        name = str(blend.get("name", ""))
+        candidate_names = {name, f"blend_{name}"}
+        if not candidate_names.intersection(future_items):
+            continue
+        for profile in blend.get("profiles", []) or []:
+            profile = str(profile)
+            if profile and profile not in allowed:
+                allowed.append(profile)
+    return allowed
+
+
+def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    holdout = settings.get("holdout", {}) or _cfg(config, ["experiments", "holdout"], {}) or {}
+    latest_data_end = str(holdout.get("holdout_data_end", "") or "")
+    monitor_state = _future_oos_monitor_state(config, latest_data_end)
+    control = str(settings.get("control_profile") or _cfg(config, ["experiments", "control_profile"], ""))
+    status = str(policy_review.get("status", ""))
+    enabled = bool(policy_review.get("enabled", False))
+    locked = bool(
+        enabled
+        and _policy_status_is_retired_or_failed(status)
+        and monitor_state["holdout_roll_forward_locked"]
+        and not monitor_state["future_oos_ready"]
+    )
+    allowed = _future_oos_allowed_benchmark_profiles(config, control)
+    if locked:
+        action = "wait_for_new_unseen_bars_keep_control_profile"
+        reason = (
+            "clean_holdout_policy_failed_and_future_oos_not_ready; "
+            "profile search is locked to control/future-OOS benchmark profiles"
+        )
+    elif enabled and _policy_status_is_retired_or_failed(status) and monitor_state["future_oos_ready"]:
+        action = "future_oos_window_available_review_predefined_candidates"
+        reason = "future_oos_minimum_window_available"
+    else:
+        action = "normal_experiment_flow"
+        reason = ""
+    return {
+        "enabled": enabled,
+        "status": status,
+        "profile_search_locked": locked,
+        "action": action,
+        "reason": reason,
+        "allowed_benchmark_profiles": allowed,
+        **monitor_state,
+    }
+
+
+def _apply_experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    updated = copy.deepcopy(settings)
+    guard = _experiment_policy_guard(updated, config)
+    blocked_candidates: list[str] = []
+    blocked_full: list[str] = []
+    blocked_seed: list[str] = []
+
+    if guard["profile_search_locked"]:
+        control = str(updated["control_profile"])
+        allowed = set(str(profile) for profile in guard["allowed_benchmark_profiles"])
+        candidates = [str(profile) for profile in updated.get("candidate_profiles", []) or []]
+        blocked_candidates = [profile for profile in candidates if profile != control]
+        if blocked_candidates:
+            updated["candidate_profiles"] = []
+            updated["profiles"] = [control]
+
+        filtered_full = []
+        for profile in [str(item) for item in updated.get("always_full_profiles", []) or []]:
+            if profile in allowed:
+                filtered_full.append(profile)
+            else:
+                blocked_full.append(profile)
+        if control not in filtered_full:
+            filtered_full.insert(0, control)
+        updated["always_full_profiles"] = list(dict.fromkeys(filtered_full))
+
+        seed_audit = copy.deepcopy(updated.get("seed_audit", {}) or {})
+        if seed_audit:
+            filtered_seed = []
+            for profile in [str(item) for item in seed_audit.get("profiles", []) or []]:
+                if profile in allowed:
+                    filtered_seed.append(profile)
+                else:
+                    blocked_seed.append(profile)
+            if control not in filtered_seed:
+                filtered_seed.insert(0, control)
+            seed_audit["profiles"] = list(dict.fromkeys(filtered_seed))
+            updated["seed_audit"] = seed_audit
+
+        skipped = list(updated.get("skipped_profiles", []) or [])
+        for role, profiles in (
+            ("candidate_profile", blocked_candidates),
+            ("always_full_profile", blocked_full),
+            ("seed_audit_profile", blocked_seed),
+        ):
+            for profile in profiles:
+                skipped.append(
+                    {
+                        "profile": profile,
+                        "role": role,
+                        "skip_reason": "future_oos_not_ready_profile_search_locked",
+                    }
+                )
+        updated["skipped_profiles"] = skipped
+
+    guard["blocked_candidate_profiles"] = blocked_candidates
+    guard["blocked_full_profiles"] = blocked_full
+    guard["blocked_seed_profiles"] = blocked_seed
+    updated["experiment_policy_guard"] = guard
+    return updated
+
+
 def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments = copy.deepcopy(_cfg(config, ["experiments"], {}) or {})
     control = str(experiments.get("control_profile") or _cfg(config, ["features", "active_profile"]))
@@ -247,6 +375,7 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     seed_audit.setdefault("fold_ids", experiments.get("triage_fold_ids", []))
     experiments["seed_audit"] = seed_audit
     experiments["skipped_profiles"] = [*skipped_candidates, *skipped_always_full, *skipped_seed_profiles]
+    experiments = _apply_experiment_policy_guard(experiments, config)
     return experiments
 
 
@@ -347,6 +476,7 @@ def new_run_id() -> str:
 def _experiment_signature(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     comparable_settings = copy.deepcopy(settings)
     comparable_settings.pop("run_id", None)
+    comparable_settings.pop("experiment_policy_guard", None)
     return {
         "settings": comparable_settings,
         "feature_profiles": _cfg(config, ["features", "profiles"], {}),
@@ -2258,6 +2388,42 @@ def _write_frozen_policy_monitoring_plan(path: Path, frame: pd.DataFrame) -> Non
     _write_json(path / "frozen_policy_monitoring_plan.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _experiment_policy_guard_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
+    guard = copy.deepcopy(settings.get("experiment_policy_guard") or _experiment_policy_guard(settings, config))
+    row = {
+        "enabled": bool(guard.get("enabled", False)),
+        "status": str(guard.get("status", "")),
+        "profile_search_locked": bool(guard.get("profile_search_locked", False)),
+        "action": str(guard.get("action", "")),
+        "reason": str(guard.get("reason", "")),
+        "allowed_benchmark_profiles": ",".join(str(item) for item in guard.get("allowed_benchmark_profiles", []) or []),
+        "blocked_candidate_profiles": ",".join(str(item) for item in guard.get("blocked_candidate_profiles", []) or []),
+        "blocked_full_profiles": ",".join(str(item) for item in guard.get("blocked_full_profiles", []) or []),
+        "blocked_seed_profiles": ",".join(str(item) for item in guard.get("blocked_seed_profiles", []) or []),
+        "future_oos_ready": bool(guard.get("future_oos_ready", False)),
+        "future_oos_preferred_ready": bool(guard.get("future_oos_preferred_ready", False)),
+        "new_bars_since_anchor": int(guard.get("new_bars_since_anchor", 0) or 0),
+        "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
+        "preferred_new_bars_remaining": int(guard.get("preferred_new_bars_remaining", 0) or 0),
+        "holdout_roll_forward_locked": bool(guard.get("holdout_roll_forward_locked", False)),
+        "next_action": str(guard.get("next_action", "")),
+        "anchor_run_id": str(guard.get("anchor_run_id", "")),
+        "anchor_data_end": str(guard.get("anchor_data_end", "")),
+        "latest_available_data_end": str(guard.get("latest_available_data_end", "")),
+    }
+    return pd.DataFrame([row])
+
+
+def _write_experiment_policy_guard(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "experiment_policy_guard.csv", index=False)
+    (path / "experiment_policy_guard.md").write_text(
+        _table_markdown("Experiment Policy Guard", frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "experiment_policy_guard.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _frozen_policy_robustness_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     robustness = policy_review.get("robustness", {}) or {}
@@ -3619,6 +3785,9 @@ def _write_experiment_bundle(
         "frozen_policy_monitoring_plan.csv",
         "frozen_policy_monitoring_plan.md",
         "frozen_policy_monitoring_plan.json",
+        "experiment_policy_guard.csv",
+        "experiment_policy_guard.md",
+        "experiment_policy_guard.json",
         "training_execution_summary.json",
         "decision_report.json",
         "best_candidate.json",
@@ -3657,8 +3826,10 @@ def run_experiment_matrix(
 ) -> dict[str, Any]:
     settings = experiment_settings(config)
     settings = _resolve_holdout_settings(settings, config)
+    settings = _apply_experiment_policy_guard(settings, config)
     frame = _selection_frame_before_holdout(frame, settings)
     settings = _preflight_experiment_profiles(settings, frame, config)
+    settings = _apply_experiment_policy_guard(settings, config)
     signature = _experiment_signature(config, settings)
     signature_hash = _hash_payload(signature)
     run_id, run_id_source = resolve_experiment_run_id(checkpoint_dir, config, settings, run_id)
@@ -3676,6 +3847,8 @@ def run_experiment_matrix(
     )
     experiment_selection = _write_experiment_selection(run_dir, settings)
     holdout_reservation = _write_holdout_reservation(run_dir, settings)
+    experiment_policy_guard = _experiment_policy_guard_frame(settings, config)
+    _write_experiment_policy_guard(run_dir, experiment_policy_guard)
 
     triage_fold_ids = [int(fold_id) for fold_id in settings.get("triage_fold_ids", [])]
     resume_existing = bool(settings.get("resume_existing", True))
@@ -3793,6 +3966,7 @@ def run_experiment_matrix(
         "missing_selected_profiles": missing_selected.to_dict(orient="records"),
         "experiment_complete": bool(missing_selected.empty),
         "holdout": settings.get("holdout", {}) or {},
+        "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "recommendation": "fix_missing_selected_profiles"
         if not missing_selected.empty
         else ("promote_best_candidate" if best else ("review_profile_blend" if best_blend else "keep_control_profile")),
@@ -3811,6 +3985,7 @@ def run_experiment_matrix(
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
+        "experiment_policy_guard": experiment_policy_guard,
         **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
         "executed_training_scopes": training_execution["executed_training_scopes"],
         "training_execution_metadata_source": "run_experiment_matrix",
@@ -3854,6 +4029,7 @@ def write_experiment_diagnostics(
     if "policy_review" in current_experiment_cfg:
         experiment_cfg["policy_review"] = copy.deepcopy(current_experiment_cfg["policy_review"])
     _set_cfg(diagnostic_config, ["experiments"], experiment_cfg)
+    settings = _apply_experiment_policy_guard(settings, diagnostic_config)
     scope_dirs = _profile_dirs(run_dir)
     if not scope_dirs:
         root = experiment_root(checkpoint_dir)
@@ -3916,6 +4092,7 @@ def write_experiment_diagnostics(
     holdout_boundary_passed = bool(holdout_boundary_audit.empty or holdout_boundary_audit["passed"].astype(bool).all())
     frozen_policy_robustness = _frozen_policy_robustness_frame(entries, diagnostic_config)
     frozen_policy_monitoring_plan = _frozen_policy_monitoring_plan_frame(diagnostic_config, settings)
+    experiment_policy_guard = _experiment_policy_guard_frame(settings, diagnostic_config)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -4006,6 +4183,7 @@ def write_experiment_diagnostics(
         "holdout_boundary_audit": holdout_boundary_audit.to_dict(orient="records"),
         "frozen_policy_robustness": frozen_policy_robustness.to_dict(orient="records"),
         "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan.to_dict(orient="records"),
+        "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "holdout": settings.get("holdout", {}) or {},
         "recommendation": recommendation,
         "diagnostic_zips": zip_paths,
@@ -4040,6 +4218,7 @@ def write_experiment_diagnostics(
     _write_holdout_boundary_audit(report_dir, holdout_boundary_audit)
     _write_frozen_policy_robustness(report_dir, frozen_policy_robustness)
     _write_frozen_policy_monitoring_plan(report_dir, frozen_policy_monitoring_plan)
+    _write_experiment_policy_guard(report_dir, experiment_policy_guard)
     _write_holdout_files(
         report_dir,
         holdout_evaluation=holdout_evaluation,
@@ -4061,6 +4240,7 @@ def write_experiment_diagnostics(
     _write_holdout_boundary_audit(run_dir, holdout_boundary_audit)
     _write_frozen_policy_robustness(run_dir, frozen_policy_robustness)
     _write_frozen_policy_monitoring_plan(run_dir, frozen_policy_monitoring_plan)
+    _write_experiment_policy_guard(run_dir, experiment_policy_guard)
     _write_holdout_files(
         run_dir,
         holdout_evaluation=holdout_evaluation,
@@ -4094,6 +4274,7 @@ def write_experiment_diagnostics(
         "holdout_boundary_audit": holdout_boundary_audit,
         "frozen_policy_robustness": frozen_policy_robustness,
         "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan,
+        "experiment_policy_guard": experiment_policy_guard,
         "holdout_evaluation": holdout_evaluation,
         "holdout_score_bands": holdout_score_bands,
         "holdout_thresholds": holdout_thresholds,
