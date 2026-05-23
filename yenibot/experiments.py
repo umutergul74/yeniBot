@@ -2558,6 +2558,248 @@ def _write_future_oos_candidate_plan(path: Path, frame: pd.DataFrame) -> None:
     _write_json(path / "future_oos_candidate_plan.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str:
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    max_rank_ic_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
+    min_positive_ic_fraction = float(_cfg(config, ["validation", "min_positive_ic_fraction"], 0.75))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    reasons = []
+    if _float(row, "mean_rank_ic") < target_rank_ic:
+        reasons.append("cv_rank_ic_below_target")
+    if _float(row, "std_rank_ic") > max_rank_ic_std:
+        reasons.append("cv_rank_ic_std_above_phase1_target")
+    if _float(row, "positive_ic_fraction") < min_positive_ic_fraction:
+        reasons.append("cv_positive_ic_fraction_below_target")
+    selected_f1 = _metric_or(
+        row,
+        "test_f1_at_constrained_threshold",
+        _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+    )
+    if selected_f1 < min_long_f1:
+        reasons.append("cv_selected_threshold_f1_below_target")
+    if _float(row, "top_10_lift_global") < 1.0:
+        reasons.append("cv_top_10_lift_below_base")
+    if not bool(row.get("mtf_leakage_passed", False)):
+        reasons.append("mtf_leakage")
+    if not bool(row.get("stationarity_policy_passed", False)):
+        reasons.append("stationarity_policy")
+    return ";".join(reasons)
+
+
+def _holdout_gap_reasons(holdout_row: dict[str, Any], config: dict[str, Any]) -> str:
+    if not holdout_row:
+        return "missing_holdout_evaluation"
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    reasons = []
+    if _float(holdout_row, "mean_rank_ic") < target_rank_ic:
+        reasons.append("holdout_rank_ic_below_target")
+    if _float(holdout_row, "top_10_lift_global") <= 1.0:
+        reasons.append("holdout_top_10_lift_not_above_base")
+    if _float(holdout_row, "top_10_forward_return_global") <= 0.0:
+        reasons.append("holdout_top_10_forward_return_not_positive")
+    if _float(holdout_row, "holdout_cv_threshold_f1") < min_long_f1:
+        reasons.append("holdout_cv_threshold_f1_below_target")
+    if not bool(holdout_row.get("holdout_policy_pass", False)):
+        reasons.append("holdout_policy")
+    if not bool(holdout_row.get("holdout_signal_pass", False)):
+        signal_reason = str(holdout_row.get("holdout_signal_reject_reason", "holdout_signal")).strip(";")
+        reasons.append(signal_reason or "holdout_signal")
+    if not bool(holdout_row.get("holdout_threshold_pass", False)):
+        threshold_reason = str(holdout_row.get("holdout_threshold_reject_reason", "holdout_threshold")).strip(";")
+        reasons.append(threshold_reason or "holdout_threshold")
+    if not bool(holdout_row.get("mtf_leakage_passed", False)):
+        reasons.append("holdout_mtf_leakage")
+    return ";".join(dict.fromkeys(reason for reason in reasons if reason))
+
+
+def _performance_gap_action(
+    *,
+    cv_reasons: str,
+    holdout_reasons: str,
+    guard: dict[str, Any],
+    candidate_type: str,
+) -> str:
+    if bool(guard.get("profile_search_locked", False)):
+        return "wait_for_future_oos_do_not_tune_current_holdout"
+    if holdout_reasons and holdout_reasons != "missing_holdout_evaluation":
+        return "do_not_promote_investigate_holdout_failure"
+    if cv_reasons:
+        return "improve_cv_stability_before_promotion"
+    if candidate_type == "blend":
+        return "candidate_blend_ready_for_predefined_future_oos_review"
+    return "candidate_profile_ready_for_predefined_future_oos_review"
+
+
+def _performance_gap_analysis_frame(
+    entries: list[dict[str, Any]],
+    holdout_evaluation: pd.DataFrame,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "feature_count",
+        "fold_count",
+        "cv_mean_rank_ic",
+        "cv_std_rank_ic",
+        "cv_positive_ic_fraction",
+        "cv_worst_5_rank_ic_mean",
+        "cv_top_10_lift_global",
+        "cv_top_10_forward_return_global",
+        "cv_selected_threshold_f1",
+        "cv_constrained_threshold_f1",
+        "holdout_available",
+        "holdout_mean_rank_ic",
+        "holdout_top_10_lift_global",
+        "holdout_top_10_forward_return_global",
+        "holdout_cv_threshold_f1",
+        "holdout_policy_lift_vs_base",
+        "holdout_policy_forward_return",
+        "holdout_soft_pass",
+        "cv_to_holdout_rank_ic_delta",
+        "cv_to_holdout_top_10_lift_delta",
+        "cv_to_holdout_top_10_forward_return_delta",
+        "cv_phase1_blockers",
+        "holdout_blockers",
+        "profile_search_locked",
+        "future_oos_ready",
+        "next_action",
+        "research_track",
+        "note",
+    ]
+    rows: list[dict[str, Any]] = []
+    holdout_by_candidate = {}
+    if not holdout_evaluation.empty and "candidate" in holdout_evaluation.columns:
+        holdout_by_candidate = {
+            str(row["candidate"]): row.to_dict()
+            for _, row in holdout_evaluation.iterrows()
+        }
+    guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if fold_scope != "full" and not fold_scope.startswith("blend_"):
+            continue
+        row = dict(entry["diagnostics"]["row"])
+        candidate = str(row.get("profile", entry.get("profile", "")))
+        key = (candidate, fold_scope)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate_type = "blend" if fold_scope.startswith("blend_") else "profile"
+        holdout_row = holdout_by_candidate.get(candidate, {})
+        cv_reasons = _performance_gap_reasons(row, config)
+        holdout_reasons = _holdout_gap_reasons(holdout_row, config) if holdout_by_candidate else "missing_holdout_evaluation"
+        tracks = []
+        if "std" in cv_reasons or "positive_ic_fraction" in cv_reasons:
+            tracks.append("fold_stability")
+        if "f1" in cv_reasons or "threshold" in holdout_reasons:
+            tracks.append("threshold_calibration")
+        if "top_10" in holdout_reasons or "policy" in holdout_reasons:
+            tracks.append("score_band_policy")
+        if "forward_return" in holdout_reasons:
+            tracks.append("feature_regime_mismatch")
+        if not tracks:
+            tracks.append("future_oos_validation")
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "feature_count": int(row.get("feature_count", 0) or 0),
+                "fold_count": int(row.get("fold_count", 0) or 0),
+                "cv_mean_rank_ic": _float(row, "mean_rank_ic"),
+                "cv_std_rank_ic": _float(row, "std_rank_ic"),
+                "cv_positive_ic_fraction": _float(row, "positive_ic_fraction"),
+                "cv_worst_5_rank_ic_mean": _float(row, "worst_5_rank_ic_mean"),
+                "cv_top_10_lift_global": _float(row, "top_10_lift_global"),
+                "cv_top_10_forward_return_global": _float(row, "top_10_forward_return_global"),
+                "cv_selected_threshold_f1": _float(row, "test_f1_at_selected_threshold"),
+                "cv_constrained_threshold_f1": _float(row, "test_f1_at_constrained_threshold"),
+                "holdout_available": bool(holdout_row),
+                "holdout_mean_rank_ic": _float(holdout_row, "mean_rank_ic") if holdout_row else np.nan,
+                "holdout_top_10_lift_global": _float(holdout_row, "top_10_lift_global") if holdout_row else np.nan,
+                "holdout_top_10_forward_return_global": _float(holdout_row, "top_10_forward_return_global") if holdout_row else np.nan,
+                "holdout_cv_threshold_f1": _float(holdout_row, "holdout_cv_threshold_f1") if holdout_row else np.nan,
+                "holdout_policy_lift_vs_base": _float(holdout_row, "holdout_policy_lift_vs_base") if holdout_row else np.nan,
+                "holdout_policy_forward_return": _float(holdout_row, "holdout_policy_forward_return") if holdout_row else np.nan,
+                "holdout_soft_pass": bool(holdout_row.get("holdout_soft_pass", False)) if holdout_row else False,
+                "cv_to_holdout_rank_ic_delta": (
+                    _float(holdout_row, "mean_rank_ic") - _float(row, "mean_rank_ic") if holdout_row else np.nan
+                ),
+                "cv_to_holdout_top_10_lift_delta": (
+                    _float(holdout_row, "top_10_lift_global") - _float(row, "top_10_lift_global") if holdout_row else np.nan
+                ),
+                "cv_to_holdout_top_10_forward_return_delta": (
+                    _float(holdout_row, "top_10_forward_return_global") - _float(row, "top_10_forward_return_global")
+                    if holdout_row
+                    else np.nan
+                ),
+                "cv_phase1_blockers": cv_reasons,
+                "holdout_blockers": holdout_reasons,
+                "profile_search_locked": bool(guard.get("profile_search_locked", False)),
+                "future_oos_ready": bool(guard.get("future_oos_ready", False)),
+                "next_action": _performance_gap_action(
+                    cv_reasons=cv_reasons,
+                    holdout_reasons=holdout_reasons,
+                    guard=guard,
+                    candidate_type=candidate_type,
+                ),
+                "research_track": ";".join(dict.fromkeys(tracks)),
+                "note": "Diagnostics only; do not tune profiles or weights against the current frozen holdout.",
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows)
+        .reindex(columns=columns)
+        .sort_values(
+            ["candidate_type", "cv_mean_rank_ic", "cv_top_10_lift_global"],
+            ascending=[True, False, False],
+        )
+        .reset_index(drop=True)
+    )
+
+
+def _performance_gap_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Performance Gap Analysis", ""]
+    if frame.empty:
+        lines.append("No full-profile or blend candidates were available for performance gap analysis.")
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "candidate_type",
+        "cv_mean_rank_ic",
+        "cv_std_rank_ic",
+        "cv_positive_ic_fraction",
+        "cv_top_10_lift_global",
+        "holdout_mean_rank_ic",
+        "holdout_top_10_lift_global",
+        "holdout_top_10_forward_return_global",
+        "cv_phase1_blockers",
+        "holdout_blockers",
+        "next_action",
+        "research_track",
+    ]
+    visible = frame[[column for column in display_cols if column in frame.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_performance_gap_analysis(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "performance_gap_analysis.csv", index=False)
+    (path / "performance_gap_analysis.md").write_text(_performance_gap_markdown(frame), encoding="utf-8")
+    _write_json(path / "performance_gap_analysis.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _frozen_policy_robustness_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     robustness = policy_review.get("robustness", {}) or {}
@@ -3925,6 +4167,9 @@ def _write_experiment_bundle(
         "future_oos_candidate_plan.csv",
         "future_oos_candidate_plan.md",
         "future_oos_candidate_plan.json",
+        "performance_gap_analysis.csv",
+        "performance_gap_analysis.md",
+        "performance_gap_analysis.json",
         "training_execution_summary.json",
         "decision_report.json",
         "best_candidate.json",
@@ -4070,9 +4315,16 @@ def run_experiment_matrix(
     seed_ensemble = _seed_ensemble_frame(all_results)
     profile_blend = _profile_blend_frame(all_results)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
+    performance_gap_analysis = _performance_gap_analysis_frame(
+        all_results,
+        pd.DataFrame(),
+        config,
+        settings,
+    )
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
+    _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     blend_leaders = _profile_blend_leaders(profile_blend)
@@ -4110,6 +4362,7 @@ def run_experiment_matrix(
         "holdout": settings.get("holdout", {}) or {},
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
+        "performance_gap_analysis": performance_gap_analysis.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
     }
     _write_decision_files(run_dir, comparison, decision)
@@ -4124,6 +4377,7 @@ def run_experiment_matrix(
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
+        "performance_gap_analysis": performance_gap_analysis,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
         "experiment_policy_guard": experiment_policy_guard,
@@ -4345,6 +4599,13 @@ def write_experiment_diagnostics(
     )
     decision["holdout_evaluation"] = holdout_decision
     decision["holdout_evaluation_available"] = bool(holdout_decision.get("available", False))
+    performance_gap_analysis = _performance_gap_analysis_frame(
+        entries,
+        holdout_evaluation,
+        diagnostic_config,
+        settings,
+    )
+    decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
     slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
@@ -4359,6 +4620,7 @@ def write_experiment_diagnostics(
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
+    _write_performance_gap_analysis(report_dir, performance_gap_analysis)
     _write_profile_diagnostic_summaries(report_dir, entries)
     _write_holdout_boundary_audit(report_dir, holdout_boundary_audit)
     _write_frozen_policy_robustness(report_dir, frozen_policy_robustness)
@@ -4379,6 +4641,7 @@ def write_experiment_diagnostics(
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
+    _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     _write_profile_diagnostic_summaries(run_dir, entries)
     _write_experiment_selection(run_dir, settings)
     _write_holdout_reservation(run_dir, settings)
@@ -4416,6 +4679,7 @@ def write_experiment_diagnostics(
         "seed_stability": seed_stability,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
+        "performance_gap_analysis": performance_gap_analysis,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
         "holdout_boundary_audit": holdout_boundary_audit,

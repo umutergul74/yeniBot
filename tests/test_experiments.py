@@ -1595,6 +1595,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -1602,6 +1603,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -1609,6 +1611,15 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert diagnostics["zip_paths"]
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
+    assert not diagnostics["performance_gap_analysis"].empty
+    assert {
+        "candidate",
+        "candidate_type",
+        "cv_phase1_blockers",
+        "holdout_blockers",
+        "next_action",
+        "research_track",
+    }.issubset(diagnostics["performance_gap_analysis"].columns)
     assert set(diagnostics["profile_blend"]["blend_method"]) == {"prob_mean", "rank_mean"}
     assert {
         "reviewable",
@@ -1643,6 +1654,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_matrix.zip") as archive:
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()
+        assert "matrix/performance_gap_analysis.csv" in archive.namelist()
         assert "matrix/profile_fold_metrics.csv" in archive.namelist()
         assert "matrix/experiment_selection.csv" in archive.namelist()
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
@@ -1656,6 +1668,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
+    assert "matrix/performance_gap_analysis.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names
@@ -1797,6 +1810,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "holdout_boundary_audit.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "frozen_policy_robustness.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "frozen_policy_monitoring_plan.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
     assert "frozen_policy_validation" in diagnostics["decision"]["holdout_evaluation"]
@@ -1844,6 +1858,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/holdout_boundary_audit.csv" in names
     assert "holdout_run/frozen_policy_robustness.csv" in names
     assert "holdout_run/frozen_policy_monitoring_plan.csv" in names
+    assert "holdout_run/performance_gap_analysis.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names
 
