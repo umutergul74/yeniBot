@@ -1464,6 +1464,26 @@ def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> d
     }
 
 
+def _future_oos_ready_at_fields(monitor_state: dict[str, Any]) -> dict[str, str]:
+    anchor = str(monitor_state.get("anchor_data_end", "") or "")
+    fields = {"min_ready_at": "", "preferred_ready_at": ""}
+    if not anchor:
+        return fields
+    try:
+        anchor_ts = pd.to_datetime(anchor, utc=True)
+    except (TypeError, ValueError):
+        return fields
+    if pd.isna(anchor_ts):
+        return fields
+    min_new_bars = int(monitor_state.get("min_new_bars", 0) or 0)
+    preferred_new_bars = int(monitor_state.get("preferred_new_bars", 0) or 0)
+    if min_new_bars > 0:
+        fields["min_ready_at"] = str(anchor_ts + pd.Timedelta(hours=min_new_bars))
+    if preferred_new_bars > 0:
+        fields["preferred_ready_at"] = str(anchor_ts + pd.Timedelta(hours=preferred_new_bars))
+    return fields
+
+
 def prepare_training_holdout_split(
     frame: pd.DataFrame,
     config: dict[str, Any],
@@ -2351,6 +2371,7 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
     holdout = settings.get("holdout", {}) or {}
     latest_data_end = str(holdout.get("holdout_data_end", "") or "")
     monitor_state = _future_oos_monitor_state(config, latest_data_end)
+    ready_at = _future_oos_ready_at_fields(monitor_state)
     row = {
         "enabled": bool(monitor.get("enabled", False)),
         "frozen_candidate": str(policy_review.get("frozen_candidate", "")),
@@ -2367,6 +2388,8 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
         "preferred_new_bars": monitor_state["preferred_new_bars"],
         "min_new_bars_remaining": monitor_state["min_new_bars_remaining"],
         "preferred_new_bars_remaining": monitor_state["preferred_new_bars_remaining"],
+        "min_ready_at": ready_at["min_ready_at"],
+        "preferred_ready_at": ready_at["preferred_ready_at"],
         "future_oos_ready": monitor_state["future_oos_ready"],
         "future_oos_preferred_ready": monitor_state["future_oos_preferred_ready"],
         "allow_holdout_roll_forward": monitor_state["allow_holdout_roll_forward"],
@@ -2390,6 +2413,7 @@ def _write_frozen_policy_monitoring_plan(path: Path, frame: pd.DataFrame) -> Non
 
 def _experiment_policy_guard_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
     guard = copy.deepcopy(settings.get("experiment_policy_guard") or _experiment_policy_guard(settings, config))
+    ready_at = _future_oos_ready_at_fields(guard)
     row = {
         "enabled": bool(guard.get("enabled", False)),
         "status": str(guard.get("status", "")),
@@ -2405,6 +2429,8 @@ def _experiment_policy_guard_frame(settings: dict[str, Any], config: dict[str, A
         "new_bars_since_anchor": int(guard.get("new_bars_since_anchor", 0) or 0),
         "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
         "preferred_new_bars_remaining": int(guard.get("preferred_new_bars_remaining", 0) or 0),
+        "min_ready_at": ready_at["min_ready_at"],
+        "preferred_ready_at": ready_at["preferred_ready_at"],
         "holdout_roll_forward_locked": bool(guard.get("holdout_roll_forward_locked", False)),
         "next_action": str(guard.get("next_action", "")),
         "anchor_run_id": str(guard.get("anchor_run_id", "")),
@@ -2437,6 +2463,7 @@ def _recommendation_with_policy_guard(recommendation: str, settings: dict[str, A
 def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
+    ready_at = _future_oos_ready_at_fields(guard)
     profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
     weighted_blends = _cfg(config, ["experiments", "profile_blends", "weighted"], []) or []
     rows: list[dict[str, Any]] = []
@@ -2463,6 +2490,8 @@ def _future_oos_candidate_plan_frame(settings: dict[str, Any], config: dict[str,
                 "profile_search_locked": bool(guard.get("profile_search_locked", False)),
                 "future_oos_ready": bool(guard.get("future_oos_ready", False)),
                 "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
+                "min_ready_at": ready_at["min_ready_at"],
+                "preferred_ready_at": ready_at["preferred_ready_at"],
                 "action": str(guard.get("action", "")),
                 "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
                 "note": note,

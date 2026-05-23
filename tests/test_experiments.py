@@ -15,6 +15,7 @@ from yenibot.experiments import (
     _best_profile_blend,
     _experiment_selection_frame,
     _frozen_policy_robustness_frame,
+    _future_oos_candidate_plan_frame,
     _holdout_boundary_audit_frame,
     _holdout_reservation_frame,
     _missing_selected_profiles,
@@ -190,6 +191,60 @@ def test_experiment_policy_guard_unlocks_after_future_oos_minimum_window() -> No
     assert settings["always_full_profiles"] == ["control", "new_candidate"]
     assert settings["experiment_policy_guard"]["profile_search_locked"] is False
     assert settings["experiment_policy_guard"]["future_oos_ready"] is True
+
+
+def test_future_oos_candidate_plan_records_ready_dates() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["*"], "exclude_patterns": []},
+                "benchmark": {"include_patterns": ["*"], "exclude_patterns": []},
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control", "benchmark"],
+            "profile_blends": {
+                "weighted": [
+                    {
+                        "name": "control_benchmark_65_35",
+                        "method": "prob_weighted",
+                        "profiles": ["control", "benchmark"],
+                        "weights": [0.65, 0.35],
+                    }
+                ]
+            },
+            "holdout": {"holdout_data_end": "2026-05-13 08:00:00+00:00"},
+            "policy_review": {
+                "enabled": True,
+                "frozen_candidate": "retired_blend",
+                "policy_type": "score_band",
+                "status": "failed_clean_holdout_review",
+                "future_oos_candidates": ["blend_control_benchmark_65_35"],
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+    plan = _future_oos_candidate_plan_frame(settings, config)
+
+    assert set(plan["candidate"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
+    assert plan["min_ready_at"].eq("2026-06-12 08:00:00+00:00").all()
+    assert plan["preferred_ready_at"].eq("2026-08-11 08:00:00+00:00").all()
+    future = plan.loc[plan["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
+    assert future["required_profiles"] == "control,benchmark"
+    assert bool(future["all_required_profiles_allowed"]) is True
+    assert future["evaluation_status"] == "wait_for_future_oos"
 
 
 def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
