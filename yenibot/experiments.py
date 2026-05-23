@@ -2800,6 +2800,365 @@ def _write_performance_gap_analysis(path: Path, frame: pd.DataFrame) -> None:
     _write_json(path / "performance_gap_analysis.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _assign_payoff_score_bins(predictions: pd.DataFrame, *, score_column: str, bins: int) -> pd.DataFrame:
+    required = {"label", score_column}
+    if predictions.empty or not required.issubset(predictions.columns):
+        return pd.DataFrame()
+    frame = predictions.copy().replace([np.inf, -np.inf], np.nan).dropna(subset=["label", score_column])
+    if frame.empty:
+        return frame
+    q = max(1, min(int(bins), len(frame)))
+    frame["score_bin"] = pd.qcut(
+        frame[score_column].rank(method="first"),
+        q=q,
+        labels=False,
+        duplicates="drop",
+    )
+    return frame.dropna(subset=["score_bin"]).copy()
+
+
+def _resolve_payoff_score_bands(config: dict[str, Any], actual_bins: int) -> list[dict[str, Any]]:
+    max_bin = max(0, int(actual_bins) - 1)
+    configured = _cfg(config, ["validation", "score_bands"], None)
+    if not configured:
+        configured = [
+            {"name": "top_10", "min_bin": max_bin, "max_bin": max_bin},
+            {"name": "top_20", "min_bin": max(0, int(np.floor(actual_bins * 0.80))), "max_bin": max_bin},
+            {"name": "top_30", "min_bin": max(0, int(np.floor(actual_bins * 0.70))), "max_bin": max_bin},
+            {"name": "upper_half", "min_bin": max(0, int(np.floor(actual_bins * 0.50))), "max_bin": max_bin},
+            {
+                "name": "mid_upper_40_90",
+                "min_bin": max(0, int(np.floor(actual_bins * 0.40))),
+                "max_bin": max(0, max_bin - 1),
+            },
+        ]
+    bands = []
+    for item in configured:
+        name = str(item.get("name", f"bins_{item.get('min_bin')}_{item.get('max_bin')}"))
+        min_bin = min(max(int(item.get("min_bin", max_bin)), 0), max_bin)
+        max_item_bin = min(max(int(item.get("max_bin", max_bin)), 0), max_bin)
+        if min_bin <= max_item_bin:
+            bands.append({"name": name, "min_bin": min_bin, "max_bin": max_item_bin})
+    return bands
+
+
+def _numeric_mean(frame: pd.DataFrame, column: str) -> float:
+    if column not in frame.columns or frame.empty:
+        return np.nan
+    values = pd.to_numeric(frame[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    return float(values.mean()) if not values.empty else np.nan
+
+
+def _hit_rate(frame: pd.DataFrame, hit_type: str) -> float:
+    if "hit_type" not in frame.columns or frame.empty:
+        return np.nan
+    return float(frame["hit_type"].astype(str).eq(hit_type).mean())
+
+
+def _payoff_alignment_blockers(row: dict[str, Any]) -> str:
+    reasons = []
+    if _float(row, "label_lift_vs_base") <= 1.0:
+        reasons.append("label_lift_not_above_base")
+    if _float(row, "mean_forward_return") <= 0.0:
+        reasons.append("forward_return_not_positive")
+    if np.isfinite(_float(row, "mean_tb_return")) and _float(row, "mean_tb_return") <= 0.0:
+        reasons.append("tb_return_not_positive")
+    if np.isfinite(_float(row, "sl_rate_delta_vs_base")) and _float(row, "sl_rate_delta_vs_base") > 0.0:
+        reasons.append("sl_rate_above_base")
+    if _float(row, "selection_rate") <= 0.0:
+        reasons.append("empty_selection")
+    return ";".join(reasons)
+
+
+def _payoff_alignment_action(row: dict[str, Any]) -> str:
+    blockers = str(row.get("payoff_blockers", ""))
+    if not blockers:
+        return "candidate_band_payoff_aligned_monitor_future_oos"
+    if "label_lift_not_above_base" in blockers:
+        return "weak_label_discrimination_do_not_use_band"
+    if "forward_return_not_positive" in blockers or "tb_return_not_positive" in blockers:
+        return "investigate_payoff_mismatch_before_new_profile_search"
+    if "sl_rate_above_base" in blockers:
+        return "inspect_stop_loss_regime_exposure"
+    return "monitor"
+
+
+def _payoff_alignment_rows_for_entry(
+    entry: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    evaluation_scope: str,
+) -> list[dict[str, Any]]:
+    predictions = entry.get("predictions", pd.DataFrame())
+    if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+        return []
+    frame = _test_predictions(predictions)
+    score_bins = int(_cfg(config, ["validation", "score_lift_bins"], _cfg(config, ["validation", "calibration_bins"], 10)))
+    frame = _assign_payoff_score_bins(frame, score_column="prob_long", bins=score_bins)
+    if frame.empty:
+        return []
+
+    actual_bins = int(pd.to_numeric(frame["score_bin"], errors="coerce").max()) + 1
+    bands = _resolve_payoff_score_bands(config, actual_bins)
+    profile = str(entry.get("profile", ""))
+    fold_scope = str(entry.get("fold_scope", ""))
+    candidate_type = "blend" if fold_scope.startswith("blend_") or profile.startswith("blend_") else "profile"
+    base_count = int(len(frame))
+    base_long_rate = float(pd.to_numeric(frame["label"], errors="coerce").mean())
+    base_forward_return = _numeric_mean(frame, "forward_return")
+    base_tb_return = _numeric_mean(frame, "tb_return")
+    base_tp_rate = _hit_rate(frame, "tp")
+    base_sl_rate = _hit_rate(frame, "sl") + _hit_rate(frame, "both_sl_first")
+    base_time_rate = _hit_rate(frame, "time")
+    rows = []
+    for band in bands:
+        part = frame.loc[
+            (pd.to_numeric(frame["score_bin"], errors="coerce") >= int(band["min_bin"]))
+            & (pd.to_numeric(frame["score_bin"], errors="coerce") <= int(band["max_bin"]))
+        ].copy()
+        if part.empty:
+            continue
+        selected_count = int(len(part))
+        selected_long_rate = float(pd.to_numeric(part["label"], errors="coerce").mean())
+        mean_forward_return = _numeric_mean(part, "forward_return")
+        mean_tb_return = _numeric_mean(part, "tb_return")
+        tp_rate = _hit_rate(part, "tp")
+        sl_rate = _hit_rate(part, "sl") + _hit_rate(part, "both_sl_first")
+        time_rate = _hit_rate(part, "time")
+        row = {
+            "candidate": profile,
+            "candidate_type": candidate_type,
+            "evaluation_scope": evaluation_scope,
+            "fold_scope": fold_scope,
+            "band": str(band["name"]),
+            "min_bin": int(band["min_bin"]),
+            "max_bin": int(band["max_bin"]),
+            "base_count": base_count,
+            "selected_count": selected_count,
+            "selection_rate": float(selected_count / base_count) if base_count else np.nan,
+            "mean_prob_long": _numeric_mean(part, "prob_long"),
+            "base_long_rate": base_long_rate,
+            "selected_long_rate": selected_long_rate,
+            "label_lift_vs_base": float(selected_long_rate / base_long_rate) if base_long_rate > 0 else np.nan,
+            "base_forward_return": base_forward_return,
+            "mean_forward_return": mean_forward_return,
+            "forward_return_delta_vs_base": mean_forward_return - base_forward_return,
+            "base_tb_return": base_tb_return,
+            "mean_tb_return": mean_tb_return,
+            "tb_return_delta_vs_base": mean_tb_return - base_tb_return,
+            "base_tp_rate": base_tp_rate,
+            "tp_rate": tp_rate,
+            "tp_rate_delta_vs_base": tp_rate - base_tp_rate,
+            "base_sl_rate": base_sl_rate,
+            "sl_rate": sl_rate,
+            "sl_rate_delta_vs_base": sl_rate - base_sl_rate,
+            "base_time_rate": base_time_rate,
+            "time_rate": time_rate,
+            "time_rate_delta_vs_base": time_rate - base_time_rate,
+            "label_lift_positive_payoff_mismatch": bool(
+                selected_long_rate > base_long_rate and np.isfinite(mean_forward_return) and mean_forward_return <= 0.0
+            ),
+        }
+        row["payoff_blockers"] = _payoff_alignment_blockers(row)
+        row["payoff_alignment_pass"] = not bool(row["payoff_blockers"])
+        row["next_action"] = _payoff_alignment_action(row)
+        rows.append(row)
+    return rows
+
+
+def _payoff_alignment_frame(
+    entries: list[dict[str, Any]],
+    holdout_entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "evaluation_scope",
+        "fold_scope",
+        "band",
+        "min_bin",
+        "max_bin",
+        "base_count",
+        "selected_count",
+        "selection_rate",
+        "mean_prob_long",
+        "base_long_rate",
+        "selected_long_rate",
+        "label_lift_vs_base",
+        "base_forward_return",
+        "mean_forward_return",
+        "forward_return_delta_vs_base",
+        "base_tb_return",
+        "mean_tb_return",
+        "tb_return_delta_vs_base",
+        "base_tp_rate",
+        "tp_rate",
+        "tp_rate_delta_vs_base",
+        "base_sl_rate",
+        "sl_rate",
+        "sl_rate_delta_vs_base",
+        "base_time_rate",
+        "time_rate",
+        "time_rate_delta_vs_base",
+        "label_lift_positive_payoff_mismatch",
+        "payoff_alignment_pass",
+        "payoff_blockers",
+        "next_action",
+    ]
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if fold_scope == "full" or fold_scope.startswith("blend_"):
+            rows.extend(_payoff_alignment_rows_for_entry(entry, config, evaluation_scope="cv_test"))
+    for entry in holdout_entries:
+        rows.extend(_payoff_alignment_rows_for_entry(entry, config, evaluation_scope="holdout"))
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows)
+        .reindex(columns=columns)
+        .sort_values(["evaluation_scope", "candidate_type", "candidate", "min_bin", "max_bin"])
+        .reset_index(drop=True)
+    )
+
+
+def _payoff_alignment_summary_frame(payoff_alignment: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "evaluation_scope",
+        "top_10_label_lift_vs_base",
+        "top_10_mean_forward_return",
+        "top_10_mean_tb_return",
+        "top_10_tp_rate",
+        "top_10_sl_rate",
+        "top_10_payoff_alignment_pass",
+        "top_10_payoff_blockers",
+        "best_forward_return_band",
+        "best_forward_return",
+        "best_forward_return_label_lift",
+        "best_lift_band",
+        "best_lift",
+        "best_lift_forward_return",
+        "payoff_aligned_band_count",
+        "payoff_mismatch_band_count",
+        "next_action",
+    ]
+    if payoff_alignment.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for (candidate, candidate_type, evaluation_scope), part in payoff_alignment.groupby(
+        ["candidate", "candidate_type", "evaluation_scope"],
+        dropna=False,
+    ):
+        part = part.copy()
+        top_10 = part.loc[part["band"].astype(str).eq("top_10")]
+        top = top_10.iloc[0].to_dict() if not top_10.empty else {}
+        best_return = part.sort_values("mean_forward_return", ascending=False).iloc[0].to_dict()
+        best_lift = part.sort_values("label_lift_vs_base", ascending=False).iloc[0].to_dict()
+        mismatch_count = int(part["label_lift_positive_payoff_mismatch"].astype(bool).sum())
+        aligned_count = int(part["payoff_alignment_pass"].astype(bool).sum())
+        if top and bool(top.get("payoff_alignment_pass", False)):
+            action = "top_10_payoff_aligned_monitor_future_oos"
+        elif top and bool(top.get("label_lift_positive_payoff_mismatch", False)):
+            action = "top_10_label_lift_payoff_mismatch_investigate"
+        elif aligned_count > 0:
+            action = "review_non_top10_payoff_aligned_band_before_future_oos"
+        else:
+            action = "no_payoff_aligned_band_do_not_promote"
+        rows.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "evaluation_scope": str(evaluation_scope),
+                "top_10_label_lift_vs_base": _float(top, "label_lift_vs_base") if top else np.nan,
+                "top_10_mean_forward_return": _float(top, "mean_forward_return") if top else np.nan,
+                "top_10_mean_tb_return": _float(top, "mean_tb_return") if top else np.nan,
+                "top_10_tp_rate": _float(top, "tp_rate") if top else np.nan,
+                "top_10_sl_rate": _float(top, "sl_rate") if top else np.nan,
+                "top_10_payoff_alignment_pass": bool(top.get("payoff_alignment_pass", False)) if top else False,
+                "top_10_payoff_blockers": str(top.get("payoff_blockers", "")) if top else "missing_top_10",
+                "best_forward_return_band": str(best_return.get("band", "")),
+                "best_forward_return": _float(best_return, "mean_forward_return"),
+                "best_forward_return_label_lift": _float(best_return, "label_lift_vs_base"),
+                "best_lift_band": str(best_lift.get("band", "")),
+                "best_lift": _float(best_lift, "label_lift_vs_base"),
+                "best_lift_forward_return": _float(best_lift, "mean_forward_return"),
+                "payoff_aligned_band_count": aligned_count,
+                "payoff_mismatch_band_count": mismatch_count,
+                "next_action": action,
+            }
+        )
+    return (
+        pd.DataFrame(rows)
+        .reindex(columns=columns)
+        .sort_values(["evaluation_scope", "candidate_type", "top_10_mean_forward_return"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _payoff_alignment_markdown(summary: pd.DataFrame, detail: pd.DataFrame) -> str:
+    lines = ["# Payoff Alignment", ""]
+    if summary.empty:
+        lines.append("No payoff alignment rows were produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "candidate_type",
+        "evaluation_scope",
+        "top_10_label_lift_vs_base",
+        "top_10_mean_forward_return",
+        "top_10_mean_tb_return",
+        "top_10_tp_rate",
+        "top_10_sl_rate",
+        "top_10_payoff_alignment_pass",
+        "top_10_payoff_blockers",
+        "best_forward_return_band",
+        "best_forward_return",
+        "next_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    mismatch = detail.loc[detail.get("label_lift_positive_payoff_mismatch", pd.Series(dtype=bool)).astype(bool)]
+    if not mismatch.empty:
+        lines.extend(["", "## Label Lift / Payoff Mismatches", ""])
+        mismatch_cols = [
+            "candidate",
+            "evaluation_scope",
+            "band",
+            "label_lift_vs_base",
+            "mean_forward_return",
+            "mean_tb_return",
+            "payoff_blockers",
+        ]
+        visible_mismatch = mismatch[[column for column in mismatch_cols if column in mismatch.columns]].copy()
+        lines.append("| " + " | ".join(visible_mismatch.columns) + " |")
+        lines.append("| " + " | ".join(["---"] * len(visible_mismatch.columns)) + " |")
+        for _, row in visible_mismatch.iterrows():
+            lines.append("| " + " | ".join(str(row[column]) for column in visible_mismatch.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_payoff_alignment(path: Path, detail: pd.DataFrame, summary: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    detail.to_csv(path / "payoff_alignment.csv", index=False)
+    summary.to_csv(path / "payoff_alignment_summary.csv", index=False)
+    (path / "payoff_alignment.md").write_text(_payoff_alignment_markdown(summary, detail), encoding="utf-8")
+    _write_json(
+        path / "payoff_alignment.json",
+        {
+            "summary": summary.to_dict(orient="records"),
+            "detail": detail.to_dict(orient="records"),
+        },
+    )
+
+
 def _frozen_policy_robustness_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     robustness = policy_review.get("robustness", {}) or {}
@@ -3092,6 +3451,16 @@ def _evaluate_holdout_candidates(
         row = _attach_holdout_soft_pass(row, config)
         row = _attach_holdout_policy_consistency(row)
         evaluation_rows.append(row)
+        holdout_diagnostics = dict(diagnostics)
+        holdout_diagnostics["row"] = row
+        holdout_entries.append(
+            {
+                **entry,
+                "fold_scope": str(entry.get("fold_scope", "")),
+                "diagnostics": holdout_diagnostics,
+                "summary": row,
+            }
+        )
         bands = diagnostics["score_band_summary"].copy()
         if not bands.empty:
             bands.insert(0, "candidate", row["candidate"])
@@ -4170,6 +4539,10 @@ def _write_experiment_bundle(
         "performance_gap_analysis.csv",
         "performance_gap_analysis.md",
         "performance_gap_analysis.json",
+        "payoff_alignment.csv",
+        "payoff_alignment_summary.csv",
+        "payoff_alignment.md",
+        "payoff_alignment.json",
         "training_execution_summary.json",
         "decision_report.json",
         "best_candidate.json",
@@ -4321,10 +4694,13 @@ def run_experiment_matrix(
         config,
         settings,
     )
+    payoff_alignment = _payoff_alignment_frame(all_results, [], config)
+    payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
     best = _best_candidate(comparison, settings["control_profile"])
     blend_leaders = _profile_blend_leaders(profile_blend)
@@ -4363,6 +4739,7 @@ def run_experiment_matrix(
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
         "performance_gap_analysis": performance_gap_analysis.to_dict(orient="records"),
+        "payoff_alignment_summary": payoff_alignment_summary.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
     }
     _write_decision_files(run_dir, comparison, decision)
@@ -4378,6 +4755,8 @@ def run_experiment_matrix(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "payoff_alignment": payoff_alignment,
+        "payoff_alignment_summary": payoff_alignment_summary,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
         "experiment_policy_guard": experiment_policy_guard,
@@ -4605,7 +4984,10 @@ def write_experiment_diagnostics(
         diagnostic_config,
         settings,
     )
+    payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
+    payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
+    decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
     latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
     slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
@@ -4621,6 +5003,7 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
+    _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
     _write_holdout_boundary_audit(report_dir, holdout_boundary_audit)
     _write_frozen_policy_robustness(report_dir, frozen_policy_robustness)
@@ -4642,6 +5025,7 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
     _write_experiment_selection(run_dir, settings)
     _write_holdout_reservation(run_dir, settings)
@@ -4680,6 +5064,8 @@ def write_experiment_diagnostics(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "payoff_alignment": payoff_alignment,
+        "payoff_alignment_summary": payoff_alignment_summary,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
         "holdout_boundary_audit": holdout_boundary_audit,
