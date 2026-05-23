@@ -1598,6 +1598,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -1608,6 +1610,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -1618,6 +1622,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["performance_gap_analysis"].empty
     assert not diagnostics["payoff_alignment"].empty
     assert not diagnostics["payoff_alignment_summary"].empty
+    assert not diagnostics["payoff_policy_robustness"].empty
+    assert not diagnostics["payoff_policy_robustness_summary"].empty
     assert {
         "candidate",
         "candidate_type",
@@ -1637,6 +1643,23 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "payoff_blockers",
     }.issubset(diagnostics["payoff_alignment"].columns)
     assert "cv_test" in set(diagnostics["payoff_alignment"]["evaluation_scope"])
+    assert {
+        "candidate",
+        "evaluation_scope",
+        "band",
+        "fold",
+        "label_lift_vs_base",
+        "mean_forward_return",
+        "mean_tb_return",
+        "payoff_alignment_pass",
+    }.issubset(diagnostics["payoff_policy_robustness"].columns)
+    assert {
+        "positive_forward_return_fold_rate",
+        "positive_tb_return_fold_rate",
+        "future_oos_policy_candidate",
+        "reject_reason",
+        "next_action",
+    }.issubset(diagnostics["payoff_policy_robustness_summary"].columns)
     assert set(diagnostics["profile_blend"]["blend_method"]) == {"prob_mean", "rank_mean"}
     assert {
         "reviewable",
@@ -1674,6 +1697,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/performance_gap_analysis.csv" in archive.namelist()
         assert "matrix/payoff_alignment.csv" in archive.namelist()
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
+        assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
+        assert "matrix/payoff_policy_robustness_summary.csv" in archive.namelist()
         assert "matrix/profile_fold_metrics.csv" in archive.namelist()
         assert "matrix/experiment_selection.csv" in archive.namelist()
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
@@ -1690,6 +1715,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/performance_gap_analysis.csv" in names
     assert "matrix/payoff_alignment.csv" in names
     assert "matrix/payoff_alignment_summary.csv" in names
+    assert "matrix/payoff_policy_robustness.csv" in names
+    assert "matrix/payoff_policy_robustness_summary.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names
@@ -1821,6 +1848,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     ).all()
     assert holdout_evaluation["mtf_leakage_passed"].all()
     assert "holdout" in set(diagnostics["payoff_alignment"]["evaluation_scope"])
+    assert "holdout" in set(diagnostics["payoff_policy_robustness"]["evaluation_scope"])
     assert {
         "top_10_label_lift_vs_base",
         "top_10_mean_forward_return",
@@ -1842,6 +1870,8 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "payoff_alignment_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "payoff_policy_robustness.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "holdout_run" / "payoff_policy_robustness_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_grid.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "holdout_run" / "profile_score_policy_selection.csv").exists()
     assert "frozen_policy_validation" in diagnostics["decision"]["holdout_evaluation"]
@@ -1892,6 +1922,8 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/performance_gap_analysis.csv" in names
     assert "holdout_run/payoff_alignment.csv" in names
     assert "holdout_run/payoff_alignment_summary.csv" in names
+    assert "holdout_run/payoff_policy_robustness.csv" in names
+    assert "holdout_run/payoff_policy_robustness_summary.csv" in names
     assert "holdout_run/profile_score_policy_grid.csv" in names
     assert "holdout_run/profile_score_policy_selection.csv" in names
 

@@ -1393,6 +1393,15 @@ validation:
     min_forward_return: 0.00
     min_positive_lift_fold_rate: 0.55
     min_positive_forward_return_fold_rate: 0.55
+  payoff_policy_robustness:
+    min_mean_label_lift_vs_base: 1.05
+    min_positive_label_lift_fold_rate: 0.60
+    min_mean_forward_return: 0.00
+    min_positive_forward_return_fold_rate: 0.60
+    min_mean_tb_return: 0.00
+    min_positive_tb_return_fold_rate: 0.55
+    min_payoff_alignment_fold_rate: 0.50
+    max_sl_rate_above_base_fold_rate: 0.70
   score_lift_bins: 10
   score_bands:
     - {name: top_10, min_bin: 9, max_bin: 9}
