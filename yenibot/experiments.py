@@ -3677,6 +3677,8 @@ def run_experiment_matrix(
     seed_ensemble_results = _seed_ensemble_entries(seed_results, config)
     profile_blend_results = _profile_blend_entries(profile_results, config)
     all_results = [*profile_results, *seed_results, *seed_ensemble_results, *profile_blend_results]
+    executed_results = [result for result in [*profile_results, *seed_results] if not bool(result.get("skipped", False))]
+    skipped_results = [result for result in [*profile_results, *seed_results] if bool(result.get("skipped", False))]
     seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
     seed_ensemble = _seed_ensemble_frame(all_results)
     profile_blend = _profile_blend_frame(all_results)
@@ -3700,6 +3702,14 @@ def run_experiment_matrix(
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
+        "run_id_source": run_id_source,
+        "training_executed_count": int(len(executed_results)),
+        "training_skipped_count": int(len(skipped_results)),
+        "all_training_scopes_reused": bool(profile_results or seed_results) and len(executed_results) == 0,
+        "reused_training_scopes": [
+            {"profile": str(result["profile"]), "fold_scope": str(result["fold_scope"])}
+            for result in skipped_results
+        ],
         "missing_selected_profiles": missing_selected.to_dict(orient="records"),
         "experiment_complete": bool(missing_selected.empty),
         "holdout": settings.get("holdout", {}) or {},
@@ -3721,6 +3731,10 @@ def run_experiment_matrix(
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
+        "run_id_source": run_id_source,
+        "training_executed_count": int(len(executed_results)),
+        "training_skipped_count": int(len(skipped_results)),
+        "all_training_scopes_reused": bool(profile_results or seed_results) and len(executed_results) == 0,
         "missing_selected_profiles": missing_selected,
         "decision": decision,
     }

@@ -1825,10 +1825,17 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
 
     first = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="stable_run", device="cpu")
     run_id, source = resolve_experiment_run_id(tmp_path, config)
+    second = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, device="cpu")
 
     assert first["run_id"] == "stable_run"
     assert run_id == "stable_run"
     assert source == "matching_existing"
+    assert second["run_id"] == "stable_run"
+    assert second["run_id_source"] == "matching_existing"
+    assert second["training_executed_count"] == 0
+    assert second["training_skipped_count"] > 0
+    assert second["all_training_scopes_reused"] is True
+    assert second["decision"]["all_training_scopes_reused"] is True
 
 
 def test_write_experiment_diagnostics_raises_when_run_has_no_completed_profiles(tmp_path, tiny_config) -> None:
