@@ -617,6 +617,11 @@ def test_experiment_preflight_skips_intrahour_candidates_until_features_exist() 
             "role": "candidate_profile",
             "skip_reason": "missing_intrahour_features_rerun_01_02_03:ih15_*",
         },
+        {
+            "profile": "intrahour",
+            "role": "always_full_profile",
+            "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+        },
     ]
 
 
@@ -659,6 +664,58 @@ def test_experiment_preflight_skips_partial_intrahour_feature_sets() -> None:
     ]
 
 
+def test_experiment_preflight_skips_futures_context_profiles_until_features_exist() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["base_feature"], "exclude_patterns": []},
+                "futures_context": {
+                    "inherit": "control",
+                    "include_patterns": ["fut_*_stable_rank", "fut_metrics_missing"],
+                    "exclude_patterns": [],
+                },
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": ["futures_context"],
+            "always_full_profiles": ["control", "futures_context"],
+            "seed_audit": {"enabled": True, "profiles": ["control", "futures_context"], "seeds": [42]},
+        },
+    }
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+            "base_feature": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+
+    settings = _preflight_experiment_profiles(experiment_settings(config), frame, config)
+
+    assert settings["profiles"] == ["control"]
+    assert settings["candidate_profiles"] == []
+    assert settings["always_full_profiles"] == ["control"]
+    assert settings["seed_audit"]["profiles"] == ["control"]
+    assert settings["skipped_profiles"] == [
+        {
+            "profile": "futures_context",
+            "role": "candidate_profile",
+            "skip_reason": "missing_futures_context_features_rerun_01_02_03",
+        },
+        {
+            "profile": "futures_context",
+            "role": "always_full_profile",
+            "skip_reason": "missing_futures_context_features_rerun_01_02_03",
+        },
+        {
+            "profile": "futures_context",
+            "role": "seed_audit_profile",
+            "skip_reason": "missing_futures_context_features_rerun_01_02_03",
+        },
+    ]
+
+
 def test_auto_full_profiles_keeps_control_and_promotes_best_triage_candidates() -> None:
     settings = {
         "control_profile": "control",
@@ -691,6 +748,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
+        "baseline_control_plus_futures_context",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -706,7 +764,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["policy_name"] == "top_10"
     assert config["experiments"]["policy_review"]["status"] == "failed_clean_holdout_review"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
-    assert config["experiments"]["policy_review"]["future_oos_candidates"] == ["blend_control_long_pressure_65_35"]
+    assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
+        "blend_control_long_pressure_65_35",
+        "baseline_control_plus_futures_context",
+    ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_data_end"] == "2026-05-13 08:00:00+00:00"
@@ -732,6 +793,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
+    assert "Binance Vision futures metrics" in notes["baseline_control_plus_futures_context"]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -872,6 +934,21 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "ih15_large_trade_concentration_stable_zscore",
         "ih15_aggressive_buy_burst_stable_rank",
         "ih15_aggressive_sell_burst_stable_rank",
+        "fut_oi_log_return",
+        "fut_oi_change_288_stable_rank",
+        "fut_oi_change_288_stable_zscore",
+        "fut_oi_change_288_stable_tanh",
+        "fut_oi_value_change_288_stable_rank",
+        "fut_toptrader_count_long_short_log_ratio_stable_rank",
+        "fut_toptrader_count_long_short_log_ratio_stable_zscore",
+        "fut_global_long_short_log_ratio_stable_rank",
+        "fut_taker_long_short_vol_log_ratio_stable_zscore",
+        "fut_funding_rate",
+        "fut_funding_rate_stable_rank",
+        "fut_funding_sum_12_stable_zscore",
+        "fut_funding_mean_12_stable_tanh",
+        "fut_metrics_missing",
+        "fut_funding_missing",
     ]
 
     pruned = profile_config(config, "baseline_no_4h_tier1_pruned_whale")
@@ -930,6 +1007,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "gk_vol_14" not in base_no_vol_no_1h_vol_columns
     assert "4h_taker_imbalance_mean_24" in base_no_vol_no_1h_vol_columns
+
+    futures_context = profile_config(config, "baseline_control_plus_futures_context")
+    futures_columns = filter_feature_columns(columns, futures_context)
+    assert "fut_oi_log_return" not in futures_columns
+    assert "fut_funding_rate" not in futures_columns
+    assert "fut_oi_change_288_stable_rank" in futures_columns
+    assert "fut_oi_change_288_stable_tanh" in futures_columns
+    assert "fut_toptrader_count_long_short_log_ratio_stable_zscore" in futures_columns
+    assert "fut_funding_sum_12_stable_zscore" in futures_columns
+    assert "fut_funding_mean_12_stable_tanh" in futures_columns
+    assert "fut_metrics_missing" in futures_columns
+    assert "4h_gk_vol_14" not in futures_columns
+    assert "realized_vol_14" not in futures_columns
 
     stable_no_cvd = profile_config(config, "baseline_stable_no_1h_cvd_rate")
     stable_no_cvd_columns = filter_feature_columns(columns, stable_no_cvd)

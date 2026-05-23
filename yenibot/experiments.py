@@ -385,6 +385,12 @@ def _profile_requires_intrahour_features(config: dict[str, Any], profile: str) -
     return any("ih15" in str(pattern) for pattern in resolved.get("include_patterns", []) or [])
 
 
+def _profile_requires_futures_context_features(config: dict[str, Any], profile: str) -> bool:
+    profile_cfg = profile_config(config, profile)
+    resolved = resolve_feature_profile(profile_cfg)
+    return any("fut_" in str(pattern) for pattern in resolved.get("include_patterns", []) or [])
+
+
 def _missing_intrahour_include_patterns(config: dict[str, Any], profile: str, feature_columns: tuple[str, ...]) -> list[str]:
     profile_cfg = profile_config(config, profile)
     resolved = resolve_feature_profile(profile_cfg)
@@ -409,11 +415,14 @@ def _preflight_experiment_profiles(
     selected_profiles: list[str] = []
     skipped_profiles = list(updated.get("skipped_profiles", []) or [])
     seen_signatures: dict[tuple[str, ...], str] = {}
+    profile_feature_columns: dict[str, tuple[str, ...]] = {}
 
     for profile in [str(item) for item in updated.get("profiles", [])]:
         cfg = profile_config(config, profile)
         feature_columns = tuple(filter_feature_columns(base_columns, cfg))
+        profile_feature_columns[profile] = feature_columns
         has_intrahour = any(column.startswith("ih15_") for column in feature_columns)
+        has_futures_context = any(column.startswith("fut_") for column in feature_columns)
         missing_intrahour_patterns = _missing_intrahour_include_patterns(config, profile, feature_columns)
         if profile != control and _profile_requires_intrahour_features(config, profile) and (
             not has_intrahour or missing_intrahour_patterns
@@ -426,6 +435,15 @@ def _preflight_experiment_profiles(
                     "profile": profile,
                     "role": "candidate_profile",
                     "skip_reason": reason,
+                }
+            )
+            continue
+        if profile != control and _profile_requires_futures_context_features(config, profile) and not has_futures_context:
+            skipped_profiles.append(
+                {
+                    "profile": profile,
+                    "role": "candidate_profile",
+                    "skip_reason": "missing_futures_context_features_rerun_01_02_03",
                 }
             )
             continue
@@ -448,17 +466,49 @@ def _preflight_experiment_profiles(
     selected_set = set(selected_profiles)
     updated["profiles"] = selected_profiles
     updated["candidate_profiles"] = [profile for profile in selected_profiles if profile != control]
+
+    def profile_is_runnable(profile: str, role: str) -> bool:
+        if profile == control or profile in selected_set:
+            return True
+        if profile not in profile_feature_columns:
+            cfg = profile_config(config, profile)
+            profile_feature_columns[profile] = tuple(filter_feature_columns(base_columns, cfg))
+        feature_columns = profile_feature_columns[profile]
+        if _profile_requires_intrahour_features(config, profile) and not any(
+            column.startswith("ih15_") for column in feature_columns
+        ):
+            skipped_profiles.append(
+                {
+                    "profile": profile,
+                    "role": role,
+                    "skip_reason": "missing_intrahour_features_rerun_01_02_03",
+                }
+            )
+            return False
+        if _profile_requires_futures_context_features(config, profile) and not any(
+            column.startswith("fut_") for column in feature_columns
+        ):
+            skipped_profiles.append(
+                {
+                    "profile": profile,
+                    "role": role,
+                    "skip_reason": "missing_futures_context_features_rerun_01_02_03",
+                }
+            )
+            return False
+        return True
+
     updated["always_full_profiles"] = [
         str(profile)
         for profile in updated.get("always_full_profiles", []) or []
-        if str(profile) == control or str(profile) in selected_set or not _profile_requires_intrahour_features(config, str(profile))
+        if profile_is_runnable(str(profile), "always_full_profile")
     ]
     seed_audit = copy.deepcopy(updated.get("seed_audit", {}) or {})
     if seed_audit:
         seed_audit["profiles"] = [
             str(profile)
             for profile in seed_audit.get("profiles", []) or []
-            if str(profile) == control or str(profile) in selected_set or not _profile_requires_intrahour_features(config, str(profile))
+            if profile_is_runnable(str(profile), "seed_audit_profile")
         ]
         updated["seed_audit"] = seed_audit
     updated["skipped_profiles"] = skipped_profiles

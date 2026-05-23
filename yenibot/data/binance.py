@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -36,6 +37,24 @@ NUMERIC_COLUMNS = [
     "num_trades",
     "taker_buy_base_vol",
     "taker_buy_quote_vol",
+]
+
+FUTURES_METRICS_COLUMNS = [
+    "timestamp",
+    "symbol",
+    "sum_open_interest",
+    "sum_open_interest_value",
+    "count_toptrader_long_short_ratio",
+    "sum_toptrader_long_short_ratio",
+    "count_long_short_ratio",
+    "sum_taker_long_short_vol_ratio",
+]
+
+FUNDING_RATE_COLUMNS = [
+    "timestamp",
+    "symbol",
+    "funding_rate",
+    "mark_price",
 ]
 
 INTERVAL_TO_MS = {
@@ -234,6 +253,152 @@ def download_full_klines_from_vision(
     return klines_to_dataframe(filtered)
 
 
+def futures_metrics_to_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert Binance Vision futures metrics CSV rows into a typed frame."""
+
+    if frame.empty:
+        return pd.DataFrame(columns=FUTURES_METRICS_COLUMNS)
+    df = frame.copy()
+    if "timestamp" not in df.columns:
+        if "create_time" not in df.columns:
+            raise ValueError("Futures metrics must contain create_time or timestamp")
+        df = df.rename(columns={"create_time": "timestamp"})
+    missing = [column for column in FUTURES_METRICS_COLUMNS if column not in df.columns]
+    if missing:
+        raise ValueError(f"Missing Binance futures metrics columns: {missing}")
+    df = df[FUTURES_METRICS_COLUMNS].copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    for column in FUTURES_METRICS_COLUMNS:
+        if column in {"timestamp", "symbol"}:
+            continue
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df["symbol"] = df["symbol"].astype(str)
+    return df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+
+
+def download_futures_metrics_from_vision(
+    symbol: str,
+    start: str | int | float | datetime | pd.Timestamp,
+    end: str | int | float | datetime | pd.Timestamp | None = None,
+    *,
+    vision_base_url: str = BINANCE_VISION_BASE_URL,
+    request_sleep_seconds: float = 0.0,
+    session: requests.Session | None = None,
+) -> pd.DataFrame:
+    """Download Binance Vision USDT-M futures metrics zips.
+
+    The metrics archive contains 5-minute snapshots such as open interest and
+    long/short ratios. It is the historical source we need because the REST
+    open-interest statistics endpoint only exposes the latest month.
+    """
+
+    start_ms = to_milliseconds(start)
+    end_ms = to_milliseconds(end)
+    if start_ms is None:
+        raise ValueError("start is required")
+    if end_ms is None:
+        end_ms = int(pd.Timestamp.now(tz=timezone.utc).timestamp() * 1000)
+    if end_ms <= start_ms:
+        raise ValueError("end must be after start")
+
+    http = session or requests.Session()
+    frames: list[pd.DataFrame] = []
+    start_day = pd.to_datetime(start_ms, unit="ms", utc=True).floor("D")
+    end_day = pd.to_datetime(end_ms - 1, unit="ms", utc=True).floor("D")
+    for day in pd.date_range(start_day, end_day, freq="D", tz=timezone.utc):
+        url = _vision_metrics_daily_url(vision_base_url, symbol, day)
+        frame = _download_vision_csv_zip(url, session=http)
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+        if request_sleep_seconds > 0:
+            time.sleep(request_sleep_seconds)
+
+    if not frames:
+        raise ValueError(
+            "No Binance Vision futures metrics files were found for the requested range. "
+            "Check symbol and date range."
+        )
+    df = futures_metrics_to_dataframe(pd.concat(frames, ignore_index=True))
+    start_ts = pd.to_datetime(start_ms, unit="ms", utc=True)
+    end_ts = pd.to_datetime(end_ms, unit="ms", utc=True)
+    return df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)].reset_index(drop=True)
+
+
+def funding_rates_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Convert Binance funding rate REST rows into a typed DataFrame."""
+
+    if not rows:
+        return pd.DataFrame(columns=FUNDING_RATE_COLUMNS)
+    frame = pd.DataFrame(rows)
+    required = ["symbol", "fundingRate", "fundingTime"]
+    missing = [column for column in required if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Missing Binance funding rate columns: {missing}")
+    out = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(pd.to_numeric(frame["fundingTime"], errors="raise"), unit="ms", utc=True),
+            "symbol": frame["symbol"].astype(str),
+            "funding_rate": pd.to_numeric(frame["fundingRate"], errors="raise"),
+            "mark_price": pd.to_numeric(frame.get("markPrice"), errors="coerce") if "markPrice" in frame else np.nan,
+        }
+    )
+    return out.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+
+
+def download_funding_rates(
+    symbol: str,
+    start: str | int | float | datetime | pd.Timestamp,
+    end: str | int | float | datetime | pd.Timestamp | None = None,
+    *,
+    base_url: str = "https://fapi.binance.com",
+    limit: int = 1000,
+    request_sleep_seconds: float = 0.15,
+    session: requests.Session | None = None,
+) -> pd.DataFrame:
+    """Download Binance USDT-M funding rate history from REST."""
+
+    if limit > 1000:
+        raise ValueError("Binance funding rate limit cannot exceed 1000")
+    start_ms = to_milliseconds(start)
+    end_ms = to_milliseconds(end)
+    if start_ms is None:
+        raise ValueError("start is required")
+    if end_ms is None:
+        end_ms = int(pd.Timestamp.now(tz=timezone.utc).timestamp() * 1000)
+    if end_ms <= start_ms:
+        raise ValueError("end must be after start")
+
+    http = session or requests.Session()
+    url = f"{base_url.rstrip('/')}/fapi/v1/fundingRate"
+    rows: list[dict[str, Any]] = []
+    cursor = start_ms
+    while cursor < end_ms:
+        params = {
+            "symbol": symbol,
+            "startTime": cursor,
+            "endTime": end_ms - 1,
+            "limit": limit,
+        }
+        response = http.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        batch = response.json()
+        if not isinstance(batch, list):
+            raise ValueError(f"Unexpected Binance funding response: {batch}")
+        if not batch:
+            break
+        rows.extend(batch)
+        last_time = int(batch[-1]["fundingTime"])
+        next_cursor = last_time + 1
+        if next_cursor <= cursor:
+            raise RuntimeError("Binance funding pagination did not advance")
+        cursor = next_cursor
+        if len(batch) < limit:
+            break
+        if request_sleep_seconds > 0:
+            time.sleep(request_sleep_seconds)
+    return funding_rates_to_dataframe(rows)
+
+
 def _vision_monthly_url(base_url: str, symbol: str, interval: str, year: int, month: int) -> str:
     return (
         f"{base_url.rstrip('/')}/data/futures/um/monthly/klines/"
@@ -245,6 +410,13 @@ def _vision_daily_url(base_url: str, symbol: str, interval: str, day: pd.Timesta
     return (
         f"{base_url.rstrip('/')}/data/futures/um/daily/klines/"
         f"{symbol}/{interval}/{symbol}-{interval}-{day:%Y-%m-%d}.zip"
+    )
+
+
+def _vision_metrics_daily_url(base_url: str, symbol: str, day: pd.Timestamp) -> str:
+    return (
+        f"{base_url.rstrip('/')}/data/futures/um/daily/metrics/"
+        f"{symbol}/{symbol}-metrics-{day:%Y-%m-%d}.zip"
     )
 
 
@@ -267,6 +439,19 @@ def _download_vision_zip(url: str, *, session: requests.Session) -> list[list[An
     raw = raw.dropna(subset=["timestamp"])
     raw["timestamp"] = raw["timestamp"].astype("int64")
     return raw.values.tolist()
+
+
+def _download_vision_csv_zip(url: str, *, session: requests.Session) -> pd.DataFrame | None:
+    response = session.get(url, timeout=60)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        csv_names = [name for name in archive.namelist() if name.endswith(".csv")]
+        if len(csv_names) != 1:
+            raise ValueError(f"Expected one CSV inside Binance Vision zip: {url}")
+        with archive.open(csv_names[0]) as handle:
+            return pd.read_csv(handle)
 
 
 def _month_iter(start_ms: int, end_ms: int) -> list[tuple[int, int]]:

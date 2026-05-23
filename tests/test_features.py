@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import copy
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from yenibot.features import build_feature_matrix, compute_intrahour_order_flow_features
+from yenibot.features import (
+    build_feature_matrix,
+    compute_funding_rate_features,
+    compute_futures_metrics_features,
+    compute_intrahour_order_flow_features,
+)
 from yenibot.features.wavelet import causal_wavelet_denoise
 
 
@@ -308,3 +314,107 @@ def test_intrahour_missing_hours_are_neutral_not_forward_filled(synthetic_klines
     assert row["ih15_coverage"] == 0.0
     assert row["ih15_taker_imbalance_mean"] == 0.0
     assert row["ih15_absorption_imbalance"] == 0.0
+
+
+def test_futures_context_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["futures_context"] = {
+        "enabled": True,
+        "prefix": "fut",
+        "stable_window": 4,
+        "funding_stable_window": 3,
+        "stable_clip_abs": 3.0,
+        "stable_tanh_scale": 2.0,
+        "stable_transforms": ["zscore", "rank", "tanh"],
+        "oi_change_windows": [2, 4],
+        "funding_windows": [2, 3],
+        "metrics_merge_tolerance_minutes": 90,
+        "funding_merge_tolerance_minutes": 540,
+    }
+    primary = synthetic_klines(96, "1h")
+    htf = synthetic_klines(30, "4h")
+    extended_primary = synthetic_klines(112, "1h")
+    extended_htf = synthetic_klines(34, "4h")
+    metrics = _synthetic_futures_metrics(96 * 12)
+    extended_metrics = _synthetic_futures_metrics(112 * 12)
+    funding = _synthetic_funding_rates(16)
+    extended_funding = _synthetic_funding_rates(20)
+
+    metrics_features = compute_futures_metrics_features(metrics, config)
+    assert {
+        "fut_oi_change_4_stable_rank",
+        "fut_toptrader_count_long_short_log_ratio_stable_zscore",
+        "fut_taker_long_short_vol_log_ratio_stable_tanh",
+    }.issubset(set(metrics_features.feature_columns))
+
+    funding_features = compute_funding_rate_features(funding, config)
+    assert {
+        "fut_funding_rate_stable_rank",
+        "fut_funding_sum_3_stable_zscore",
+        "fut_funding_mean_2_stable_tanh",
+    }.issubset(set(funding_features.feature_columns))
+
+    base = build_feature_matrix(
+        primary,
+        htf,
+        config,
+        futures_metrics_frame=metrics,
+        funding_frame=funding,
+    ).frame
+    extended = build_feature_matrix(
+        extended_primary,
+        extended_htf,
+        config,
+        futures_metrics_frame=extended_metrics,
+        funding_frame=extended_funding,
+    ).frame
+    timestamp = pd.Timestamp("2022-01-03 12:00", tz="UTC")
+    columns = [
+        "fut_oi_change_4_stable_rank",
+        "fut_oi_value_change_4_stable_tanh",
+        "fut_toptrader_count_long_short_log_ratio_stable_zscore",
+        "fut_global_long_short_log_ratio_stable_rank",
+        "fut_taker_long_short_vol_log_ratio_stable_tanh",
+        "fut_funding_rate_stable_rank",
+        "fut_funding_sum_3_stable_zscore",
+        "fut_funding_mean_2_stable_tanh",
+        "fut_metrics_missing",
+        "fut_funding_missing",
+    ]
+
+    assert set(columns).issubset(base.columns)
+    base_row = base.loc[base["timestamp"] == timestamp, columns].iloc[0]
+    extended_row = extended.loc[extended["timestamp"] == timestamp, columns].iloc[0]
+    pd.testing.assert_series_equal(base_row, extended_row, check_names=False)
+    assert float(base_row["fut_metrics_missing"]) == 0.0
+    assert float(base_row["fut_funding_missing"]) == 0.0
+
+
+def _synthetic_futures_metrics(periods: int) -> pd.DataFrame:
+    ts = pd.date_range("2022-01-01", periods=periods, freq="5min", tz="UTC")
+    idx = pd.Series(range(periods), dtype=float)
+    return pd.DataFrame(
+        {
+            "timestamp": ts,
+            "symbol": "BTCUSDT",
+            "sum_open_interest": 100000.0 + 100.0 * idx + 500.0 * np.sin(idx / 20.0),
+            "sum_open_interest_value": 4_000_000_000.0 + 2_000_000.0 * idx,
+            "count_toptrader_long_short_ratio": 1.0 + 0.1 * np.sin(idx / 13.0),
+            "sum_toptrader_long_short_ratio": 1.0 + 0.08 * np.cos(idx / 17.0),
+            "count_long_short_ratio": 1.0 + 0.05 * np.sin(idx / 11.0),
+            "sum_taker_long_short_vol_ratio": 1.0 + 0.12 * np.cos(idx / 7.0),
+        }
+    )
+
+
+def _synthetic_funding_rates(periods: int) -> pd.DataFrame:
+    ts = pd.date_range("2022-01-01", periods=periods, freq="8h", tz="UTC")
+    idx = pd.Series(range(periods), dtype=float)
+    return pd.DataFrame(
+        {
+            "timestamp": ts,
+            "symbol": "BTCUSDT",
+            "funding_rate": 0.0001 * np.sin(idx / 3.0),
+            "mark_price": 40000.0 + 50.0 * idx,
+        }
+    )

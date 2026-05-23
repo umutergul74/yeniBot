@@ -847,13 +847,134 @@ def raw_order_flow_v2_model_exclusions(config: object) -> set[str]:
     return base | {f"4h_{column}" for column in base}
 
 
+def compute_futures_metrics_features(metrics_frame: pd.DataFrame, config: object) -> FeatureResult:
+    """Compute causal futures positioning features from Binance Vision metrics snapshots."""
+
+    cfg = _config_get(config, ["features", "futures_context"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)) or metrics_frame is None or metrics_frame.empty:
+        empty = pd.DataFrame({"timestamp": pd.Series(dtype="datetime64[ns, UTC]")})
+        return FeatureResult(empty, [])
+
+    prefix = str(_config_get(cfg, ["prefix"], "fut")).replace("-", "_")
+    stable_window = int(_config_get(cfg, ["stable_window"], 288))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
+    oi_change_windows = [int(item) for item in (_config_get(cfg, ["oi_change_windows"], [12, 36, 96, 288]) or [])]
+
+    df = metrics_frame.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+    numeric_columns = [
+        "sum_open_interest",
+        "sum_open_interest_value",
+        "count_toptrader_long_short_ratio",
+        "sum_toptrader_long_short_ratio",
+        "count_long_short_ratio",
+        "sum_taker_long_short_vol_ratio",
+    ]
+    for column in numeric_columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    oi_log = np.log(df["sum_open_interest"].where(df["sum_open_interest"] > 0))
+    oi_value_log = np.log(df["sum_open_interest_value"].where(df["sum_open_interest_value"] > 0))
+    df[f"{prefix}_oi_log_return"] = oi_log.diff()
+    df[f"{prefix}_oi_value_log_return"] = oi_value_log.diff()
+
+    stable_sources = [f"{prefix}_oi_log_return", f"{prefix}_oi_value_log_return"]
+    for window in oi_change_windows:
+        if window <= 0:
+            raise ValueError("features.futures_context.oi_change_windows values must be positive")
+        df[f"{prefix}_oi_change_{window}"] = oi_log - oi_log.shift(window)
+        df[f"{prefix}_oi_value_change_{window}"] = oi_value_log - oi_value_log.shift(window)
+        stable_sources.extend([f"{prefix}_oi_change_{window}", f"{prefix}_oi_value_change_{window}"])
+
+    ratio_sources = {
+        f"{prefix}_toptrader_count_long_short_log_ratio": "count_toptrader_long_short_ratio",
+        f"{prefix}_toptrader_sum_long_short_log_ratio": "sum_toptrader_long_short_ratio",
+        f"{prefix}_global_long_short_log_ratio": "count_long_short_ratio",
+        f"{prefix}_taker_long_short_vol_log_ratio": "sum_taker_long_short_vol_ratio",
+    }
+    for output, source in ratio_sources.items():
+        if source not in df.columns:
+            continue
+        df[output] = np.log(df[source].where(df[source] > 0))
+        stable_sources.append(output)
+
+    stable_scores = _stable_rolling_score_frame(
+        df,
+        stable_sources,
+        stable_window,
+        stable_clip_abs,
+        stable_transforms,
+        error_context="features.futures_context.stable_window",
+        missing_ok=True,
+        tanh_scale=stable_tanh_scale,
+    )
+    if not stable_scores.empty:
+        df = pd.concat([df, stable_scores], axis=1)
+
+    feature_columns = select_feature_columns(df)
+    return FeatureResult(df, feature_columns)
+
+
+def compute_funding_rate_features(funding_frame: pd.DataFrame, config: object) -> FeatureResult:
+    """Compute causal funding-rate context features."""
+
+    cfg = _config_get(config, ["features", "futures_context"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)) or funding_frame is None or funding_frame.empty:
+        empty = pd.DataFrame({"timestamp": pd.Series(dtype="datetime64[ns, UTC]")})
+        return FeatureResult(empty, [])
+
+    prefix = str(_config_get(cfg, ["prefix"], "fut")).replace("-", "_")
+    stable_window = int(_config_get(cfg, ["funding_stable_window"], _config_get(cfg, ["stable_window"], 288)))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["zscore", "rank"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
+    funding_windows = [int(item) for item in (_config_get(cfg, ["funding_windows"], [3, 6, 12]) or [])]
+
+    df = funding_frame.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+    df["funding_rate"] = pd.to_numeric(df["funding_rate"], errors="coerce")
+    df[f"{prefix}_funding_rate"] = df["funding_rate"].clip(-0.05, 0.05)
+    df[f"{prefix}_funding_rate_delta"] = df[f"{prefix}_funding_rate"].diff()
+    stable_sources = [f"{prefix}_funding_rate", f"{prefix}_funding_rate_delta"]
+
+    for window in funding_windows:
+        if window <= 0:
+            raise ValueError("features.futures_context.funding_windows values must be positive")
+        df[f"{prefix}_funding_sum_{window}"] = df[f"{prefix}_funding_rate"].rolling(window, min_periods=window).sum()
+        df[f"{prefix}_funding_mean_{window}"] = df[f"{prefix}_funding_rate"].rolling(window, min_periods=window).mean()
+        stable_sources.extend([f"{prefix}_funding_sum_{window}", f"{prefix}_funding_mean_{window}"])
+
+    stable_scores = _stable_rolling_score_frame(
+        df,
+        stable_sources,
+        stable_window,
+        stable_clip_abs,
+        stable_transforms,
+        error_context="features.futures_context.funding_stable_window",
+        missing_ok=True,
+        tanh_scale=stable_tanh_scale,
+    )
+    if not stable_scores.empty:
+        df = pd.concat([df, stable_scores], axis=1)
+
+    feature_columns = select_feature_columns(df)
+    return FeatureResult(df, feature_columns)
+
+
 def build_feature_matrix(
     primary_frame: pd.DataFrame,
     htf_frame: pd.DataFrame,
     config: object,
     intrabar_frame: pd.DataFrame | None = None,
+    futures_metrics_frame: pd.DataFrame | None = None,
+    funding_frame: pd.DataFrame | None = None,
 ) -> FeatureResult:
-    """Build 1H features, correctly delayed 4H features, and optional intrahour flow features."""
+    """Build 1H, delayed 4H, and optional causal futures-context features."""
 
     primary = compute_bar_features(primary_frame, config).frame
     htf_result = compute_bar_features(htf_frame, config)
@@ -889,13 +1010,49 @@ def build_feature_matrix(
     else:
         intrahour_fill_columns = []
 
+    context_fill_columns: list[str] = []
+    if futures_metrics_frame is not None and bool(_config_get(config, ["features", "futures_context", "enabled"], False)):
+        metrics_result = compute_futures_metrics_features(futures_metrics_frame, config)
+        if metrics_result.feature_columns:
+            metrics_features = metrics_result.frame[["timestamp", *metrics_result.feature_columns]].copy()
+            tolerance_minutes = int(_config_get(config, ["features", "futures_context", "metrics_merge_tolerance_minutes"], 90))
+            merged = pd.merge_asof(
+                merged.sort_values("timestamp"),
+                metrics_features.sort_values("timestamp"),
+                on="timestamp",
+                direction="backward",
+                tolerance=pd.Timedelta(minutes=tolerance_minutes),
+            )
+            missing = merged[metrics_result.feature_columns].isna().all(axis=1)
+            missing_col = f"{_config_get(config, ['features', 'futures_context', 'prefix'], 'fut')}_metrics_missing"
+            merged[missing_col] = missing.astype(float)
+            context_fill_columns.extend([*metrics_result.feature_columns, missing_col])
+
+    if funding_frame is not None and bool(_config_get(config, ["features", "futures_context", "enabled"], False)):
+        funding_result = compute_funding_rate_features(funding_frame, config)
+        if funding_result.feature_columns:
+            funding_features = funding_result.frame[["timestamp", *funding_result.feature_columns]].copy()
+            tolerance_minutes = int(_config_get(config, ["features", "futures_context", "funding_merge_tolerance_minutes"], 540))
+            merged = pd.merge_asof(
+                merged.sort_values("timestamp"),
+                funding_features.sort_values("timestamp"),
+                on="timestamp",
+                direction="backward",
+                tolerance=pd.Timedelta(minutes=tolerance_minutes),
+            )
+            missing = merged[funding_result.feature_columns].isna().all(axis=1)
+            missing_col = f"{_config_get(config, ['features', 'futures_context', 'prefix'], 'fut')}_funding_missing"
+            merged[missing_col] = missing.astype(float)
+            context_fill_columns.extend([*funding_result.feature_columns, missing_col])
+
     warmup_rows = int(_config_get(config, ["features", "warmup_rows"], 300))
     if warmup_rows > 0:
         merged = merged.iloc[warmup_rows:].copy()
-    if intrahour_fill_columns:
-        passthrough_columns = [column for column in merged.columns if column not in intrahour_fill_columns]
+    neutral_fill_columns = [*intrahour_fill_columns, *context_fill_columns]
+    if neutral_fill_columns:
+        passthrough_columns = [column for column in merged.columns if column not in neutral_fill_columns]
         merged[passthrough_columns] = merged[passthrough_columns].ffill()
-        merged[intrahour_fill_columns] = merged[intrahour_fill_columns].fillna(0.0)
+        merged[neutral_fill_columns] = merged[neutral_fill_columns].fillna(0.0)
     else:
         merged = merged.ffill()
     feature_columns = select_feature_columns(merged)
