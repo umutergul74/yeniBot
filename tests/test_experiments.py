@@ -1836,6 +1836,28 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
     assert second["training_skipped_count"] > 0
     assert second["all_training_scopes_reused"] is True
     assert second["decision"]["all_training_scopes_reused"] is True
+    execution_summary_path = tmp_path / "experiments" / "stable_run" / "training_execution_summary.json"
+    assert execution_summary_path.exists()
+    execution_summary = json.loads(execution_summary_path.read_text(encoding="utf-8"))
+    assert execution_summary["run_id_source"] == "matching_existing"
+    assert execution_summary["training_executed_count"] == 0
+    assert execution_summary["training_skipped_count"] > 0
+
+    diagnostics = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=config,
+        output_dir=tmp_path / "reports",
+        run_id="stable_run",
+    )
+    assert diagnostics["decision"]["run_id_source"] == "matching_existing"
+    assert diagnostics["decision"]["training_executed_count"] == 0
+    assert diagnostics["decision"]["training_skipped_count"] > 0
+    assert diagnostics["decision"]["all_training_scopes_reused"] is True
+    assert diagnostics["decision"]["training_execution_metadata_source"] == "training_execution_summary"
+    assert diagnostics["decision"]["training_execution_metadata_available"] is True
+    with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_stable_run.zip") as archive:
+        names = set(archive.namelist())
+    assert "stable_run/training_execution_summary.json" in names
 
 
 def test_write_experiment_diagnostics_raises_when_run_has_no_completed_profiles(tmp_path, tiny_config) -> None:

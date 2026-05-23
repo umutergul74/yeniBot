@@ -447,6 +447,80 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True), encoding="utf-8")
 
 
+_TRAINING_EXECUTION_KEYS = (
+    "run_id_source",
+    "training_executed_count",
+    "training_skipped_count",
+    "all_training_scopes_reused",
+    "reused_training_scopes",
+)
+
+
+def _training_execution_summary_path(run_dir: Path) -> Path:
+    return run_dir / "training_execution_summary.json"
+
+
+def _training_execution_summary(
+    *,
+    run_id: str,
+    run_id_source: str | None,
+    executed_results: list[dict[str, Any]],
+    skipped_results: list[dict[str, Any]],
+    profile_results: list[dict[str, Any]],
+    seed_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "run_id_source": run_id_source,
+        "training_executed_count": int(len(executed_results)),
+        "training_skipped_count": int(len(skipped_results)),
+        "all_training_scopes_reused": bool(profile_results or seed_results) and len(executed_results) == 0,
+        "reused_training_scopes": [
+            {"profile": str(result["profile"]), "fold_scope": str(result["fold_scope"])}
+            for result in skipped_results
+        ],
+        "executed_training_scopes": [
+            {"profile": str(result["profile"]), "fold_scope": str(result["fold_scope"])}
+            for result in executed_results
+        ],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _load_training_execution_summary(run_dir: Path, run_manifest: dict[str, Any]) -> dict[str, Any]:
+    summary_path = _training_execution_summary_path(run_dir)
+    if summary_path.exists():
+        summary = _read_json(summary_path)
+        summary["training_execution_metadata_source"] = "training_execution_summary"
+        summary["training_execution_metadata_available"] = True
+        return summary
+
+    decision_path = run_dir / "decision_report.json"
+    if decision_path.exists():
+        prior_decision = _read_json(decision_path)
+        if any(key in prior_decision for key in _TRAINING_EXECUTION_KEYS):
+            summary = {key: prior_decision.get(key) for key in _TRAINING_EXECUTION_KEYS if key in prior_decision}
+            summary["run_id"] = str(prior_decision.get("run_id") or run_dir.name)
+            summary["training_execution_metadata_source"] = "prior_decision_report"
+            summary["training_execution_metadata_available"] = any(
+                key in summary for key in ("training_executed_count", "training_skipped_count")
+            )
+            return summary
+
+    summary = {
+        "run_id": str(run_manifest.get("run_id") or run_dir.name),
+        "run_id_source": run_manifest.get("run_id_source"),
+        "training_executed_count": None,
+        "training_skipped_count": None,
+        "all_training_scopes_reused": None,
+        "reused_training_scopes": [],
+        "executed_training_scopes": [],
+        "training_execution_metadata_source": "run_manifest_only",
+        "training_execution_metadata_available": False,
+    }
+    return summary
+
+
 def _is_complete(output_dir: Path, expected_signature_hash: str) -> bool:
     manifest_path = _manifest_path(output_dir)
     predictions_path = output_dir / "predictions_all.parquet"
@@ -3545,6 +3619,7 @@ def _write_experiment_bundle(
         "frozen_policy_monitoring_plan.csv",
         "frozen_policy_monitoring_plan.md",
         "frozen_policy_monitoring_plan.json",
+        "training_execution_summary.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -3692,6 +3767,15 @@ def run_experiment_matrix(
     best_blend = _best_profile_blend(profile_blend)
     missing_selected = _missing_selected_profiles(experiment_selection, comparison)
     _write_missing_selected_profiles(run_dir, missing_selected)
+    training_execution = _training_execution_summary(
+        run_id=run_id,
+        run_id_source=run_id_source,
+        executed_results=executed_results,
+        skipped_results=skipped_results,
+        profile_results=profile_results,
+        seed_results=seed_results,
+    )
+    _write_json(_training_execution_summary_path(run_dir), training_execution)
     decision = {
         "run_id": run_id,
         "control_profile": settings["control_profile"],
@@ -3702,14 +3786,10 @@ def run_experiment_matrix(
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
-        "run_id_source": run_id_source,
-        "training_executed_count": int(len(executed_results)),
-        "training_skipped_count": int(len(skipped_results)),
-        "all_training_scopes_reused": bool(profile_results or seed_results) and len(executed_results) == 0,
-        "reused_training_scopes": [
-            {"profile": str(result["profile"]), "fold_scope": str(result["fold_scope"])}
-            for result in skipped_results
-        ],
+        **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
+        "executed_training_scopes": training_execution["executed_training_scopes"],
+        "training_execution_metadata_source": "run_experiment_matrix",
+        "training_execution_metadata_available": True,
         "missing_selected_profiles": missing_selected.to_dict(orient="records"),
         "experiment_complete": bool(missing_selected.empty),
         "holdout": settings.get("holdout", {}) or {},
@@ -3731,10 +3811,10 @@ def run_experiment_matrix(
         "profile_blend": profile_blend,
         "experiment_selection": experiment_selection,
         "holdout_reservation": holdout_reservation,
-        "run_id_source": run_id_source,
-        "training_executed_count": int(len(executed_results)),
-        "training_skipped_count": int(len(skipped_results)),
-        "all_training_scopes_reused": bool(profile_results or seed_results) and len(executed_results) == 0,
+        **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
+        "executed_training_scopes": training_execution["executed_training_scopes"],
+        "training_execution_metadata_source": "run_experiment_matrix",
+        "training_execution_metadata_available": True,
         "missing_selected_profiles": missing_selected,
         "decision": decision,
     }
@@ -3761,6 +3841,7 @@ def write_experiment_diagnostics(
     run_dir = experiment_root(checkpoint_dir) / run_id if run_id else latest_experiment_run(checkpoint_dir)
     run_manifest_path = run_dir / "experiment_manifest.json"
     run_manifest = _read_json(run_manifest_path) if run_manifest_path.exists() else {}
+    training_execution = _load_training_execution_summary(run_dir, run_manifest)
     settings = copy.deepcopy(run_manifest.get("settings") or experiment_settings(config))
     settings = _resolve_holdout_settings(settings, config)
     diagnostic_config = copy.deepcopy(config)
@@ -3915,6 +3996,10 @@ def write_experiment_diagnostics(
         ],
         "seed_audit_seeds": [int(seed) for seed in (settings.get("seed_audit", {}) or {}).get("seeds", [])],
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
+        **{key: training_execution.get(key) for key in _TRAINING_EXECUTION_KEYS},
+        "executed_training_scopes": training_execution.get("executed_training_scopes", []),
+        "training_execution_metadata_source": training_execution.get("training_execution_metadata_source"),
+        "training_execution_metadata_available": bool(training_execution.get("training_execution_metadata_available", False)),
         "missing_selected_profiles": missing_selected.to_dict(orient="records"),
         "experiment_complete": bool(missing_selected.empty),
         "holdout_boundary_passed": holdout_boundary_passed,
@@ -3946,6 +4031,7 @@ def write_experiment_diagnostics(
     decision["slim_bundle_zip"] = str(slim_bundle_path)
     decision["latest_slim_bundle_zip"] = str(latest_slim_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
+    _write_json(report_dir / "training_execution_summary.json", training_execution)
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
@@ -3963,6 +4049,7 @@ def write_experiment_diagnostics(
         config=diagnostic_config,
     )
     _write_decision_files(run_dir, comparison, decision)
+    _write_json(_training_execution_summary_path(run_dir), training_execution)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
