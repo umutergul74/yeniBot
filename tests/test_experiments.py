@@ -312,6 +312,18 @@ def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
                 "candidate": "control",
                 "candidate_type": "profile",
                 "evaluation_scope": "holdout",
+                "band": "top_30",
+                "future_oos_policy_candidate": False,
+                "mean_label_lift_vs_base": 1.08,
+                "mean_forward_return": -0.0002,
+                "mean_tb_return": -0.0005,
+                "payoff_alignment_fold_rate": 0.0,
+                "reject_reason": "diagnostic_only",
+            },
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "evaluation_scope": "holdout",
                 "band": "top_20",
                 "future_oos_policy_candidate": True,
             },
@@ -331,11 +343,17 @@ def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
 
     assert set(policy_rows["candidate"]) == {"control", "blend_control_benchmark_65_35"}
     control_policy = policy_rows.loc[policy_rows["candidate"] == "control"].iloc[0]
+    assert control_policy["candidate_id"] == "control::top_30"
     assert control_policy["policy_name"] == "top_30"
     assert control_policy["required_profiles"] == "control"
     assert control_policy["selection_source"] == "cv_payoff_policy_robustness"
     assert float(control_policy["cv_mean_forward_return"]) == pytest.approx(0.0017)
+    assert bool(control_policy["current_holdout_diagnostic_only"]) is True
+    assert float(control_policy["current_holdout_mean_forward_return"]) == pytest.approx(-0.0002)
+    assert control_policy["current_holdout_reject_reason"] == "diagnostic_only"
+    assert bool(control_policy["promotion_allowed_now"]) is False
     blend_policy = policy_rows.loc[policy_rows["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
+    assert blend_policy["candidate_id"] == "blend_control_benchmark_65_35::top_10"
     assert blend_policy["candidate_type"] == "weighted_blend_score_band"
     assert blend_policy["required_profiles"] == "control,benchmark"
     assert bool(blend_policy["all_required_profiles_allowed"]) is True

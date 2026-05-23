@@ -2503,18 +2503,26 @@ def _future_oos_candidate_plan_frame(
         cv_mean_label_lift_vs_base: float | None = None,
         cv_mean_forward_return: float | None = None,
         cv_payoff_alignment_fold_rate: float | None = None,
+        current_holdout_mean_label_lift_vs_base: float | None = None,
+        current_holdout_mean_forward_return: float | None = None,
+        current_holdout_mean_tb_return: float | None = None,
+        current_holdout_payoff_alignment_fold_rate: float | None = None,
+        current_holdout_reject_reason: str = "",
     ) -> None:
         required = [str(profile) for profile in required_profiles or [] if str(profile)]
         missing_profiles = [profile for profile in required if profile not in profiles_cfg]
         allowed = set(str(item) for item in guard.get("allowed_benchmark_profiles", []) or [])
+        all_required_allowed = all(profile in allowed for profile in required) if required else candidate in allowed
+        candidate_id = candidate if not policy_name else f"{candidate}::{policy_name}"
         rows.append(
             {
+                "candidate_id": candidate_id,
                 "candidate": candidate,
                 "candidate_type": candidate_type,
                 "stage": stage,
                 "required_profiles": ",".join(required),
                 "missing_required_profiles": ",".join(missing_profiles),
-                "all_required_profiles_allowed": all(profile in allowed for profile in required) if required else candidate in allowed,
+                "all_required_profiles_allowed": all_required_allowed,
                 "profile_search_locked": bool(guard.get("profile_search_locked", False)),
                 "future_oos_ready": bool(guard.get("future_oos_ready", False)),
                 "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
@@ -2522,6 +2530,7 @@ def _future_oos_candidate_plan_frame(
                 "preferred_ready_at": ready_at["preferred_ready_at"],
                 "action": str(guard.get("action", "")),
                 "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
+                "promotion_allowed_now": bool(guard.get("future_oos_ready", False)) and bool(all_required_allowed),
                 "note": note,
                 "policy_name": policy_name,
                 "policy_type": policy_type,
@@ -2529,6 +2538,12 @@ def _future_oos_candidate_plan_frame(
                 "cv_mean_label_lift_vs_base": cv_mean_label_lift_vs_base,
                 "cv_mean_forward_return": cv_mean_forward_return,
                 "cv_payoff_alignment_fold_rate": cv_payoff_alignment_fold_rate,
+                "current_holdout_diagnostic_only": bool(policy_name),
+                "current_holdout_mean_label_lift_vs_base": current_holdout_mean_label_lift_vs_base,
+                "current_holdout_mean_forward_return": current_holdout_mean_forward_return,
+                "current_holdout_mean_tb_return": current_holdout_mean_tb_return,
+                "current_holdout_payoff_alignment_fold_rate": current_holdout_payoff_alignment_fold_rate,
+                "current_holdout_reject_reason": current_holdout_reject_reason,
             }
         )
 
@@ -2581,6 +2596,13 @@ def _future_oos_candidate_plan_frame(
 
     if payoff_policy_robustness_summary is not None and not payoff_policy_robustness_summary.empty:
         policy_rows = payoff_policy_robustness_summary.copy()
+        holdout_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+        if {"candidate", "band", "evaluation_scope"}.issubset(policy_rows.columns):
+            holdout_rows = policy_rows[policy_rows["evaluation_scope"].astype(str) == "holdout"]
+            holdout_lookup = {
+                (str(row.get("candidate", "")).strip(), str(row.get("band", "")).strip()): row.to_dict()
+                for _, row in holdout_rows.iterrows()
+            }
         if "future_oos_policy_candidate" in policy_rows.columns:
             candidate_mask = policy_rows["future_oos_policy_candidate"].map(
                 lambda value: bool(value) if isinstance(value, (bool, np.bool_)) else str(value).strip().lower() in {"1", "true", "yes"}
@@ -2609,6 +2631,7 @@ def _future_oos_candidate_plan_frame(
             else:
                 required_profiles = weighted_blend_profiles(candidate)
                 candidate_type = "weighted_blend_score_band" if required_profiles else "score_band_policy"
+            current_holdout = holdout_lookup.get((candidate, band), {})
             add_row(
                 candidate=candidate,
                 candidate_type=candidate_type,
@@ -2624,6 +2647,11 @@ def _future_oos_candidate_plan_frame(
                 cv_mean_label_lift_vs_base=_optional_float(policy_row.get("mean_label_lift_vs_base")),
                 cv_mean_forward_return=_optional_float(policy_row.get("mean_forward_return")),
                 cv_payoff_alignment_fold_rate=_optional_float(policy_row.get("payoff_alignment_fold_rate")),
+                current_holdout_mean_label_lift_vs_base=_optional_float(current_holdout.get("mean_label_lift_vs_base")),
+                current_holdout_mean_forward_return=_optional_float(current_holdout.get("mean_forward_return")),
+                current_holdout_mean_tb_return=_optional_float(current_holdout.get("mean_tb_return")),
+                current_holdout_payoff_alignment_fold_rate=_optional_float(current_holdout.get("payoff_alignment_fold_rate")),
+                current_holdout_reject_reason=str(current_holdout.get("reject_reason", "")),
             )
             existing_policy_keys.add(key)
 
