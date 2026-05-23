@@ -1174,6 +1174,14 @@ def _holdout_reservation_frame(settings: dict[str, Any]) -> pd.DataFrame:
         "holdout_data_end",
         "holdout_path",
         "policy",
+        "split_mode",
+        "unused_rows_after_anchor",
+        "anchor_run_id",
+        "anchor_data_end",
+        "new_bars_since_anchor",
+        "min_new_bars_remaining",
+        "future_oos_ready",
+        "holdout_roll_forward_locked",
     ]
     if not holdout:
         return pd.DataFrame(columns=columns)
@@ -1202,6 +1210,132 @@ def _write_holdout_reservation(path: Path, settings: dict[str, Any]) -> pd.DataF
     (path / "holdout_reservation.md").write_text(_holdout_reservation_markdown(frame), encoding="utf-8")
     _write_json(path / "holdout_reservation.json", {"rows": frame.to_dict(orient="records")})
     return frame
+
+
+def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> dict[str, Any]:
+    policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
+    monitor = policy_review.get("future_oos_monitor", {}) or {}
+    status = str(policy_review.get("status", "")).lower()
+    anchor_data_end = str(monitor.get("anchor_data_end", "") or "")
+    latest_text = str(latest_data_end or "")
+    new_bars_since_anchor = 0
+    if anchor_data_end and latest_text:
+        try:
+            anchor_ts = pd.to_datetime(anchor_data_end, utc=True)
+            latest_ts = pd.to_datetime(latest_text, utc=True)
+            if pd.notna(anchor_ts) and pd.notna(latest_ts) and latest_ts > anchor_ts:
+                new_bars_since_anchor = int((latest_ts - anchor_ts).total_seconds() // 3600)
+        except (TypeError, ValueError):
+            new_bars_since_anchor = 0
+
+    min_new_bars = int(monitor.get("min_new_bars", 0) or 0)
+    preferred_new_bars = int(monitor.get("preferred_new_bars", 0) or 0)
+    future_oos_ready = bool(min_new_bars > 0 and new_bars_since_anchor >= min_new_bars)
+    future_oos_preferred_ready = bool(preferred_new_bars > 0 and new_bars_since_anchor >= preferred_new_bars)
+    allow_roll_forward = bool(monitor.get("allow_holdout_roll_forward", False))
+    retired_or_failed = any(token in status for token in ("failed", "invalidated", "retired"))
+    lock_active = bool(monitor.get("enabled", False)) and bool(anchor_data_end) and retired_or_failed and not allow_roll_forward
+    if not bool(monitor.get("enabled", False)):
+        next_action = "monitor_disabled"
+    elif future_oos_ready:
+        next_action = "future_oos_window_available"
+    else:
+        next_action = "wait_for_new_unseen_bars"
+
+    return {
+        "monitor_enabled": bool(monitor.get("enabled", False)),
+        "anchor_run_id": str(monitor.get("anchor_run_id", "")),
+        "anchor_data_end": anchor_data_end,
+        "latest_available_data_end": latest_text,
+        "new_bars_since_anchor": new_bars_since_anchor,
+        "min_new_bars": min_new_bars,
+        "preferred_new_bars": preferred_new_bars,
+        "min_new_bars_remaining": max(0, min_new_bars - new_bars_since_anchor),
+        "preferred_new_bars_remaining": max(0, preferred_new_bars - new_bars_since_anchor),
+        "future_oos_ready": future_oos_ready,
+        "future_oos_preferred_ready": future_oos_preferred_ready,
+        "allow_holdout_roll_forward": allow_roll_forward,
+        "holdout_roll_forward_locked": lock_active,
+        "next_action": next_action,
+    }
+
+
+def prepare_training_holdout_split(
+    frame: pd.DataFrame,
+    config: dict[str, Any],
+    *,
+    holdout_path: str | Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Create the training/holdout split without contaminating a failed clean holdout.
+
+    After a clean holdout invalidates a frozen policy, the anchor holdout window
+    must not silently roll forward just because fresher rows exist. Unless the
+    config explicitly allows holdout roll-forward, rows after the anchor end stay
+    unused for training and are counted only as future OOS monitoring bars.
+    """
+
+    if frame.empty or "timestamp" not in frame.columns:
+        raise ValueError("Holdout split requires a non-empty frame with a timestamp column")
+
+    data = frame.copy().reset_index(drop=True)
+    timestamps = pd.to_datetime(data["timestamp"], utc=True)
+    order = np.argsort(timestamps.to_numpy())
+    data = data.iloc[order].reset_index(drop=True)
+    timestamps = pd.to_datetime(data["timestamp"], utc=True)
+
+    holdout_cfg = _cfg(config, ["experiments", "holdout"], {}) or {}
+    holdout_bars = int(holdout_cfg.get("holdout_bars", 4320) or 4320)
+    if len(data) <= holdout_bars:
+        raise ValueError(f"Not enough rows for a {holdout_bars}-bar holdout: {len(data)} rows")
+
+    latest_data_end = str(timestamps.max())
+    monitor_state = _future_oos_monitor_state(config, latest_data_end)
+    split_mode = "rolling_latest_holdout"
+    unused_rows_after_anchor = 0
+    split_data = data
+
+    if monitor_state["holdout_roll_forward_locked"] and monitor_state["anchor_data_end"]:
+        anchor_ts = pd.to_datetime(monitor_state["anchor_data_end"], utc=True)
+        before_or_at_anchor = timestamps <= anchor_ts
+        if before_or_at_anchor.any():
+            split_data = data.loc[before_or_at_anchor].copy().reset_index(drop=True)
+            unused_rows_after_anchor = int((timestamps > anchor_ts).sum())
+            split_mode = "frozen_anchor_holdout"
+
+    if len(split_data) <= holdout_bars:
+        raise ValueError(
+            f"Not enough rows for a {holdout_bars}-bar holdout after applying {split_mode}: {len(split_data)} rows"
+        )
+
+    holdout = split_data.tail(holdout_bars).copy().reset_index(drop=True)
+    selection = split_data.iloc[:-holdout_bars].copy().reset_index(drop=True)
+    if holdout_path is not None:
+        Path(holdout_path).parent.mkdir(parents=True, exist_ok=True)
+        holdout.to_parquet(holdout_path, index=False)
+
+    holdout_ts = pd.to_datetime(holdout["timestamp"], utc=True)
+    selection_ts = pd.to_datetime(selection["timestamp"], utc=True)
+    meta = {
+        "enabled": True,
+        "holdout_bars": holdout_bars,
+        "selection_rows": int(len(selection)),
+        "holdout_rows": int(len(holdout)),
+        "selection_data_start": str(selection_ts.min()),
+        "selection_data_end": str(selection_ts.max()),
+        "holdout_data_start": str(holdout_ts.min()),
+        "holdout_data_end": str(holdout_ts.max()),
+        "holdout_path": str(holdout_path or ""),
+        "policy": str(
+            holdout_cfg.get(
+                "policy",
+                "profile_selection_only_before_holdout; holdout is reserved for one-shot final validation",
+            )
+        ),
+        "split_mode": split_mode,
+        "unused_rows_after_anchor": unused_rows_after_anchor,
+        **monitor_state,
+    }
+    return selection, holdout, meta
 
 
 def _holdout_boundary_audit_frame(entries: list[dict[str, Any]], settings: dict[str, Any]) -> pd.DataFrame:
@@ -2011,29 +2145,8 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     monitor = policy_review.get("future_oos_monitor", {}) or {}
     holdout = settings.get("holdout", {}) or {}
-    anchor_data_end = str(monitor.get("anchor_data_end", "") or "")
     latest_data_end = str(holdout.get("holdout_data_end", "") or "")
-    new_bars_since_anchor = 0
-    if anchor_data_end and latest_data_end:
-        try:
-            anchor_ts = pd.to_datetime(anchor_data_end, utc=True)
-            latest_ts = pd.to_datetime(latest_data_end, utc=True)
-            if pd.notna(anchor_ts) and pd.notna(latest_ts) and latest_ts > anchor_ts:
-                new_bars_since_anchor = int((latest_ts - anchor_ts).total_seconds() // 3600)
-        except (TypeError, ValueError):
-            new_bars_since_anchor = 0
-    min_new_bars = int(monitor.get("min_new_bars", 0) or 0)
-    preferred_new_bars = int(monitor.get("preferred_new_bars", 0) or 0)
-    min_remaining = max(0, min_new_bars - new_bars_since_anchor)
-    preferred_remaining = max(0, preferred_new_bars - new_bars_since_anchor)
-    future_oos_ready = bool(min_new_bars > 0 and new_bars_since_anchor >= min_new_bars)
-    future_oos_preferred_ready = bool(preferred_new_bars > 0 and new_bars_since_anchor >= preferred_new_bars)
-    if not bool(monitor.get("enabled", False)):
-        next_action = "monitor_disabled"
-    elif future_oos_ready:
-        next_action = "future_oos_window_available"
-    else:
-        next_action = "wait_for_new_unseen_bars"
+    monitor_state = _future_oos_monitor_state(config, latest_data_end)
     row = {
         "enabled": bool(monitor.get("enabled", False)),
         "frozen_candidate": str(policy_review.get("frozen_candidate", "")),
@@ -2042,18 +2155,20 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
         "status": str(policy_review.get("status", "")),
         "threshold_deployment_allowed": bool(policy_review.get("threshold_deployment_allowed", False)),
         "future_oos_candidates": ",".join(str(item) for item in policy_review.get("future_oos_candidates", []) or []),
-        "anchor_run_id": str(monitor.get("anchor_run_id", "")),
-        "anchor_data_end": anchor_data_end,
-        "latest_available_data_end": latest_data_end,
-        "new_bars_since_anchor": new_bars_since_anchor,
-        "min_new_bars": min_new_bars,
-        "preferred_new_bars": preferred_new_bars,
-        "min_new_bars_remaining": min_remaining,
-        "preferred_new_bars_remaining": preferred_remaining,
-        "future_oos_ready": future_oos_ready,
-        "future_oos_preferred_ready": future_oos_preferred_ready,
+        "anchor_run_id": monitor_state["anchor_run_id"],
+        "anchor_data_end": monitor_state["anchor_data_end"],
+        "latest_available_data_end": monitor_state["latest_available_data_end"],
+        "new_bars_since_anchor": monitor_state["new_bars_since_anchor"],
+        "min_new_bars": monitor_state["min_new_bars"],
+        "preferred_new_bars": monitor_state["preferred_new_bars"],
+        "min_new_bars_remaining": monitor_state["min_new_bars_remaining"],
+        "preferred_new_bars_remaining": monitor_state["preferred_new_bars_remaining"],
+        "future_oos_ready": monitor_state["future_oos_ready"],
+        "future_oos_preferred_ready": monitor_state["future_oos_preferred_ready"],
+        "allow_holdout_roll_forward": monitor_state["allow_holdout_roll_forward"],
+        "holdout_roll_forward_locked": monitor_state["holdout_roll_forward_locked"],
         "current_holdout_data_end": latest_data_end,
-        "next_action": next_action,
+        "next_action": monitor_state["next_action"],
         "policy": str(monitor.get("policy", "")),
     }
     return pd.DataFrame([row])

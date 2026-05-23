@@ -1449,6 +1449,7 @@ experiments:
       anchor_data_end: "2026-05-13 08:00:00+00:00"
       min_new_bars: 720
       preferred_new_bars: 2160
+      allow_holdout_roll_forward: false
       policy: "Monitor the failed frozen top_10 policy only as a historical benchmark. Do not change profile, blend weights, score band, or threshold from this holdout; define any replacement before a future unseen window."
     robustness:
       enabled: true

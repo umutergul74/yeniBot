@@ -25,6 +25,7 @@ from yenibot.experiments import (
     _profile_blend_predictions,
     _profile_blend_review_frame,
     experiment_settings,
+    prepare_training_holdout_split,
     profile_config,
     resolve_experiment_run_id,
     run_experiment_matrix,
@@ -181,6 +182,55 @@ def test_holdout_reservation_frame_records_selection_and_holdout_window() -> Non
     assert bool(frame.loc[0, "enabled"]) is True
     assert frame.loc[0, "holdout_bars"] == 4320
     assert frame.loc[0, "selection_data_end"] < frame.loc[0, "holdout_data_start"]
+
+
+def test_prepare_training_holdout_split_freezes_failed_clean_holdout_anchor(tmp_path) -> None:
+    timestamps = pd.date_range("2026-01-01", periods=140, freq="1h", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "close": np.linspace(100.0, 120.0, len(timestamps)),
+            "label": (np.arange(len(timestamps)) % 3 == 0).astype(int),
+            "fwd_return_10h": 0.01,
+        }
+    )
+    anchor = timestamps[110]
+    config = {
+        "experiments": {
+            "holdout": {
+                "enabled": True,
+                "holdout_bars": 24,
+                "policy": "profile_selection_only_before_holdout",
+            },
+            "policy_review": {
+                "status": "failed_clean_holdout_review",
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "failed_anchor",
+                    "anchor_data_end": str(anchor),
+                    "min_new_bars": 72,
+                    "preferred_new_bars": 144,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        }
+    }
+
+    selection, holdout, meta = prepare_training_holdout_split(
+        frame,
+        config,
+        holdout_path=tmp_path / "holdout_1h.parquet",
+    )
+
+    assert meta["split_mode"] == "frozen_anchor_holdout"
+    assert meta["holdout_roll_forward_locked"] is True
+    assert meta["future_oos_ready"] is False
+    assert meta["new_bars_since_anchor"] == 29
+    assert meta["unused_rows_after_anchor"] == 29
+    assert pd.to_datetime(holdout["timestamp"], utc=True).max() == anchor
+    assert pd.to_datetime(selection["timestamp"], utc=True).max() < pd.to_datetime(holdout["timestamp"], utc=True).min()
+    assert pd.to_datetime(selection["timestamp"], utc=True).max() <= anchor
+    assert (tmp_path / "holdout_1h.parquet").exists()
 
 
 def test_holdout_boundary_audit_rejects_entries_inside_reserved_holdout() -> None:
@@ -407,6 +457,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_data_end"] == "2026-05-13 08:00:00+00:00"
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["preferred_new_bars"] == 2160
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["allow_holdout_roll_forward"] is False
     robustness = config["experiments"]["policy_review"]["robustness"]
     assert robustness["enabled"] is True
     assert robustness["min_rows"] == 720
@@ -1618,6 +1669,8 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert monitoring["new_bars_since_anchor"] >= 47
     assert monitoring["min_new_bars_remaining"] == 0
     assert monitoring["future_oos_ready"] is True
+    assert monitoring["allow_holdout_roll_forward"] is False
+    assert monitoring["holdout_roll_forward_locked"] is True
     assert monitoring["next_action"] == "future_oos_window_available"
     assert policy_validation["policy_action"] in {
         "review_frozen_threshold_and_score_policy",
