@@ -5051,6 +5051,9 @@ def _write_experiment_bundle(
         "payoff_policy_robustness.md",
         "payoff_policy_robustness.json",
         "training_execution_summary.json",
+        "auto_review.md",
+        "auto_review.json",
+        "next_actions.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -5547,6 +5550,19 @@ def write_experiment_diagnostics(
         holdout_decision=holdout_decision,
         config=diagnostic_config,
     )
+    from yenibot.automation import write_auto_review
+
+    auto_review = write_auto_review(report_dir)
+    auto_review_path = Path(auto_review["auto_review_path"])
+    auto_review_json_path = Path(auto_review["auto_review_json_path"])
+    next_actions_path = Path(auto_review["next_actions_path"])
+    shutil.copyfile(auto_review_path, Path(output_dir) / "latest_auto_review.md")
+    shutil.copyfile(auto_review_json_path, Path(output_dir) / "latest_auto_review.json")
+    shutil.copyfile(next_actions_path, Path(output_dir) / "latest_next_actions.json")
+    decision["auto_review_path"] = str(auto_review_path)
+    decision["auto_review_json_path"] = str(auto_review_json_path)
+    decision["next_actions_path"] = str(next_actions_path)
+    _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
     _write_profile_delta(run_dir, profile_delta)
@@ -5616,4 +5632,8 @@ def write_experiment_diagnostics(
         "latest_bundle_zip": str(latest_bundle_path),
         "slim_bundle_zip": str(slim_bundle_path),
         "latest_slim_bundle_zip": str(latest_slim_bundle_path),
+        "auto_review": auto_review["review"],
+        "auto_review_path": str(auto_review_path),
+        "auto_review_json_path": str(auto_review_json_path),
+        "next_actions_path": str(next_actions_path),
     }
