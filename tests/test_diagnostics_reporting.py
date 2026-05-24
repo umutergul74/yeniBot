@@ -205,6 +205,49 @@ def test_constrained_threshold_caps_pred_long_rate() -> None:
     assert row["constrained_threshold_source"] == "constrained_f1"
 
 
+def test_guarded_threshold_rejects_too_broad_selected_threshold() -> None:
+    report = {
+        "checks": {
+            "rank_ic_mean": True,
+            "rank_ic_std": True,
+            "positive_ic_fraction": True,
+            "long_f1": False,
+            "calibration_separation": True,
+        }
+    }
+    threshold_summary = pd.DataFrame(
+        [
+            {"metric": "selected_threshold", "mean": 0.30},
+            {"metric": "test_f1_at_selected_threshold", "mean": 0.47},
+            {"metric": "test_precision_at_selected_threshold", "mean": 0.34},
+            {"metric": "test_recall_at_selected_threshold", "mean": 0.75},
+            {"metric": "test_pred_long_rate_at_selected_threshold", "mean": 0.86},
+            {"metric": "constrained_threshold", "mean": 0.45},
+            {"metric": "test_f1_at_constrained_threshold", "mean": 0.43},
+            {"metric": "test_precision_at_constrained_threshold", "mean": 0.36},
+            {"metric": "test_recall_at_constrained_threshold", "mean": 0.53},
+            {"metric": "test_pred_long_rate_at_constrained_threshold", "mean": 0.64},
+        ]
+    )
+
+    updated = attach_threshold_summary_to_phase1_report(
+        report,
+        threshold_summary,
+        {
+            "validation": {
+                "min_long_f1": 0.45,
+                "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+            }
+        },
+    )
+
+    assert updated["threshold_guarded"]["threshold_source"] == "validation_constrained_threshold"
+    assert updated["threshold_guarded"]["test_f1_at_guarded_threshold"] == 0.43
+    assert "selected_threshold_pred_long_rate_above_guardrail" in updated["threshold_guarded"]["reject_reason"]
+    assert updated["passed_threshold_selected"] is False
+    assert updated["passed_threshold_guarded"] is False
+
+
 def test_regime_by_fold_diagnostics_compares_bad_folds() -> None:
     predictions = _predictions()
     fold_metrics = fold_diagnostics(predictions)

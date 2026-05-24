@@ -986,20 +986,28 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("std_rank_ic")
     selected_f1 = _metric_or(
         row,
-        "test_f1_at_constrained_threshold",
-        _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+        "test_f1_at_guarded_threshold",
+        _metric_or(
+            row,
+            "test_f1_at_constrained_threshold",
+            _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+        ),
     )
     control_selected_f1 = _metric_or(
         control,
-        "test_f1_at_constrained_threshold",
-        _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+        "test_f1_at_guarded_threshold",
+        _metric_or(
+            control,
+            "test_f1_at_constrained_threshold",
+            _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+        ),
     )
     selected_f1_floor = _optional_gate_float(gates, "min_selected_threshold_f1", None)
     if selected_f1_floor is not None and selected_f1 < selected_f1_floor:
-        reasons.append("constrained_threshold_f1")
+        reasons.append("guarded_threshold_f1")
     selected_f1_delta = _optional_gate_float(gates, "min_selected_threshold_f1_delta", None)
     if selected_f1_delta is not None and selected_f1 < control_selected_f1 + selected_f1_delta:
-        reasons.append("constrained_threshold_f1_delta")
+        reasons.append("guarded_threshold_f1_delta")
     threshold_checks = _cfg(config, ["validation", "threshold_checks"], {}) or {}
     max_pred_long_rate = float(threshold_checks.get("max_pred_long_rate", 0.70))
     constrained_pred_rate = _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan)
@@ -1107,6 +1115,13 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "test_recall_at_constrained_threshold",
         "test_pred_long_rate_at_constrained_threshold",
         "constrained_threshold_mean",
+        "guarded_threshold_source",
+        "guarded_threshold_reason",
+        "test_f1_at_guarded_threshold",
+        "test_precision_at_guarded_threshold",
+        "test_recall_at_guarded_threshold",
+        "test_pred_long_rate_at_guarded_threshold",
+        "guarded_threshold_mean",
         "mean_prauc",
         "calibration_separation",
         "recent_rank_ic_mean",
@@ -1125,6 +1140,7 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "passed_phase1",
         "passed_phase1_selected_threshold",
         "passed_phase1_constrained_threshold",
+        "passed_phase1_guarded_threshold",
         "promotable",
         "reject_reason",
         "data_start",
@@ -1170,11 +1186,15 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "mean_long_f1",
             "test_f1_at_selected_threshold",
             "test_f1_at_constrained_threshold",
+            "test_f1_at_guarded_threshold",
+            "guarded_threshold_source",
+            "test_pred_long_rate_at_guarded_threshold",
             "test_pred_long_rate_at_constrained_threshold",
             "top_10_lift_global",
             "top_10_bad_fold_lift_mean",
             "passed_phase1_selected_threshold",
             "passed_phase1_constrained_threshold",
+            "passed_phase1_guarded_threshold",
             "promotable",
             "reject_reason",
         ]
@@ -2797,12 +2817,15 @@ def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str
         reasons.append("cv_positive_ic_fraction_below_target")
     selected_f1 = _float(row, "test_f1_at_selected_threshold", np.nan)
     constrained_f1 = _float(row, "test_f1_at_constrained_threshold", np.nan)
+    guarded_f1 = _float(row, "test_f1_at_guarded_threshold", np.nan)
     fixed_f1 = _float(row, "mean_long_f1", np.nan)
     if selected_f1 < min_long_f1:
         reasons.append("cv_selected_threshold_f1_below_target")
     if constrained_f1 < min_long_f1:
         reasons.append("cv_constrained_threshold_f1_below_target")
-    if not np.isfinite(selected_f1) and not np.isfinite(constrained_f1) and fixed_f1 < min_long_f1:
+    if np.isfinite(guarded_f1) and guarded_f1 < min_long_f1:
+        reasons.append("cv_guarded_threshold_f1_below_target")
+    if not np.isfinite(selected_f1) and not np.isfinite(constrained_f1) and not np.isfinite(guarded_f1) and fixed_f1 < min_long_f1:
         reasons.append("cv_fixed_0_50_f1_below_target")
     if _float(row, "test_pred_long_rate_at_selected_threshold", np.nan) > max_pred_long_rate:
         reasons.append("cv_selected_threshold_pred_long_rate_above_guardrail")
@@ -2882,6 +2905,9 @@ def _performance_gap_analysis_frame(
         "cv_top_10_forward_return_global",
         "cv_selected_threshold_f1",
         "cv_constrained_threshold_f1",
+        "cv_guarded_threshold_f1",
+        "cv_guarded_threshold_source",
+        "cv_guarded_threshold_pred_long_rate",
         "holdout_available",
         "holdout_mean_rank_ic",
         "holdout_top_10_lift_global",
@@ -2950,6 +2976,9 @@ def _performance_gap_analysis_frame(
                 "cv_top_10_forward_return_global": _float(row, "top_10_forward_return_global"),
                 "cv_selected_threshold_f1": _float(row, "test_f1_at_selected_threshold"),
                 "cv_constrained_threshold_f1": _float(row, "test_f1_at_constrained_threshold"),
+                "cv_guarded_threshold_f1": _float(row, "test_f1_at_guarded_threshold"),
+                "cv_guarded_threshold_source": str(row.get("guarded_threshold_source", "")),
+                "cv_guarded_threshold_pred_long_rate": _float(row, "test_pred_long_rate_at_guarded_threshold"),
                 "holdout_available": bool(holdout_row),
                 "holdout_mean_rank_ic": _float(holdout_row, "mean_rank_ic") if holdout_row else np.nan,
                 "holdout_top_10_lift_global": _float(holdout_row, "top_10_lift_global") if holdout_row else np.nan,
@@ -3008,6 +3037,8 @@ def _performance_gap_markdown(frame: pd.DataFrame) -> str:
         "cv_std_rank_ic",
         "cv_positive_ic_fraction",
         "cv_top_10_lift_global",
+        "cv_guarded_threshold_f1",
+        "cv_guarded_threshold_source",
         "holdout_mean_rank_ic",
         "holdout_top_10_lift_global",
         "holdout_top_10_forward_return_global",

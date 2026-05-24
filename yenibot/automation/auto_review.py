@@ -85,6 +85,40 @@ def _metric(row: dict[str, Any], key: str, default: float | None = None) -> floa
     return _to_float(row.get(key), default)
 
 
+def _official_long_f1(control: dict[str, Any]) -> tuple[float | None, str, dict[str, Any]]:
+    """Return the Phase 1 F1 source after enforcing the pred-long-rate guardrail."""
+
+    guarded_f1 = _metric(control, "test_f1_at_guarded_threshold")
+    guarded_rate = _metric(control, "test_pred_long_rate_at_guarded_threshold")
+    guarded_source = str(control.get("guarded_threshold_source") or "")
+    if guarded_f1 is not None:
+        return guarded_f1, guarded_source or "validation_guarded_threshold", {
+            "guarded_threshold_value": guarded_f1,
+            "guarded_threshold_pred_long_rate": guarded_rate,
+            "guarded_threshold_source": guarded_source,
+        }
+
+    selected_f1 = _metric(control, "test_f1_at_selected_threshold")
+    selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
+    constrained_f1 = _metric(control, "test_f1_at_constrained_threshold")
+    constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
+    fixed_050_f1 = _metric(control, "mean_long_f1")
+    details = {
+        "fixed_0_50_value": fixed_050_f1,
+        "selected_threshold_value": selected_f1,
+        "selected_threshold_pred_long_rate": selected_pred_rate,
+        "constrained_threshold_value": constrained_f1,
+        "constrained_threshold_pred_long_rate": constrained_pred_rate,
+    }
+    if selected_f1 is not None and (selected_pred_rate is None or selected_pred_rate <= 0.70):
+        return selected_f1, "validation_selected_threshold", details
+    if constrained_f1 is not None:
+        return constrained_f1, "validation_constrained_threshold", details
+    if selected_f1 is not None:
+        return selected_f1, "validation_selected_threshold_above_pred_rate_guardrail", details
+    return fixed_050_f1, "fixed_0_50_threshold", details
+
+
 def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame.empty:
         return []
@@ -346,15 +380,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
-    if selected_f1 is not None:
-        official_long_f1 = selected_f1
-        official_long_f1_source = "validation_selected_threshold"
-    elif constrained_f1 is not None:
-        official_long_f1 = constrained_f1
-        official_long_f1_source = "validation_constrained_threshold"
-    else:
-        official_long_f1 = fixed_050_f1
-        official_long_f1_source = "fixed_0_50_threshold"
+    official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
     advisories: list[str] = []
     if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
         advisories.append("fixed_0_50_f1_below_target_calibration_issue")
@@ -400,9 +426,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "target": "> 0.45",
             "blocker": "long_f1_below_phase1_target",
             "source": official_long_f1_source,
-            "fixed_0_50_value": fixed_050_f1,
-            "selected_threshold_value": selected_f1,
-            "constrained_threshold_value": constrained_f1,
+            **official_long_f1_details,
         },
         {
             "check": "calibration_separation",
@@ -467,7 +491,9 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
     phase2_long_f1_source = str(phase2.get("long_f1_source") or "")
-    official_f1 = selected_f1 if selected_f1 is not None else constrained_f1 if constrained_f1 is not None else mean_long_f1
+    official_f1, fallback_source, _ = _official_long_f1(control)
+    if not phase2_long_f1_source:
+        phase2_long_f1_source = fallback_source
     signal_present = (
         report_complete
         and leakage_ok
@@ -679,7 +705,8 @@ def _row_metric_line(row: dict[str, Any]) -> str:
         f"- `{_profile_label(row)}`: mean IC `{_fmt(row.get('mean_rank_ic'))}`, "
         f"std `{_fmt(row.get('std_rank_ic'))}`, positive folds `{_fmt(row.get('positive_ic_fraction'))}`, "
         f"top-10 lift `{_fmt(row.get('top_10_lift_global'))}`, "
-        f"constrained F1 `{_fmt(row.get('test_f1_at_constrained_threshold'))}`"
+        f"guarded F1 `{_fmt(row.get('test_f1_at_guarded_threshold'))}`, "
+        f"guarded source `{row.get('guarded_threshold_source', '')}`"
     )
 
 

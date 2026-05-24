@@ -1097,6 +1097,13 @@ def experiment_ledger_diagnostics(
     reject_reason: str = "",
     timestamp: str | None = None,
 ) -> pd.DataFrame:
+    def safe_float(value: Any) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return np.nan
+        return number if np.isfinite(number) else np.nan
+
     profile_name = ""
     if config is not None:
         profile_name = str(resolve_feature_profile(config).get("name") or "")
@@ -1188,6 +1195,8 @@ def experiment_ledger_diagnostics(
     test_f1_at_050 = _threshold_summary_mean(threshold_summary, "test_f1_at_050")
     selected_threshold_passed = bool(report.get("passed_threshold_selected", False))
     constrained_threshold_passed = bool(report.get("passed_threshold_constrained", False))
+    guarded = report.get("threshold_guarded", {}) or {}
+    guarded_threshold_passed = bool(report.get("passed_threshold_guarded", False))
     return pd.DataFrame(
         [
             {
@@ -1211,6 +1220,19 @@ def experiment_ledger_diagnostics(
                 "test_precision_at_constrained_threshold": test_precision_at_constrained_threshold,
                 "test_recall_at_constrained_threshold": test_recall_at_constrained_threshold,
                 "test_pred_long_rate_at_constrained_threshold": test_pred_long_rate_at_constrained_threshold,
+                "guarded_threshold_source": str(guarded.get("threshold_source", "")),
+                "guarded_threshold_reason": str(guarded.get("reject_reason", "")),
+                "guarded_threshold_mean": safe_float(guarded.get("threshold_mean", np.nan)),
+                "test_f1_at_guarded_threshold": safe_float(guarded.get("test_f1_at_guarded_threshold", np.nan)),
+                "test_precision_at_guarded_threshold": safe_float(
+                    guarded.get("test_precision_at_guarded_threshold", np.nan)
+                ),
+                "test_recall_at_guarded_threshold": safe_float(
+                    guarded.get("test_recall_at_guarded_threshold", np.nan)
+                ),
+                "test_pred_long_rate_at_guarded_threshold": safe_float(
+                    guarded.get("test_pred_long_rate_at_guarded_threshold", np.nan)
+                ),
                 "test_oracle_best_f1": test_oracle_best_f1,
                 "test_f1_at_050": test_f1_at_050,
                 "mean_prauc": float(report.get("mean_prauc", np.nan)),
@@ -1232,6 +1254,7 @@ def experiment_ledger_diagnostics(
                 "passed_phase1": bool(report.get("passed", False)),
                 "passed_phase1_selected_threshold": selected_threshold_passed,
                 "passed_phase1_constrained_threshold": constrained_threshold_passed,
+                "passed_phase1_guarded_threshold": guarded_threshold_passed,
                 "promotable": bool(promotable) if promotable is not None else bool(report.get("passed", False)),
                 "reject_reason": reject_reason,
             }
@@ -1279,6 +1302,37 @@ def attach_threshold_summary_to_phase1_report(
             pd.notna(constrained_pred_rate) and constrained_pred_rate <= max_pred_long_rate
         ),
     }
+    selected_guard_ok = all(bool(value) for value in threshold_checks.values())
+    constrained_guard_ok = all(bool(value) for value in constrained_checks.values())
+    if selected_guard_ok:
+        guarded_source = "validation_selected_threshold"
+        guarded_reason = ""
+        guarded_threshold = selected_threshold
+        guarded_f1 = selected_f1
+        guarded_precision = selected_precision
+        guarded_recall = selected_recall
+        guarded_pred_rate = selected_pred_rate
+    else:
+        guarded_source = "validation_constrained_threshold"
+        guarded_reasons = []
+        if not threshold_checks["selected_pred_long_rate"]:
+            guarded_reasons.append("selected_threshold_pred_long_rate_above_guardrail")
+        if not threshold_checks["selected_precision"]:
+            guarded_reasons.append("selected_threshold_precision_below_minimum")
+        if not threshold_checks["long_f1_selected_threshold"]:
+            guarded_reasons.append("selected_threshold_f1_below_target")
+        guarded_reason = ";".join(guarded_reasons)
+        guarded_threshold = constrained_threshold
+        guarded_f1 = constrained_f1
+        guarded_precision = constrained_precision
+        guarded_recall = constrained_recall
+        guarded_pred_rate = constrained_pred_rate
+
+    guarded_checks = {
+        "long_f1_guarded_threshold": bool(pd.notna(guarded_f1) and guarded_f1 > min_long_f1),
+        "guarded_precision": bool(pd.notna(guarded_precision) and guarded_precision >= min_precision),
+        "guarded_pred_long_rate": bool(pd.notna(guarded_pred_rate) and guarded_pred_rate <= max_pred_long_rate),
+    }
     core_checks = dict(updated.get("checks", {}) or {})
     threshold_phase_checks = {
         key: value
@@ -1292,6 +1346,12 @@ def attach_threshold_summary_to_phase1_report(
         if key != "long_f1"
     }
     constrained_phase_checks.update(constrained_checks)
+    guarded_phase_checks = {
+        key: value
+        for key, value in core_checks.items()
+        if key != "long_f1"
+    }
+    guarded_phase_checks.update(guarded_checks)
 
     updated["threshold_selected"] = {
         "selected_threshold_mean": selected_threshold,
@@ -1309,10 +1369,23 @@ def attach_threshold_summary_to_phase1_report(
         "test_recall_at_constrained_threshold": constrained_recall,
         "test_pred_long_rate_at_constrained_threshold": constrained_pred_rate,
     }
+    updated["threshold_guarded"] = {
+        "threshold_source": guarded_source,
+        "reject_reason": guarded_reason,
+        "selected_threshold_constraints_satisfied": selected_guard_ok,
+        "constrained_threshold_constraints_satisfied": constrained_guard_ok,
+        "threshold_mean": guarded_threshold,
+        "test_f1_at_guarded_threshold": guarded_f1,
+        "test_precision_at_guarded_threshold": guarded_precision,
+        "test_recall_at_guarded_threshold": guarded_recall,
+        "test_pred_long_rate_at_guarded_threshold": guarded_pred_rate,
+    }
     updated["checks_threshold_selected"] = threshold_phase_checks
     updated["checks_threshold_constrained"] = constrained_phase_checks
+    updated["checks_threshold_guarded"] = guarded_phase_checks
     updated["passed_threshold_selected"] = all(bool(value) for value in threshold_phase_checks.values())
     updated["passed_threshold_constrained"] = all(bool(value) for value in constrained_phase_checks.values())
+    updated["passed_threshold_guarded"] = all(bool(value) for value in guarded_phase_checks.values())
     return updated
 
 

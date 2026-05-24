@@ -156,6 +156,20 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert "do_not_start_phase2_backtest" in review["phase1_transition_plan"]["blocked_actions"]
 
 
+def test_auto_review_uses_guarded_f1_when_selected_threshold_is_too_broad(tmp_path) -> None:
+    _write_minimal_report(tmp_path)
+    comparison = pd.read_csv(tmp_path / "profile_comparison.csv")
+    comparison.loc[comparison["profile"] == "control_profile", "test_pred_long_rate_at_selected_threshold"] = 0.86
+    comparison.loc[comparison["profile"] == "control_profile", "test_pred_long_rate_at_constrained_threshold"] = 0.64
+    comparison.loc[comparison["profile"] == "control_profile", "test_f1_at_constrained_threshold"] = 0.43
+    comparison.to_csv(tmp_path / "profile_comparison.csv", index=False)
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["phase2_readiness"]["long_f1_source"] == "validation_constrained_threshold"
+    assert "long_f1_below_phase1_target" in review["phase2_readiness"]["blockers"]
+
+
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
     _write_minimal_report(tmp_path, missing_selected=True)
 
