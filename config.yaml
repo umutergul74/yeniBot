@@ -187,7 +187,7 @@ features:
         - "gk_vol_14"
         - "atr_14_pct"
     baseline_control_plus_futures_context:
-      description: Control baseline plus pre-registered futures positioning context from Binance Vision metrics/funding; no promotion before future OOS.
+      description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
       include_patterns:
         - "fut_*_stable_rank"
@@ -196,8 +196,8 @@ features:
         - "fut_metrics_missing"
         - "fut_funding_missing"
       exclude_patterns:
-        - "fut_oi_log_return"
-        - "fut_oi_value_log_return"
+        - "fut_oi_log_return*"
+        - "fut_oi_value_log_return*"
         - "fut_oi_change_12"
         - "fut_oi_change_36"
         - "fut_oi_change_96"
@@ -218,6 +218,163 @@ features:
         - "fut_funding_mean_3"
         - "fut_funding_mean_6"
         - "fut_funding_mean_12"
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+        - "realized_vol_14"
+        - "gk_vol_14"
+        - "atr_14_pct"
+    baseline_control_plus_futures_oi_change_context:
+      description: Control baseline plus only Binance Vision open-interest change context; excludes funding and positioning ratios to isolate OI signal stability.
+      inherit: baseline_control_plus_futures_context
+      include_patterns:
+        - "fut_oi_change_*_stable_rank"
+        - "fut_oi_change_*_stable_zscore"
+        - "fut_oi_change_*_stable_tanh"
+        - "fut_oi_value_change_*_stable_rank"
+        - "fut_oi_value_change_*_stable_zscore"
+        - "fut_oi_value_change_*_stable_tanh"
+        - "fut_metrics_missing"
+      exclude_patterns:
+        - "fut_oi_log_return*"
+        - "fut_oi_value_log_return*"
+        - "fut_toptrader_*"
+        - "fut_global_long_short_*"
+        - "fut_taker_long_short_*"
+        - "fut_funding_*"
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+        - "realized_vol_14"
+        - "gk_vol_14"
+        - "atr_14_pct"
+    baseline_control_plus_futures_positioning_context:
+      description: Control baseline plus only Binance Vision long/short positioning ratios; isolates trader/taker positioning from OI and funding.
+      inherit: baseline_control_plus_futures_context
+      include_patterns:
+        - "fut_toptrader_*_stable_rank"
+        - "fut_toptrader_*_stable_zscore"
+        - "fut_toptrader_*_stable_tanh"
+        - "fut_global_long_short_log_ratio_stable_rank"
+        - "fut_global_long_short_log_ratio_stable_zscore"
+        - "fut_global_long_short_log_ratio_stable_tanh"
+        - "fut_taker_long_short_vol_log_ratio_stable_rank"
+        - "fut_taker_long_short_vol_log_ratio_stable_zscore"
+        - "fut_taker_long_short_vol_log_ratio_stable_tanh"
+        - "fut_metrics_missing"
+      exclude_patterns:
+        - "fut_oi_*"
+        - "fut_funding_*"
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
+        - "4h_realized_vol_14"
+        - "4h_gk_vol_14"
+        - "4h_atr_14_pct"
+        - "realized_vol_14"
+        - "gk_vol_14"
+        - "atr_14_pct"
+    baseline_control_plus_futures_funding_context:
+      description: Control baseline plus only stable funding-rate context; should be skipped automatically if REST funding history is unavailable.
+      inherit: baseline_control_plus_futures_context
+      include_patterns:
+        - "fut_funding_*_stable_rank"
+        - "fut_funding_*_stable_zscore"
+        - "fut_funding_*_stable_tanh"
+        - "fut_funding_missing"
+      exclude_patterns:
+        - "fut_oi_*"
+        - "fut_metrics_missing"
+        - "fut_toptrader_*"
+        - "fut_global_long_short_*"
+        - "fut_taker_long_short_*"
         - "4h_taker_buy_ratio"
         - "4h_taker_sell_ratio"
         - "4h_true_cvd_zscore"
@@ -1511,7 +1668,9 @@ experiments:
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
-    - baseline_control_plus_futures_context
+    - baseline_control_plus_futures_oi_change_context
+    - baseline_control_plus_futures_positioning_context
+    - baseline_control_plus_futures_funding_context
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
@@ -1541,7 +1700,9 @@ experiments:
     note: "Clean holdout run 20260522_135424 invalidated this frozen top_10 score-band as an active review candidate: forward return was negative. Keep it as a benchmark only; do not deploy or promote from the same holdout."
     future_oos_candidates:
       - blend_control_long_pressure_65_35
-      - baseline_control_plus_futures_context
+      - baseline_control_plus_futures_oi_change_context
+      - baseline_control_plus_futures_positioning_context
+      - baseline_control_plus_futures_funding_context
     future_oos_monitor:
       enabled: true
       anchor_run_id: "20260522_135424"
@@ -1571,11 +1732,16 @@ experiments:
       baseline_plus_4h_bounded_whale_no_4h_tier1: "Legacy baseline kept for continuity; latest full run mean IC 0.0575, std 0.1012, positive folds 78.6%."
       baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest clean holdout run 20260522_135424 was weak as a standalone profile: IC 0.0143, top-10 lift 0.9485, and negative top-10 forward return. Keep as a comparison source only."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; latest full run mean IC 0.0596, std 0.0738, positive folds 85.7%."
-      baseline_control_plus_futures_context: "Pre-registered research profile adding Binance Vision futures metrics/funding context to the control baseline. Evaluate on selection/CV only until future OOS is available."
+      baseline_control_plus_futures_context: "Broad futures-context profile from run 20260524_072602: holdout top-10 improved, but CV stability deteriorated. Split into narrower OI, positioning, and funding tracks instead of rerunning broad by default."
+      baseline_control_plus_futures_oi_change_context: "Pre-registered narrow futures track: Binance Vision open-interest change context only."
+      baseline_control_plus_futures_positioning_context: "Pre-registered narrow futures track: Binance Vision top-trader/global/taker long-short ratio context only."
+      baseline_control_plus_futures_funding_context: "Pre-registered narrow futures track: Binance funding-rate context only; skipped automatically if funding REST data is unavailable."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
     rejected_profiles:
+      baseline_control_plus_futures_context:
+        reason: "Run 20260524_072602 broad futures-context profile improved frozen holdout top-10 but failed CV stability; use narrower futures OI/positioning/funding tracks instead."
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."
       baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay:

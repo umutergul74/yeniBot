@@ -1398,6 +1398,14 @@ def feature_group_importance_summary(importance: pd.DataFrame) -> pd.DataFrame:
 def classify_feature_column(feature: str) -> tuple[str, str]:
     timeframe = "4h" if feature.startswith("4h_") else "1h"
     name = feature[3:] if timeframe == "4h" else feature
+    if name.startswith("fut_"):
+        if "funding" in name:
+            return "futures", "futures_funding_context"
+        if any(token in name for token in ("toptrader", "long_short", "taker_long_short")):
+            return "futures", "futures_positioning_context"
+        if "_oi_" in name or name.startswith("fut_oi"):
+            return "futures", "futures_open_interest_context"
+        return "futures", "futures_context"
     if name.startswith("ih15_"):
         return "intrahour", "order_flow_intrahour"
     if "_x_" in name and any(token in name for token in ("rv14_rank", "gk14_rank", "atr14_rank")):

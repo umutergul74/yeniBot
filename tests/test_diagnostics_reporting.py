@@ -548,6 +548,23 @@ def test_feature_group_diagnostics_classifies_intrahour_flow() -> None:
     assert set(groups["family"]) == {"order_flow_intrahour"}
 
 
+def test_feature_group_diagnostics_classifies_futures_context() -> None:
+    groups = feature_group_diagnostics(
+        [
+            "fut_oi_change_288_stable_rank",
+            "fut_toptrader_count_long_short_log_ratio_stable_zscore",
+            "fut_funding_sum_12_stable_tanh",
+        ]
+    )
+
+    assert set(groups["timeframe"]) == {"futures"}
+    assert set(groups["family"]) == {
+        "futures_open_interest_context",
+        "futures_positioning_context",
+        "futures_funding_context",
+    }
+
+
 def test_bad_fold_forensics_summaries_flag_repeated_reversal_sources() -> None:
     feature_forensics = pd.DataFrame(
         [

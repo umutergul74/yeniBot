@@ -231,7 +231,7 @@ def _future_oos_allowed_benchmark_profiles(config: dict[str, Any], control_profi
 def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     holdout = settings.get("holdout", {}) or _cfg(config, ["experiments", "holdout"], {}) or {}
-    latest_data_end = str(holdout.get("holdout_data_end", "") or "")
+    latest_data_end = _holdout_latest_available_data_end(holdout)
     monitor_state = _future_oos_monitor_state(config, latest_data_end)
     control = str(settings.get("control_profile") or _cfg(config, ["experiments", "control_profile"], ""))
     status = str(policy_review.get("status", ""))
@@ -1398,15 +1398,36 @@ def _resolve_holdout_settings(settings: dict[str, Any], config: dict[str, Any]) 
                 if labeled_path is not None and labeled_path.exists():
                     labeled_timestamps = _parquet_timestamps(labeled_path)
                     if not labeled_timestamps.empty:
+                        holdout.setdefault("latest_available_data_end", str(labeled_timestamps.max()))
                         holdout_start = pd.to_datetime(holdout["holdout_data_start"], utc=True)
                         selection_timestamps = labeled_timestamps.loc[labeled_timestamps < holdout_start]
                         if not selection_timestamps.empty:
                             holdout.setdefault("selection_rows", int(len(selection_timestamps)))
                             holdout.setdefault("selection_data_start", str(selection_timestamps.min()))
                             holdout.setdefault("selection_data_end", str(selection_timestamps.max()))
+    latest_data_end = _holdout_latest_available_data_end(holdout)
+    if latest_data_end:
+        monitor_state = _future_oos_monitor_state(config, latest_data_end)
+        for key, value in monitor_state.items():
+            holdout.setdefault(key, value)
 
     updated["holdout"] = holdout
     return updated
+
+
+def _holdout_latest_available_data_end(holdout: dict[str, Any]) -> str:
+    """Return the latest labeled-data timestamp, not the frozen holdout end.
+
+    A failed clean holdout can freeze `holdout_data_end` at the anchor while
+    fresher rows accumulate outside the frozen window. Future-OOS monitoring
+    must count those fresher rows without allowing the holdout to roll forward.
+    """
+
+    for key in ("latest_available_data_end", "latest_data_end", "data_end", "holdout_data_end"):
+        value = str(holdout.get(key, "") or "")
+        if value:
+            return value
+    return ""
 
 
 def _selection_frame_before_holdout(frame: pd.DataFrame, settings: dict[str, Any]) -> pd.DataFrame:
@@ -1440,9 +1461,12 @@ def _holdout_reservation_frame(settings: dict[str, Any]) -> pd.DataFrame:
         "unused_rows_after_anchor",
         "anchor_run_id",
         "anchor_data_end",
+        "latest_available_data_end",
         "new_bars_since_anchor",
         "min_new_bars_remaining",
+        "preferred_new_bars_remaining",
         "future_oos_ready",
+        "future_oos_preferred_ready",
         "holdout_roll_forward_locked",
     ]
     if not holdout:
@@ -2427,7 +2451,7 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     monitor = policy_review.get("future_oos_monitor", {}) or {}
     holdout = settings.get("holdout", {}) or {}
-    latest_data_end = str(holdout.get("holdout_data_end", "") or "")
+    latest_data_end = _holdout_latest_available_data_end(holdout)
     monitor_state = _future_oos_monitor_state(config, latest_data_end)
     ready_at = _future_oos_ready_at_fields(monitor_state)
     row = {
@@ -2452,7 +2476,8 @@ def _frozen_policy_monitoring_plan_frame(config: dict[str, Any], settings: dict[
         "future_oos_preferred_ready": monitor_state["future_oos_preferred_ready"],
         "allow_holdout_roll_forward": monitor_state["allow_holdout_roll_forward"],
         "holdout_roll_forward_locked": monitor_state["holdout_roll_forward_locked"],
-        "current_holdout_data_end": latest_data_end,
+        "current_holdout_data_end": str(holdout.get("holdout_data_end", "") or ""),
+        "frozen_holdout_data_end": str(holdout.get("holdout_data_end", "") or ""),
         "next_action": monitor_state["next_action"],
         "policy": str(monitor.get("policy", "")),
     }

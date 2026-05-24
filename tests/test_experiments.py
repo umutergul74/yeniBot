@@ -14,6 +14,8 @@ from yenibot.experiments import (
     _auto_full_profiles,
     _best_profile_blend,
     _experiment_selection_frame,
+    _experiment_policy_guard_frame,
+    _frozen_policy_monitoring_plan_frame,
     _frozen_policy_robustness_frame,
     _future_oos_candidate_plan_frame,
     _holdout_boundary_audit_frame,
@@ -160,6 +162,54 @@ def test_experiment_policy_guard_locks_profile_search_until_future_oos() -> None
     skipped = settings["skipped_profiles"]
     assert any(item["profile"] == "new_candidate" and item["role"] == "candidate_profile" for item in skipped)
     assert any(item["profile"] == "new_candidate" and item["role"] == "always_full_profile" for item in skipped)
+
+
+def test_experiment_policy_guard_uses_latest_available_data_end_for_future_oos_count() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {
+                "control": {"include_patterns": ["*"], "exclude_patterns": []},
+                "benchmark": {"include_patterns": ["*"], "exclude_patterns": []},
+            },
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control", "benchmark"],
+            "holdout": {
+                "holdout_data_end": "2026-05-13 08:00:00+00:00",
+                "latest_available_data_end": "2026-05-23 21:00:00+00:00",
+            },
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_candidates": ["benchmark"],
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_run_id": "anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+    guard = settings["experiment_policy_guard"]
+    guard_frame = _experiment_policy_guard_frame(settings, config)
+    monitor_frame = _frozen_policy_monitoring_plan_frame(config, settings)
+
+    assert guard["latest_available_data_end"] == "2026-05-23 21:00:00+00:00"
+    assert guard["new_bars_since_anchor"] == 253
+    assert guard["min_new_bars_remaining"] == 467
+    assert guard["profile_search_locked"] is True
+    assert guard_frame.loc[0, "new_bars_since_anchor"] == 253
+    assert monitor_frame.loc[0, "new_bars_since_anchor"] == 253
+    assert monitor_frame.loc[0, "current_holdout_data_end"] == "2026-05-13 08:00:00+00:00"
+    assert monitor_frame.loc[0, "latest_available_data_end"] == "2026-05-23 21:00:00+00:00"
 
 
 def test_experiment_policy_guard_unlocks_after_future_oos_minimum_window() -> None:
@@ -427,6 +477,7 @@ def test_holdout_reservation_frame_records_selection_and_holdout_window() -> Non
             "selection_data_end": "2025-11-01 00:00:00+00:00",
             "holdout_data_start": "2025-11-01 01:00:00+00:00",
             "holdout_data_end": "2026-05-01 00:00:00+00:00",
+            "latest_available_data_end": "2026-05-03 00:00:00+00:00",
             "holdout_path": "/content/drive/MyDrive/yeniBot/data/processed/holdout_1h.parquet",
             "policy": "profile_selection_only_before_holdout",
         }
@@ -437,6 +488,7 @@ def test_holdout_reservation_frame_records_selection_and_holdout_window() -> Non
     assert bool(frame.loc[0, "enabled"]) is True
     assert frame.loc[0, "holdout_bars"] == 4320
     assert frame.loc[0, "selection_data_end"] < frame.loc[0, "holdout_data_start"]
+    assert frame.loc[0, "latest_available_data_end"] == "2026-05-03 00:00:00+00:00"
 
 
 def test_prepare_training_holdout_split_freezes_failed_clean_holdout_anchor(tmp_path) -> None:
@@ -481,6 +533,7 @@ def test_prepare_training_holdout_split_freezes_failed_clean_holdout_anchor(tmp_
     assert meta["holdout_roll_forward_locked"] is True
     assert meta["future_oos_ready"] is False
     assert meta["new_bars_since_anchor"] == 29
+    assert meta["latest_available_data_end"] == str(timestamps.max())
     assert meta["unused_rows_after_anchor"] == 29
     assert pd.to_datetime(holdout["timestamp"], utc=True).max() == anchor
     assert pd.to_datetime(selection["timestamp"], utc=True).max() < pd.to_datetime(holdout["timestamp"], utc=True).min()
@@ -748,7 +801,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_control_plus_futures_context",
+        "baseline_control_plus_futures_oi_change_context",
+        "baseline_control_plus_futures_positioning_context",
+        "baseline_control_plus_futures_funding_context",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -766,7 +821,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
-        "baseline_control_plus_futures_context",
+        "baseline_control_plus_futures_oi_change_context",
+        "baseline_control_plus_futures_positioning_context",
+        "baseline_control_plus_futures_funding_context",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -793,7 +850,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
-    assert "Binance Vision futures metrics" in notes["baseline_control_plus_futures_context"]
+    assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
+    assert "open-interest change" in notes["baseline_control_plus_futures_oi_change_context"]
+    assert "long-short ratio" in notes["baseline_control_plus_futures_positioning_context"]
+    assert "funding-rate context" in notes["baseline_control_plus_futures_funding_context"]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -949,6 +1009,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "fut_funding_mean_12_stable_tanh",
         "fut_metrics_missing",
         "fut_funding_missing",
+        "fut_toptrader_sum_long_short_log_ratio_stable_tanh",
     ]
 
     pruned = profile_config(config, "baseline_no_4h_tier1_pruned_whale")
@@ -1020,6 +1081,31 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "fut_metrics_missing" in futures_columns
     assert "4h_gk_vol_14" not in futures_columns
     assert "realized_vol_14" not in futures_columns
+
+    futures_oi = profile_config(config, "baseline_control_plus_futures_oi_change_context")
+    futures_oi_columns = filter_feature_columns(columns, futures_oi)
+    assert "fut_oi_change_288_stable_rank" in futures_oi_columns
+    assert "fut_oi_change_288_stable_tanh" in futures_oi_columns
+    assert "fut_oi_log_return" not in futures_oi_columns
+    assert "fut_oi_log_return_stable_rank" not in futures_oi_columns
+    assert "fut_funding_sum_12_stable_zscore" not in futures_oi_columns
+    assert "fut_toptrader_count_long_short_log_ratio_stable_zscore" not in futures_oi_columns
+
+    futures_positioning = profile_config(config, "baseline_control_plus_futures_positioning_context")
+    futures_positioning_columns = filter_feature_columns(columns, futures_positioning)
+    assert "fut_toptrader_count_long_short_log_ratio_stable_zscore" in futures_positioning_columns
+    assert "fut_toptrader_sum_long_short_log_ratio_stable_tanh" in futures_positioning_columns
+    assert "fut_taker_long_short_vol_log_ratio_stable_zscore" in futures_positioning_columns
+    assert "fut_oi_change_288_stable_rank" not in futures_positioning_columns
+    assert "fut_funding_sum_12_stable_zscore" not in futures_positioning_columns
+
+    futures_funding = profile_config(config, "baseline_control_plus_futures_funding_context")
+    futures_funding_columns = filter_feature_columns(columns, futures_funding)
+    assert "fut_funding_sum_12_stable_zscore" in futures_funding_columns
+    assert "fut_funding_mean_12_stable_tanh" in futures_funding_columns
+    assert "fut_metrics_missing" not in futures_funding_columns
+    assert "fut_oi_change_288_stable_rank" not in futures_funding_columns
+    assert "fut_toptrader_count_long_short_log_ratio_stable_zscore" not in futures_funding_columns
 
     stable_no_cvd = profile_config(config, "baseline_stable_no_1h_cvd_rate")
     stable_no_cvd_columns = filter_feature_columns(columns, stable_no_cvd)
