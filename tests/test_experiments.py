@@ -20,6 +20,7 @@ from yenibot.experiments import (
     _future_oos_candidate_plan_frame,
     _holdout_boundary_audit_frame,
     _holdout_reservation_frame,
+    _performance_gap_reasons,
     _missing_selected_profiles,
     _preflight_experiment_profiles,
     _passes_full,
@@ -444,6 +445,38 @@ def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> Non
     assert evaluated["holdout_threshold_reject_reason"] == "holdout_cv_threshold_pred_long_rate"
     assert evaluated["holdout_soft_pass"] is False
     assert evaluated["holdout_reject_reason"] == "holdout_cv_threshold_pred_long_rate"
+
+
+def test_performance_gap_reasons_separate_selected_and_constrained_f1() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "max_rank_ic_std": 0.03,
+            "min_positive_ic_fraction": 0.75,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    row = {
+        "mean_rank_ic": 0.07,
+        "std_rank_ic": 0.07,
+        "positive_ic_fraction": 0.86,
+        "mean_long_f1": 0.31,
+        "test_f1_at_selected_threshold": 0.47,
+        "test_pred_long_rate_at_selected_threshold": 0.86,
+        "test_f1_at_constrained_threshold": 0.43,
+        "test_pred_long_rate_at_constrained_threshold": 0.64,
+        "top_10_lift_global": 1.13,
+        "mtf_leakage_passed": True,
+        "stationarity_policy_passed": True,
+    }
+
+    reasons = _performance_gap_reasons(row, config).split(";")
+
+    assert "cv_selected_threshold_f1_below_target" not in reasons
+    assert "cv_constrained_threshold_f1_below_target" in reasons
+    assert "cv_selected_threshold_pred_long_rate_above_guardrail" in reasons
+    assert "cv_rank_ic_std_above_phase1_target" in reasons
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:

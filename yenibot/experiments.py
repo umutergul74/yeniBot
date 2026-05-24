@@ -2774,6 +2774,8 @@ def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str
     max_rank_ic_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
     min_positive_ic_fraction = float(_cfg(config, ["validation", "min_positive_ic_fraction"], 0.75))
     min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
     reasons = []
     if _float(row, "mean_rank_ic") < target_rank_ic:
         reasons.append("cv_rank_ic_below_target")
@@ -2781,13 +2783,19 @@ def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str
         reasons.append("cv_rank_ic_std_above_phase1_target")
     if _float(row, "positive_ic_fraction") < min_positive_ic_fraction:
         reasons.append("cv_positive_ic_fraction_below_target")
-    selected_f1 = _metric_or(
-        row,
-        "test_f1_at_constrained_threshold",
-        _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
-    )
+    selected_f1 = _float(row, "test_f1_at_selected_threshold", np.nan)
+    constrained_f1 = _float(row, "test_f1_at_constrained_threshold", np.nan)
+    fixed_f1 = _float(row, "mean_long_f1", np.nan)
     if selected_f1 < min_long_f1:
         reasons.append("cv_selected_threshold_f1_below_target")
+    if constrained_f1 < min_long_f1:
+        reasons.append("cv_constrained_threshold_f1_below_target")
+    if not np.isfinite(selected_f1) and not np.isfinite(constrained_f1) and fixed_f1 < min_long_f1:
+        reasons.append("cv_fixed_0_50_f1_below_target")
+    if _float(row, "test_pred_long_rate_at_selected_threshold", np.nan) > max_pred_long_rate:
+        reasons.append("cv_selected_threshold_pred_long_rate_above_guardrail")
+    if _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan) > max_pred_long_rate:
+        reasons.append("cv_constrained_threshold_pred_long_rate_above_guardrail")
     if _float(row, "top_10_lift_global") < 1.0:
         reasons.append("cv_top_10_lift_below_base")
     if not bool(row.get("mtf_leakage_passed", False)):
