@@ -223,6 +223,14 @@ def _best_future_candidate(plan: pd.DataFrame) -> dict[str, Any]:
     if plan.empty:
         return {}
     scored = plan.copy()
+    if "stage" in scored.columns:
+        preferred = scored[
+            scored["stage"].astype(str).isin(
+                ["future_oos_candidate", "future_oos_score_band_policy"]
+            )
+        ].copy()
+        if not preferred.empty:
+            scored = preferred
     for column in ["cv_mean_rank_ic", "holdout_mean_rank_ic", "future_oos_priority_score"]:
         if column in scored.columns:
             scored[column] = pd.to_numeric(scored[column], errors="coerce")
@@ -233,6 +241,10 @@ def _best_future_candidate(plan: pd.DataFrame) -> dict[str, Any]:
         return _json_ready(scored.sort_values("holdout_mean_rank_ic", ascending=False).iloc[0].to_dict())
     if "cv_mean_rank_ic" in scored.columns and scored["cv_mean_rank_ic"].notna().any():
         return _json_ready(scored.sort_values("cv_mean_rank_ic", ascending=False).iloc[0].to_dict())
+    if "plan_rank" in scored.columns:
+        scored["plan_rank"] = pd.to_numeric(scored["plan_rank"], errors="coerce")
+        if scored["plan_rank"].notna().any():
+            return _json_ready(scored.sort_values("plan_rank", ascending=True).iloc[0].to_dict())
     return _json_ready(scored.iloc[0].to_dict())
 
 

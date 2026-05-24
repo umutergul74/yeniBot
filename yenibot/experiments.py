@@ -2589,9 +2589,11 @@ def _future_oos_candidate_plan_frame(
         allowed = set(str(item) for item in guard.get("allowed_benchmark_profiles", []) or [])
         all_required_allowed = all(profile in allowed for profile in required) if required else candidate in allowed
         candidate_id = candidate if not policy_name else f"{candidate}::{policy_name}"
+        candidate_label = candidate if not policy_name else f"{candidate} [{policy_name}]"
         rows.append(
             {
                 "candidate_id": candidate_id,
+                "candidate_label": candidate_label,
                 "candidate": candidate,
                 "candidate_type": candidate_type,
                 "stage": stage,
@@ -2730,7 +2732,31 @@ def _future_oos_candidate_plan_frame(
             )
             existing_policy_keys.add(key)
 
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    stage_order = {
+        "control_profile": 0,
+        "retired_frozen_policy": 10,
+        "future_oos_candidate": 20,
+        "future_oos_score_band_policy": 30,
+    }
+    policy_order = {
+        "top_10": 10,
+        "top_20": 20,
+        "top_30": 30,
+        "upper_half": 50,
+        "mid_upper_40_90": 60,
+    }
+    out = frame.copy()
+    out["_stage_order"] = out["stage"].map(stage_order).fillna(99).astype(int)
+    out["_policy_order"] = out["policy_name"].map(policy_order).fillna(999).astype(int)
+    out = out.sort_values(
+        ["_stage_order", "candidate_type", "candidate_label", "_policy_order", "candidate_id"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    out.insert(0, "plan_rank", np.arange(1, len(out) + 1, dtype=int))
+    return out.drop(columns=["_stage_order", "_policy_order"])
 
 
 def _write_future_oos_candidate_plan(path: Path, frame: pd.DataFrame) -> None:

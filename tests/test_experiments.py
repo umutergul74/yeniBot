@@ -289,6 +289,8 @@ def test_future_oos_candidate_plan_records_ready_dates() -> None:
     plan = _future_oos_candidate_plan_frame(settings, config)
 
     assert set(plan["candidate"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
+    assert plan["plan_rank"].tolist() == [1, 2, 3]
+    assert set(plan["candidate_label"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
     assert plan["min_ready_at"].eq("2026-06-12 08:00:00+00:00").all()
     assert plan["preferred_ready_at"].eq("2026-08-11 08:00:00+00:00").all()
     future = plan.loc[plan["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
@@ -392,6 +394,11 @@ def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
     policy_rows = plan.loc[plan["stage"] == "future_oos_score_band_policy"]
 
     assert set(policy_rows["candidate"]) == {"control", "blend_control_benchmark_65_35"}
+    assert policy_rows["candidate_id"].is_unique
+    assert set(policy_rows["candidate_label"]) == {
+        "control [top_30]",
+        "blend_control_benchmark_65_35 [top_10]",
+    }
     control_policy = policy_rows.loc[policy_rows["candidate"] == "control"].iloc[0]
     assert control_policy["candidate_id"] == "control::top_30"
     assert control_policy["policy_name"] == "top_30"

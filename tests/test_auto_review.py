@@ -60,8 +60,12 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "plan_rank": 1,
                 "candidate": challenger,
+                "candidate_label": f"{challenger} [top_10]",
                 "candidate_type": "profile",
+                "stage": "future_oos_score_band_policy",
+                "policy_name": "top_10",
                 "future_oos_priority_score": 0.7,
                 "cv_mean_rank_ic": 0.052,
                 "holdout_mean_rank_ic": 0.06,
@@ -132,6 +136,7 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["next_action"]["action"] == "wait_for_new_unseen_bars_keep_control"
     assert review["next_action"]["do_not_promote_from_current_holdout"] is True
     assert review["cv"]["control"]["profile"] == "control_profile"
+    assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
 
 
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
