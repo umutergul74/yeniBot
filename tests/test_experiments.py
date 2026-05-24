@@ -1972,6 +1972,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert diagnostics["latest_bundle_zip"].endswith("phase1_latest_experiment_bundle.zip")
     assert diagnostics["slim_bundle_zip"].endswith("phase1_experiment_slim_bundle_matrix.zip")
     assert diagnostics["latest_slim_bundle_zip"].endswith("phase1_latest_experiment_slim_bundle.zip")
+    assert diagnostics["write_full_bundles"] is True
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "auto_review.md").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "next_actions.json").exists()
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",
         "promote_best_candidate",
@@ -1997,6 +2000,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/frozen_policy_robustness.csv" in archive.namelist()
         assert "matrix/frozen_policy_monitoring_plan.csv" in archive.namelist()
         assert "matrix/future_oos_candidate_plan.csv" in archive.namelist()
+        assert "matrix/auto_review.md" in archive.namelist()
+        assert "matrix/next_actions.json" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -2014,7 +2019,25 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/frozen_policy_robustness.csv" in names
     assert "matrix/frozen_policy_monitoring_plan.csv" in names
     assert "matrix/future_oos_candidate_plan.csv" in names
+    assert "matrix/auto_review.md" in names
+    assert "matrix/next_actions.json" in names
     assert all("/diagnostics/" not in name for name in names)
+
+    slim_only = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=diagnostics_config,
+        output_dir=tmp_path / "slim_reports",
+        run_id="matrix",
+        write_full_bundles=False,
+    )
+    assert slim_only["write_full_bundles"] is False
+    assert slim_only["zip_paths"] == []
+    assert slim_only["bundle_zip"] is None
+    assert slim_only["latest_bundle_zip"] is None
+    assert (tmp_path / "slim_reports" / "phase1_experiment_slim_bundle_matrix.zip").exists()
+    assert not (tmp_path / "slim_reports" / "phase1_experiment_bundle_matrix.zip").exists()
+    assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "auto_review.md").exists()
+    assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "next_actions.json").exists()
 
 
 def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tiny_config, tmp_path) -> None:

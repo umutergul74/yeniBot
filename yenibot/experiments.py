@@ -5309,7 +5309,12 @@ def write_experiment_diagnostics(
     config: dict[str, Any],
     output_dir: str | Path,
     run_id: str | None = None,
+    write_full_bundles: bool | None = None,
 ) -> dict[str, Any]:
+    if write_full_bundles is None:
+        write_full_bundles = bool(
+            _cfg(config, ["experiments", "diagnostics", "write_full_bundles"], default=True)
+        )
     run_dir = experiment_root(checkpoint_dir) / run_id if run_id else latest_experiment_run(checkpoint_dir)
     run_manifest_path = run_dir / "experiment_manifest.json"
     run_manifest = _read_json(run_manifest_path) if run_manifest_path.exists() else {}
@@ -5397,48 +5402,49 @@ def write_experiment_diagnostics(
     }
 
     zip_paths = []
-    for entry in entries:
-        profile = str(entry["profile"])
-        fold_scope = str(entry["fold_scope"])
-        feature_columns = list(entry["feature_columns"])
-        predictions = entry["predictions"]
-        diagnostics = entry["diagnostics"]
-        entry_config = entry.get("config", config)
-        decided = decision_lookup.get((profile, fold_scope), {})
-        ledger = diagnostics["ledger"].copy()
-        for column in ("promotable", "reject_reason"):
-            if column in decided:
-                ledger.loc[:, column] = decided[column]
-        zip_path = write_phase1_diagnostic_bundle(
-            output_dir=Path(output_dir) / "experiments" / run_dir.name / _slug(profile) / fold_scope,
-            report=diagnostics["report"],
-            predictions=_test_predictions(predictions),
-            calibration=diagnostics["calibration"],
-            calibrated_report=diagnostics.get("calibrated_report"),
-            calibrated_calibration=diagnostics.get("calibrated_calibration"),
-            calibrated_predictions=diagnostics.get("calibrated_predictions"),
-            fold_metrics=diagnostics["fold_metrics"],
-            regime_metrics=diagnostics["regime_metrics"],
-            regime_by_fold=diagnostics["regime_by_fold"],
-            bad_fold_regime=diagnostics["bad_fold_regime"],
-            threshold_metrics=diagnostics["threshold_metrics"],
-            threshold_summary=diagnostics["threshold_summary"],
-            mtf_leakage=diagnostics["mtf_leakage"],
-            stationarity_policy=diagnostics["stationarity_policy"],
-            score_lift=diagnostics["score_lift"],
-            score_lift_by_fold=diagnostics["score_lift_by_fold"],
-            score_band_lift=diagnostics["score_band_lift"],
-            score_band_by_fold=diagnostics["score_band_by_fold"],
-            score_band_summary=diagnostics["score_band_summary"],
-            recent_fold_summary=diagnostics["recent_fold_summary"],
-            feature_groups=diagnostics["feature_groups"],
-            feature_profile=diagnostics["feature_profile"],
-            experiment_ledger=ledger,
-            model_feature_columns=feature_columns,
-            config=profile_config(entry_config, profile),
-            prefix=f"phase1_diagnostics_{_slug(profile)}_{fold_scope}",
-        )
-        zip_paths.append(str(zip_path))
+    if write_full_bundles:
+        for entry in entries:
+            profile = str(entry["profile"])
+            fold_scope = str(entry["fold_scope"])
+            feature_columns = list(entry["feature_columns"])
+            predictions = entry["predictions"]
+            diagnostics = entry["diagnostics"]
+            entry_config = entry.get("config", config)
+            decided = decision_lookup.get((profile, fold_scope), {})
+            ledger = diagnostics["ledger"].copy()
+            for column in ("promotable", "reject_reason"):
+                if column in decided:
+                    ledger.loc[:, column] = decided[column]
+            zip_path = write_phase1_diagnostic_bundle(
+                output_dir=Path(output_dir) / "experiments" / run_dir.name / _slug(profile) / fold_scope,
+                report=diagnostics["report"],
+                predictions=_test_predictions(predictions),
+                calibration=diagnostics["calibration"],
+                calibrated_report=diagnostics.get("calibrated_report"),
+                calibrated_calibration=diagnostics.get("calibrated_calibration"),
+                calibrated_predictions=diagnostics.get("calibrated_predictions"),
+                fold_metrics=diagnostics["fold_metrics"],
+                regime_metrics=diagnostics["regime_metrics"],
+                regime_by_fold=diagnostics["regime_by_fold"],
+                bad_fold_regime=diagnostics["bad_fold_regime"],
+                threshold_metrics=diagnostics["threshold_metrics"],
+                threshold_summary=diagnostics["threshold_summary"],
+                mtf_leakage=diagnostics["mtf_leakage"],
+                stationarity_policy=diagnostics["stationarity_policy"],
+                score_lift=diagnostics["score_lift"],
+                score_lift_by_fold=diagnostics["score_lift_by_fold"],
+                score_band_lift=diagnostics["score_band_lift"],
+                score_band_by_fold=diagnostics["score_band_by_fold"],
+                score_band_summary=diagnostics["score_band_summary"],
+                recent_fold_summary=diagnostics["recent_fold_summary"],
+                feature_groups=diagnostics["feature_groups"],
+                feature_profile=diagnostics["feature_profile"],
+                experiment_ledger=ledger,
+                model_feature_columns=feature_columns,
+                config=profile_config(entry_config, profile),
+                prefix=f"phase1_diagnostics_{_slug(profile)}_{fold_scope}",
+            )
+            zip_paths.append(str(zip_path))
 
     best = _best_candidate(comparison, settings["control_profile"])
     blend_leaders = _profile_blend_leaders(profile_blend)
@@ -5519,12 +5525,13 @@ def write_experiment_diagnostics(
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
-    bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip"
-    latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip"
+    bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
+    latest_bundle_path = Path(output_dir) / "phase1_latest_experiment_bundle.zip" if write_full_bundles else None
     slim_bundle_path = Path(output_dir) / f"phase1_experiment_slim_bundle_{run_dir.name}.zip"
     latest_slim_bundle_path = Path(output_dir) / "phase1_latest_experiment_slim_bundle.zip"
-    decision["bundle_zip"] = str(bundle_path)
-    decision["latest_bundle_zip"] = str(latest_bundle_path)
+    decision["write_full_bundles"] = bool(write_full_bundles)
+    decision["bundle_zip"] = str(bundle_path) if bundle_path is not None else None
+    decision["latest_bundle_zip"] = str(latest_bundle_path) if latest_bundle_path is not None else None
     decision["slim_bundle_zip"] = str(slim_bundle_path)
     decision["latest_slim_bundle_zip"] = str(latest_slim_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
@@ -5589,12 +5596,16 @@ def write_experiment_diagnostics(
         holdout_decision=holdout_decision,
         config=diagnostic_config,
     )
-    bundle_path, latest_bundle_path = _write_experiment_bundle(
-        output_dir=Path(output_dir),
-        run_id=run_dir.name,
-        report_dir=report_dir,
-        zip_paths=zip_paths,
-    )
+    if write_full_bundles:
+        bundle_path, latest_bundle_path = _write_experiment_bundle(
+            output_dir=Path(output_dir),
+            run_id=run_dir.name,
+            report_dir=report_dir,
+            zip_paths=zip_paths,
+        )
+    else:
+        bundle_path = None
+        latest_bundle_path = None
     slim_bundle_path, latest_slim_bundle_path = _write_experiment_slim_bundle(
         output_dir=Path(output_dir),
         run_id=run_dir.name,
@@ -5628,8 +5639,9 @@ def write_experiment_diagnostics(
         "missing_selected_profiles": missing_selected,
         "decision": decision,
         "zip_paths": zip_paths,
-        "bundle_zip": str(bundle_path),
-        "latest_bundle_zip": str(latest_bundle_path),
+        "write_full_bundles": bool(write_full_bundles),
+        "bundle_zip": str(bundle_path) if bundle_path is not None else None,
+        "latest_bundle_zip": str(latest_bundle_path) if latest_bundle_path is not None else None,
         "slim_bundle_zip": str(slim_bundle_path),
         "latest_slim_bundle_zip": str(latest_slim_bundle_path),
         "auto_review": auto_review["review"],
