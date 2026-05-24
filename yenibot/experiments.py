@@ -5080,6 +5080,8 @@ def _write_experiment_bundle(
         "auto_review.md",
         "auto_review.json",
         "next_actions.json",
+        "phase2_readiness.md",
+        "phase2_readiness.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -5339,7 +5341,7 @@ def write_experiment_diagnostics(
 ) -> dict[str, Any]:
     if write_full_bundles is None:
         write_full_bundles = bool(
-            _cfg(config, ["experiments", "diagnostics", "write_full_bundles"], default=True)
+            _cfg(config, ["experiments", "diagnostics", "write_full_bundles"], default=False)
         )
     run_dir = experiment_root(checkpoint_dir) / run_id if run_id else latest_experiment_run(checkpoint_dir)
     run_manifest_path = run_dir / "experiment_manifest.json"
@@ -5589,12 +5591,19 @@ def write_experiment_diagnostics(
     auto_review_path = Path(auto_review["auto_review_path"])
     auto_review_json_path = Path(auto_review["auto_review_json_path"])
     next_actions_path = Path(auto_review["next_actions_path"])
+    phase2_readiness_path = Path(auto_review["phase2_readiness_path"])
+    phase2_readiness_md_path = Path(auto_review["phase2_readiness_md_path"])
     shutil.copyfile(auto_review_path, Path(output_dir) / "latest_auto_review.md")
     shutil.copyfile(auto_review_json_path, Path(output_dir) / "latest_auto_review.json")
     shutil.copyfile(next_actions_path, Path(output_dir) / "latest_next_actions.json")
+    shutil.copyfile(phase2_readiness_path, Path(output_dir) / "latest_phase2_readiness.json")
+    shutil.copyfile(phase2_readiness_md_path, Path(output_dir) / "latest_phase2_readiness.md")
     decision["auto_review_path"] = str(auto_review_path)
     decision["auto_review_json_path"] = str(auto_review_json_path)
     decision["next_actions_path"] = str(next_actions_path)
+    decision["phase2_readiness_path"] = str(phase2_readiness_path)
+    decision["phase2_readiness_md_path"] = str(phase2_readiness_md_path)
+    decision["phase2_readiness"] = auto_review["review"].get("phase2_readiness", {})
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
@@ -5674,4 +5683,6 @@ def write_experiment_diagnostics(
         "auto_review_path": str(auto_review_path),
         "auto_review_json_path": str(auto_review_json_path),
         "next_actions_path": str(next_actions_path),
+        "phase2_readiness_path": str(phase2_readiness_path),
+        "phase2_readiness_md_path": str(phase2_readiness_md_path),
     }

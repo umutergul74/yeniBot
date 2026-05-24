@@ -1882,6 +1882,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         config=diagnostics_config,
         output_dir=tmp_path / "reports",
         run_id="matrix",
+        write_full_bundles=True,
     )
 
     assert set(result["comparison"]["profile"]) == {"control", "candidate"}
@@ -1982,6 +1983,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert diagnostics["write_full_bundles"] is True
     assert (tmp_path / "reports" / "experiments" / "matrix" / "auto_review.md").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "next_actions.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase2_readiness.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase2_readiness.md").exists()
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",
         "promote_best_candidate",
@@ -2009,6 +2012,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/future_oos_candidate_plan.csv" in archive.namelist()
         assert "matrix/auto_review.md" in archive.namelist()
         assert "matrix/next_actions.json" in archive.namelist()
+        assert "matrix/phase2_readiness.json" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -2028,6 +2032,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/future_oos_candidate_plan.csv" in names
     assert "matrix/auto_review.md" in names
     assert "matrix/next_actions.json" in names
+    assert "matrix/phase2_readiness.json" in names
     assert all("/diagnostics/" not in name for name in names)
 
     slim_only = write_experiment_diagnostics(
@@ -2045,6 +2050,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not (tmp_path / "slim_reports" / "phase1_experiment_bundle_matrix.zip").exists()
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "auto_review.md").exists()
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "next_actions.json").exists()
+    assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "phase2_readiness.json").exists()
 
 
 def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tiny_config, tmp_path) -> None:
@@ -2334,6 +2340,7 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
         config=config,
         output_dir=tmp_path / "reports",
         run_id="seeded",
+        write_full_bundles=True,
     )
 
     assert set(result["seed_audit"]["seed"]) == {11, 12}

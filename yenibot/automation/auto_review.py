@@ -279,6 +279,95 @@ def _next_action(
     return "keep_control_profile", reasons
 
 
+def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
+    control = review.get("cv", {}).get("control", {}) or {}
+    policy = review.get("holdout", {}).get("policy", {}) or {}
+    completeness = review.get("report_completeness", {}) or {}
+    mean_rank_ic = _metric(control, "mean_rank_ic")
+    std_rank_ic = _metric(control, "std_rank_ic")
+    positive_ic_fraction = _metric(control, "positive_ic_fraction")
+    mean_long_f1 = _metric(control, "mean_long_f1")
+    calibration_separation = _metric(control, "calibration_separation")
+    checks = [
+        {
+            "check": "report_complete",
+            "passed": bool(completeness.get("complete", False)),
+            "value": completeness.get("complete", False),
+            "target": True,
+            "blocker": "report_missing_required_outputs",
+        },
+        {
+            "check": "mean_rank_ic",
+            "passed": mean_rank_ic is not None and mean_rank_ic > 0.03,
+            "value": mean_rank_ic,
+            "target": "> 0.03",
+            "blocker": "mean_rank_ic_below_phase1_target",
+        },
+        {
+            "check": "rank_ic_std",
+            "passed": std_rank_ic is not None and std_rank_ic < 0.03,
+            "value": std_rank_ic,
+            "target": "< 0.03",
+            "blocker": "rank_ic_std_above_phase1_target",
+        },
+        {
+            "check": "positive_ic_fraction",
+            "passed": positive_ic_fraction is not None and positive_ic_fraction > 0.75,
+            "value": positive_ic_fraction,
+            "target": "> 0.75",
+            "blocker": "positive_ic_fraction_below_phase1_target",
+        },
+        {
+            "check": "long_f1",
+            "passed": mean_long_f1 is not None and mean_long_f1 > 0.45,
+            "value": mean_long_f1,
+            "target": "> 0.45",
+            "blocker": "long_f1_below_phase1_target",
+        },
+        {
+            "check": "calibration_separation",
+            "passed": calibration_separation is not None and calibration_separation > 0.0,
+            "value": calibration_separation,
+            "target": "> 0",
+            "blocker": "calibration_separation_missing_or_nonpositive",
+        },
+        {
+            "check": "mtf_leakage",
+            "passed": _to_bool(control.get("mtf_leakage_passed"), default=False),
+            "value": control.get("mtf_leakage_passed"),
+            "target": True,
+            "blocker": "mtf_leakage_check_failed",
+        },
+        {
+            "check": "stationarity_policy",
+            "passed": _to_bool(control.get("stationarity_policy_passed"), default=False),
+            "value": control.get("stationarity_policy_passed"),
+            "target": True,
+            "blocker": "stationarity_policy_check_failed",
+        },
+        {
+            "check": "future_unseen_oos_ready",
+            "passed": bool(policy.get("future_oos_ready", False)),
+            "value": policy.get("future_oos_ready", False),
+            "target": True,
+            "blocker": "future_unseen_oos_not_ready",
+        },
+    ]
+    blockers = [str(item["blocker"]) for item in checks if not bool(item["passed"])]
+    ready = not blockers
+    return {
+        "ready_for_phase2": ready,
+        "decision": "READY_FOR_PHASE2" if ready else "DO_NOT_PROCEED_TO_PHASE2",
+        "blockers": blockers,
+        "checks": checks,
+        "next_action": (
+            "freeze_phase1_candidate_and_prepare_phase2_design"
+            if ready
+            else "continue_phase1_validation_until_all_blockers_clear"
+        ),
+    }
+
+
 def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     """Create a deterministic review summary from a Phase 1 experiment report directory."""
     report_path = Path(report_dir)
@@ -307,7 +396,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         cv_promotable=cv_promotable,
         decision=decision,
     )
-    return {
+    review = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "report_dir": str(report_path),
         "run_id": str(decision.get("run_id") or report_path.name),
@@ -351,6 +440,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         },
         "decision_recommendation": decision.get("recommendation"),
     }
+    review["phase2_readiness"] = _phase2_readiness(review)
+    return review
 
 
 def _fmt(value: Any, digits: int = 4) -> str:
@@ -380,6 +471,7 @@ def _row_metric_line(row: dict[str, Any]) -> str:
 
 def auto_review_markdown(review: dict[str, Any]) -> str:
     policy = review["holdout"]["policy"]
+    phase2 = review.get("phase2_readiness", {})
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -388,6 +480,7 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Reasons: `{';'.join(review['next_action']['reasons']) or 'none'}`",
         f"- Do not promote from current holdout: `{review['next_action']['do_not_promote_from_current_holdout']}`",
         f"- Decision recommendation from diagnostics: `{review.get('decision_recommendation')}`",
+        f"- Phase 2 readiness: `{phase2.get('decision')}`",
         "",
         "## Report Completeness",
         f"- Complete: `{review['report_completeness']['complete']}`",
@@ -438,6 +531,37 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def phase2_readiness_markdown(readiness: dict[str, Any]) -> str:
+    lines = [
+        "# Phase 2 Readiness",
+        "",
+        f"- Decision: `{readiness.get('decision')}`",
+        f"- Ready: `{readiness.get('ready_for_phase2')}`",
+        f"- Next action: `{readiness.get('next_action')}`",
+        f"- Blockers: `{';'.join(readiness.get('blockers', [])) or 'none'}`",
+        "",
+        "## Checks",
+        "",
+        "| check | passed | value | target | blocker |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for item in readiness.get("checks", []) or []:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item.get("check", "")),
+                    str(item.get("passed", "")),
+                    str(item.get("value", "")),
+                    str(item.get("target", "")),
+                    str(item.get("blocker", "")),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
     report_path = Path(report_dir)
     report_path.mkdir(parents=True, exist_ok=True)
@@ -445,6 +569,13 @@ def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
     auto_review_path = report_path / "auto_review.md"
     next_actions_path = report_path / "next_actions.json"
     auto_review_path.write_text(auto_review_markdown(review), encoding="utf-8")
+    phase2_readiness_path = report_path / "phase2_readiness.json"
+    phase2_readiness_md_path = report_path / "phase2_readiness.md"
+    phase2_readiness_path.write_text(
+        json.dumps(_json_ready(review["phase2_readiness"]), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    phase2_readiness_md_path.write_text(phase2_readiness_markdown(review["phase2_readiness"]), encoding="utf-8")
     next_actions_path.write_text(
         json.dumps(_json_ready(review["next_action"]), indent=2, sort_keys=True),
         encoding="utf-8",
@@ -456,6 +587,8 @@ def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
         "auto_review_path": str(auto_review_path),
         "auto_review_json_path": str(review_path),
         "next_actions_path": str(next_actions_path),
+        "phase2_readiness_path": str(phase2_readiness_path),
+        "phase2_readiness_md_path": str(phase2_readiness_md_path),
     }
 
 

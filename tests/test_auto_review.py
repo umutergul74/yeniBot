@@ -137,6 +137,8 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["next_action"]["do_not_promote_from_current_holdout"] is True
     assert review["cv"]["control"]["profile"] == "control_profile"
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
+    assert review["phase2_readiness"]["ready_for_phase2"] is False
+    assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
 
 
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
@@ -156,6 +158,10 @@ def test_write_auto_review_outputs_files(tmp_path) -> None:
     assert (tmp_path / "auto_review.md").exists()
     assert (tmp_path / "auto_review.json").exists()
     assert (tmp_path / "next_actions.json").exists()
+    assert (tmp_path / "phase2_readiness.json").exists()
+    assert (tmp_path / "phase2_readiness.md").exists()
     next_actions = json.loads((tmp_path / "next_actions.json").read_text(encoding="utf-8"))
     assert next_actions["action"] == "wait_for_new_unseen_bars_keep_control"
+    phase2 = json.loads((tmp_path / "phase2_readiness.json").read_text(encoding="utf-8"))
+    assert phase2["decision"] == "DO_NOT_PROCEED_TO_PHASE2"
     assert result["auto_review_path"].endswith("auto_review.md")
