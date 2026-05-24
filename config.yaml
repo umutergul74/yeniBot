@@ -1574,7 +1574,7 @@ model:
   fusion_hidden: 128
 
 training:
-  early_stop_metric: rank_ic
+  early_stop_metric: val_rank_ic_rolling
   rank_ic_smoothing_epochs: 5
   batch_size: 256
   epochs: 100

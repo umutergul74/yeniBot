@@ -149,6 +149,9 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
+    assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
+    assert review["phase2_readiness"]["long_f1_source"] == "validation_selected_threshold"
+    assert "fixed_0_50_f1_below_target_calibration_issue" in review["phase2_readiness"]["advisories"]
     assert review["phase1_transition_plan"]["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
     assert "do_not_start_phase2_backtest" in review["phase1_transition_plan"]["blocked_actions"]
 
@@ -178,6 +181,8 @@ def test_write_auto_review_outputs_files(tmp_path) -> None:
     assert next_actions["action"] == "wait_for_new_unseen_bars_keep_control"
     phase2 = json.loads((tmp_path / "phase2_readiness.json").read_text(encoding="utf-8"))
     assert phase2["decision"] == "DO_NOT_PROCEED_TO_PHASE2"
+    assert phase2["long_f1_source"] == "validation_selected_threshold"
     transition = json.loads((tmp_path / "phase1_transition_plan.json").read_text(encoding="utf-8"))
     assert transition["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
+    assert transition["long_f1_source"] == "validation_selected_threshold"
     assert result["auto_review_path"].endswith("auto_review.md")

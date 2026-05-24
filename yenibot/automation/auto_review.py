@@ -286,8 +286,30 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     mean_rank_ic = _metric(control, "mean_rank_ic")
     std_rank_ic = _metric(control, "std_rank_ic")
     positive_ic_fraction = _metric(control, "positive_ic_fraction")
-    mean_long_f1 = _metric(control, "mean_long_f1")
+    fixed_050_f1 = _metric(control, "mean_long_f1")
+    selected_f1 = _metric(control, "test_f1_at_selected_threshold")
+    constrained_f1 = _metric(control, "test_f1_at_constrained_threshold")
+    selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
+    constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
+    if selected_f1 is not None:
+        official_long_f1 = selected_f1
+        official_long_f1_source = "validation_selected_threshold"
+    elif constrained_f1 is not None:
+        official_long_f1 = constrained_f1
+        official_long_f1_source = "validation_constrained_threshold"
+    else:
+        official_long_f1 = fixed_050_f1
+        official_long_f1_source = "fixed_0_50_threshold"
+    advisories: list[str] = []
+    if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
+        advisories.append("fixed_0_50_f1_below_target_calibration_issue")
+    if constrained_f1 is not None and constrained_f1 <= 0.45:
+        advisories.append("constrained_threshold_f1_below_target")
+    if selected_pred_rate is not None and selected_pred_rate > 0.70:
+        advisories.append("selected_threshold_pred_long_rate_above_guardrail")
+    if constrained_pred_rate is not None and constrained_pred_rate > 0.70:
+        advisories.append("constrained_threshold_pred_long_rate_above_guardrail")
     checks = [
         {
             "check": "report_complete",
@@ -319,10 +341,14 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "check": "long_f1",
-            "passed": mean_long_f1 is not None and mean_long_f1 > 0.45,
-            "value": mean_long_f1,
+            "passed": official_long_f1 is not None and official_long_f1 > 0.45,
+            "value": official_long_f1,
             "target": "> 0.45",
             "blocker": "long_f1_below_phase1_target",
+            "source": official_long_f1_source,
+            "fixed_0_50_value": fixed_050_f1,
+            "selected_threshold_value": selected_f1,
+            "constrained_threshold_value": constrained_f1,
         },
         {
             "check": "calibration_separation",
@@ -359,6 +385,8 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         "ready_for_phase2": ready,
         "decision": "READY_FOR_PHASE2" if ready else "DO_NOT_PROCEED_TO_PHASE2",
         "blockers": blockers,
+        "advisories": advisories,
+        "long_f1_source": official_long_f1_source,
         "checks": checks,
         "next_action": (
             "freeze_phase1_candidate_and_prepare_phase2_design"
@@ -381,7 +409,11 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     mean_long_f1 = _metric(control, "mean_long_f1")
     selected_f1 = _metric(control, "test_f1_at_selected_threshold")
     constrained_f1 = _metric(control, "test_f1_at_constrained_threshold")
+    selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
+    constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
+    phase2_long_f1_source = str(phase2.get("long_f1_source") or "")
+    official_f1 = selected_f1 if selected_f1 is not None else constrained_f1 if constrained_f1 is not None else mean_long_f1
     signal_present = (
         report_complete
         and leakage_ok
@@ -409,8 +441,15 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
             None if positive_ic_fraction is None else positive_ic_fraction - 0.75
         ),
         "mean_long_f1_gap_vs_0_45": None if mean_long_f1 is None else 0.45 - mean_long_f1,
+        "official_long_f1_gap_vs_0_45": None if official_f1 is None else 0.45 - official_f1,
         "selected_threshold_f1_gap_vs_0_45": None if selected_f1 is None else 0.45 - selected_f1,
         "constrained_threshold_f1_gap_vs_0_45": None if constrained_f1 is None else 0.45 - constrained_f1,
+        "selected_threshold_pred_long_rate_excess_vs_0_70": (
+            None if selected_pred_rate is None else selected_pred_rate - 0.70
+        ),
+        "constrained_threshold_pred_long_rate_excess_vs_0_70": (
+            None if constrained_pred_rate is None else constrained_pred_rate - 0.70
+        ),
         "future_oos_min_bars_remaining": policy.get("min_new_bars_remaining"),
         "future_oos_preferred_bars_remaining": policy.get("preferred_new_bars_remaining"),
     }
@@ -435,6 +474,15 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         recommended_focus.append("reduce_fold_to_fold_rank_ic_volatility")
     if "long_f1_below_phase1_target" in blockers:
         recommended_focus.append("improve_long_class_decision_quality_without_changing_labels_to_3class")
+    advisories = set(str(item) for item in phase2.get("advisories", []) or [])
+    if advisories.intersection(
+        {
+            "constrained_threshold_f1_below_target",
+            "selected_threshold_pred_long_rate_above_guardrail",
+            "constrained_threshold_pred_long_rate_above_guardrail",
+        }
+    ):
+        recommended_focus.append("improve_threshold_constrained_f1_without_reusing_holdout")
     if "future_unseen_oos_not_ready" in blockers:
         recommended_focus.append("wait_for_new_unseen_bars_before_any_promotion")
     return {
@@ -442,6 +490,8 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         "research_ready_without_phase2": research_ready,
         "ready_for_phase2": bool(phase2.get("ready_for_phase2", False)),
         "phase2_blockers": list(phase2.get("blockers", []) or []),
+        "phase2_advisories": list(phase2.get("advisories", []) or []),
+        "long_f1_source": phase2_long_f1_source,
         "metric_gaps": metric_gaps,
         "allowed_actions": allowed_actions,
         "blocked_actions": blocked_actions,
@@ -639,11 +689,13 @@ def phase2_readiness_markdown(readiness: dict[str, Any]) -> str:
         f"- Ready: `{readiness.get('ready_for_phase2')}`",
         f"- Next action: `{readiness.get('next_action')}`",
         f"- Blockers: `{';'.join(readiness.get('blockers', [])) or 'none'}`",
+        f"- Advisories: `{';'.join(readiness.get('advisories', [])) or 'none'}`",
+        f"- Long F1 source: `{readiness.get('long_f1_source')}`",
         "",
         "## Checks",
         "",
-        "| check | passed | value | target | blocker |",
-        "| --- | --- | --- | --- | --- |",
+        "| check | passed | value | target | blocker | source |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for item in readiness.get("checks", []) or []:
         lines.append(
@@ -655,6 +707,7 @@ def phase2_readiness_markdown(readiness: dict[str, Any]) -> str:
                     str(item.get("value", "")),
                     str(item.get("target", "")),
                     str(item.get("blocker", "")),
+                    str(item.get("source", "")),
                 ]
             )
             + " |"
@@ -670,6 +723,8 @@ def phase1_transition_plan_markdown(plan: dict[str, Any]) -> str:
         f"- Research ready without Phase 2: `{plan.get('research_ready_without_phase2')}`",
         f"- Ready for Phase 2: `{plan.get('ready_for_phase2')}`",
         f"- Phase 2 blockers: `{';'.join(plan.get('phase2_blockers', [])) or 'none'}`",
+        f"- Phase 2 advisories: `{';'.join(plan.get('phase2_advisories', [])) or 'none'}`",
+        f"- Long F1 source: `{plan.get('long_f1_source')}`",
         "",
         "## Metric Gaps",
         "",

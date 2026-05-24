@@ -796,7 +796,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     config = load_config("config.yaml")
     assert config["features"]["active_profile"] == "baseline_plus_4h_bounded_whale_no_4h_tier1"
     assert config["model"]["dropout"] == 0.2
-    assert config["training"]["early_stop_metric"] == "rank_ic"
+    assert config["training"]["early_stop_metric"] == "val_rank_ic_rolling"
     assert config["training"]["rank_ic_smoothing_epochs"] == 5
     assert config["training"]["optimizer"]["weight_decay"] == 0.0001
     assert config["walk_forward"]["val_bars"] == 1080
