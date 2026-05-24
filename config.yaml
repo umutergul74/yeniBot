@@ -1574,7 +1574,7 @@ model:
   fusion_hidden: 128
 
 training:
-  early_stop_metric: val_rank_ic_rolling
+  early_stop_metric: rank_ic
   rank_ic_smoothing_epochs: 5
   batch_size: 256
   epochs: 100
@@ -1739,6 +1739,7 @@ experiments:
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
+      training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
     rejected_profiles:
       baseline_control_plus_futures_context:
         reason: "Run 20260524_072602 broad futures-context profile improved frozen holdout top-10 but failed CV stability; use narrower futures OI/positioning/funding tracks instead."
