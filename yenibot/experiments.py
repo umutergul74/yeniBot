@@ -2588,6 +2588,13 @@ def _future_oos_candidate_plan_frame(
         missing_profiles = [profile for profile in required if profile not in profiles_cfg]
         allowed = set(str(item) for item in guard.get("allowed_benchmark_profiles", []) or [])
         all_required_allowed = all(profile in allowed for profile in required) if required else candidate in allowed
+        is_retired = stage == "retired_frozen_policy"
+        candidate_status = {
+            "control_profile": "active_control",
+            "future_oos_candidate": "pre_registered_future_oos_candidate",
+            "future_oos_score_band_policy": "pre_registered_future_oos_policy",
+            "retired_frozen_policy": "historical_retired_policy_do_not_promote",
+        }.get(stage, "diagnostic_candidate")
         candidate_id = candidate if not policy_name else f"{candidate}::{policy_name}"
         candidate_label = candidate if not policy_name else f"{candidate} [{policy_name}]"
         rows.append(
@@ -2600,6 +2607,7 @@ def _future_oos_candidate_plan_frame(
                 "required_profiles": ",".join(required),
                 "missing_required_profiles": ",".join(missing_profiles),
                 "all_required_profiles_allowed": all_required_allowed,
+                "candidate_status": candidate_status,
                 "profile_search_locked": bool(guard.get("profile_search_locked", False)),
                 "future_oos_ready": bool(guard.get("future_oos_ready", False)),
                 "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
@@ -2607,7 +2615,11 @@ def _future_oos_candidate_plan_frame(
                 "preferred_ready_at": ready_at["preferred_ready_at"],
                 "action": str(guard.get("action", "")),
                 "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
-                "promotion_allowed_now": bool(guard.get("future_oos_ready", False)) and bool(all_required_allowed),
+                "promotion_allowed_now": (
+                    bool(guard.get("future_oos_ready", False))
+                    and bool(all_required_allowed)
+                    and not is_retired
+                ),
                 "note": note,
                 "policy_name": policy_name,
                 "policy_type": policy_type,
@@ -2737,9 +2749,9 @@ def _future_oos_candidate_plan_frame(
         return frame
     stage_order = {
         "control_profile": 0,
-        "retired_frozen_policy": 10,
         "future_oos_candidate": 20,
         "future_oos_score_band_policy": 30,
+        "retired_frozen_policy": 80,
     }
     policy_order = {
         "top_10": 10,
@@ -3017,6 +3029,346 @@ def _write_performance_gap_analysis(path: Path, frame: pd.DataFrame) -> None:
     frame.to_csv(path / "performance_gap_analysis.csv", index=False)
     (path / "performance_gap_analysis.md").write_text(_performance_gap_markdown(frame), encoding="utf-8")
     _write_json(path / "performance_gap_analysis.json", {"rows": frame.to_dict(orient="records")})
+
+
+def _diagnostic_candidate_type(fold_scope: str) -> str:
+    return "blend" if str(fold_scope).startswith("blend_") else "profile"
+
+
+def _is_stability_scope(fold_scope: str) -> bool:
+    fold_scope = str(fold_scope)
+    return fold_scope == "full" or fold_scope.startswith("blend_")
+
+
+def _fold_stability_forensics_frame(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold",
+        "start",
+        "end",
+        "rank_ic",
+        "rank_ic_mean",
+        "rank_ic_std",
+        "rank_ic_zscore",
+        "rank_ic_abs_zscore",
+        "rank_ic_variance_contribution",
+        "rank_ic_std_driver_rank",
+        "rank_ic_bucket",
+        "long_f1_050",
+        "test_f1_at_selected_threshold",
+        "test_pred_long_rate_at_selected_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
+        "top_10_lift_vs_base",
+        "top_10_forward_return",
+        "primary_issue",
+        "recommended_track",
+    ]
+    rows: list[dict[str, Any]] = []
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    bad_ic = float(_cfg(config, ["validation", "bad_fold_ic_threshold"], -0.08))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        diagnostics = entry.get("diagnostics", {}) or {}
+        fold_metrics = diagnostics.get("fold_metrics")
+        if fold_metrics is None or fold_metrics.empty:
+            continue
+        frame = fold_metrics.copy()
+        threshold_metrics = diagnostics.get("threshold_metrics")
+        if threshold_metrics is not None and not threshold_metrics.empty:
+            merge_columns = [
+                column
+                for column in (
+                    "fold",
+                    "test_f1_at_selected_threshold",
+                    "test_pred_long_rate_at_selected_threshold",
+                    "test_f1_at_constrained_threshold",
+                    "test_pred_long_rate_at_constrained_threshold",
+                )
+                if column in threshold_metrics.columns
+            ]
+            if "fold" in merge_columns:
+                frame = frame.merge(threshold_metrics[merge_columns], on="fold", how="left")
+        score_bands = diagnostics.get("score_band_by_fold")
+        if score_bands is not None and not score_bands.empty and {"fold", "band"}.issubset(score_bands.columns):
+            top_band = score_bands.loc[score_bands["band"].astype(str) == "top_10"].copy()
+            if not top_band.empty:
+                rename = {
+                    "lift_vs_base": "top_10_lift_vs_base",
+                    "mean_forward_return": "top_10_forward_return",
+                }
+                keep = [column for column in ["fold", *rename.keys()] if column in top_band.columns]
+                top_band = top_band[keep].rename(columns=rename)
+                frame = frame.merge(top_band, on="fold", how="left")
+
+        rank_values = pd.to_numeric(frame["rank_ic"], errors="coerce")
+        mean_rank = float(rank_values.mean()) if rank_values.notna().any() else np.nan
+        std_rank = float(rank_values.std(ddof=1)) if rank_values.notna().sum() > 1 else 0.0
+        deviations = rank_values - mean_rank
+        variance_total = float(np.square(deviations.dropna()).sum())
+        frame["_rank_ic_mean"] = mean_rank
+        frame["_rank_ic_std"] = std_rank
+        frame["_rank_ic_zscore"] = deviations / std_rank if std_rank > 0 else np.nan
+        frame["_rank_ic_variance_contribution"] = (
+            np.square(deviations) / variance_total if variance_total > 0 else np.nan
+        )
+        frame["_rank_ic_std_driver_rank"] = (
+            frame["_rank_ic_variance_contribution"].rank(method="first", ascending=False)
+            if variance_total > 0
+            else np.nan
+        )
+
+        candidate = str(entry.get("profile", ""))
+        for _, item in frame.iterrows():
+            row = item.to_dict()
+            rank_ic = _float(row, "rank_ic")
+            constrained_f1 = _float(row, "test_f1_at_constrained_threshold")
+            constrained_rate = _float(row, "test_pred_long_rate_at_constrained_threshold")
+            top_return = _float(row, "top_10_forward_return")
+            zscore = _float(row, "_rank_ic_zscore")
+            abs_zscore = abs(zscore) if np.isfinite(zscore) else np.nan
+            if np.isfinite(rank_ic) and rank_ic <= bad_ic:
+                bucket = "bad_rank_ic"
+                issue = "bad_rank_ic"
+                track = "fold_stability"
+            elif np.isfinite(rank_ic) and rank_ic < 0:
+                bucket = "negative_rank_ic"
+                issue = "negative_rank_ic"
+                track = "fold_stability"
+            elif np.isfinite(rank_ic) and rank_ic < target_rank_ic:
+                bucket = "below_target_rank_ic"
+                issue = "below_target_rank_ic"
+                track = "fold_stability"
+            elif np.isfinite(abs_zscore) and abs_zscore >= 1.0:
+                bucket = "variance_driver_high_side" if rank_ic >= mean_rank else "variance_driver_low_side"
+                issue = bucket
+                track = "fold_stability"
+            elif np.isfinite(constrained_f1) and constrained_f1 < min_long_f1:
+                bucket = "rank_ic_ok"
+                issue = "constrained_threshold_f1"
+                track = "threshold_calibration"
+            elif np.isfinite(constrained_rate) and constrained_rate > max_pred_long_rate:
+                bucket = "rank_ic_ok"
+                issue = "constrained_threshold_pred_long_rate"
+                track = "threshold_calibration"
+            elif np.isfinite(top_return) and top_return <= 0:
+                bucket = "rank_ic_ok"
+                issue = "top_10_payoff"
+                track = "score_band_policy"
+            else:
+                bucket = "rank_ic_ok"
+                issue = "ok"
+                track = "monitor"
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": _diagnostic_candidate_type(fold_scope),
+                    "fold_scope": fold_scope,
+                    "fold": int(row.get("fold")),
+                    "start": str(row.get("start", "")),
+                    "end": str(row.get("end", "")),
+                    "rank_ic": rank_ic,
+                    "rank_ic_mean": mean_rank,
+                    "rank_ic_std": std_rank,
+                    "rank_ic_zscore": zscore,
+                    "rank_ic_abs_zscore": abs_zscore,
+                    "rank_ic_variance_contribution": _float(row, "_rank_ic_variance_contribution"),
+                    "rank_ic_std_driver_rank": _float(row, "_rank_ic_std_driver_rank"),
+                    "rank_ic_bucket": bucket,
+                    "long_f1_050": _float(row, "long_f1"),
+                    "test_f1_at_selected_threshold": _float(row, "test_f1_at_selected_threshold"),
+                    "test_pred_long_rate_at_selected_threshold": _float(row, "test_pred_long_rate_at_selected_threshold"),
+                    "test_f1_at_constrained_threshold": constrained_f1,
+                    "test_pred_long_rate_at_constrained_threshold": constrained_rate,
+                    "top_10_lift_vs_base": _float(row, "top_10_lift_vs_base"),
+                    "top_10_forward_return": top_return,
+                    "primary_issue": issue,
+                    "recommended_track": track,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "rank_ic_variance_contribution"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _fold_stability_summary_frame(forensics: pd.DataFrame, config: dict[str, Any] | None = None) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "rank_ic_mean",
+        "rank_ic_std",
+        "negative_fold_count",
+        "bad_fold_count",
+        "top_5_variance_contribution",
+        "worst_fold",
+        "worst_fold_rank_ic",
+        "worst_fold_top_10_forward_return",
+        "constrained_f1_fail_fold_rate",
+        "constrained_pred_rate_fail_fold_rate",
+        "top_10_payoff_fail_fold_rate",
+        "main_blocker",
+    ]
+    if forensics.empty:
+        return pd.DataFrame(columns=columns)
+    min_long_f1 = float(_cfg(config or {}, ["validation", "min_long_f1"], 0.45))
+    max_pred_long_rate = float(_cfg(config or {}, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    rows = []
+    for (candidate, candidate_type, fold_scope), part in forensics.groupby(["candidate", "candidate_type", "fold_scope"]):
+        sorted_var = part.sort_values("rank_ic_variance_contribution", ascending=False)
+        worst = part.sort_values("rank_ic", ascending=True).iloc[0].to_dict()
+        constrained_f1_fail = pd.to_numeric(part["test_f1_at_constrained_threshold"], errors="coerce") < min_long_f1
+        constrained_rate_fail = pd.to_numeric(part["test_pred_long_rate_at_constrained_threshold"], errors="coerce") > max_pred_long_rate
+        top_payoff_fail = pd.to_numeric(part["top_10_forward_return"], errors="coerce") <= 0.0
+        issue_counts = part["primary_issue"].value_counts()
+        main_blocker = str(issue_counts.index[0]) if not issue_counts.empty else ""
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "fold_count": int(part["fold"].nunique()),
+                "rank_ic_mean": float(pd.to_numeric(part["rank_ic"], errors="coerce").mean()),
+                "rank_ic_std": float(pd.to_numeric(part["rank_ic"], errors="coerce").std(ddof=1)),
+                "negative_fold_count": int((pd.to_numeric(part["rank_ic"], errors="coerce") < 0.0).sum()),
+                "bad_fold_count": int((part["rank_ic_bucket"].astype(str) == "bad_rank_ic").sum()),
+                "top_5_variance_contribution": float(
+                    pd.to_numeric(sorted_var["rank_ic_variance_contribution"], errors="coerce").head(5).sum()
+                ),
+                "worst_fold": int(worst.get("fold")),
+                "worst_fold_rank_ic": _float(worst, "rank_ic"),
+                "worst_fold_top_10_forward_return": _float(worst, "top_10_forward_return"),
+                "constrained_f1_fail_fold_rate": float(constrained_f1_fail.mean()),
+                "constrained_pred_rate_fail_fold_rate": float(constrained_rate_fail.mean()),
+                "top_10_payoff_fail_fold_rate": float(top_payoff_fail.mean()),
+                "main_blocker": main_blocker,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(["candidate_type", "rank_ic_std"], ascending=[True, True]).reset_index(drop=True)
+
+
+def _threshold_forensics_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold",
+        "selected_threshold",
+        "test_f1_at_selected_threshold",
+        "test_pred_long_rate_at_selected_threshold",
+        "constrained_threshold",
+        "test_f1_at_constrained_threshold",
+        "test_pred_long_rate_at_constrained_threshold",
+        "test_oracle_best_f1",
+        "selected_f1_gap_vs_target",
+        "constrained_f1_gap_vs_target",
+        "selected_pred_rate_excess_vs_guardrail",
+        "constrained_pred_rate_excess_vs_guardrail",
+        "primary_issue",
+        "recommended_action",
+    ]
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    max_pred_long_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        threshold_metrics = (entry.get("diagnostics", {}) or {}).get("threshold_metrics")
+        if threshold_metrics is None or threshold_metrics.empty:
+            continue
+        candidate = str(entry.get("profile", ""))
+        for _, item in threshold_metrics.iterrows():
+            row = item.to_dict()
+            selected_f1 = _float(row, "test_f1_at_selected_threshold")
+            constrained_f1 = _float(row, "test_f1_at_constrained_threshold")
+            selected_rate = _float(row, "test_pred_long_rate_at_selected_threshold")
+            constrained_rate = _float(row, "test_pred_long_rate_at_constrained_threshold")
+            selected_gap = min_long_f1 - selected_f1
+            constrained_gap = min_long_f1 - constrained_f1
+            selected_rate_excess = selected_rate - max_pred_long_rate
+            constrained_rate_excess = constrained_rate - max_pred_long_rate
+            if np.isfinite(constrained_rate_excess) and constrained_rate_excess > 0:
+                issue = "constrained_pred_long_rate"
+                action = "raise_cv_threshold_or_reduce_score_compression"
+            elif np.isfinite(constrained_gap) and constrained_gap > 0:
+                issue = "constrained_f1"
+                action = "improve_score_ranking_or_calibration_before_phase2"
+            elif np.isfinite(selected_rate_excess) and selected_rate_excess > 0:
+                issue = "selected_threshold_too_broad"
+                action = "prefer_constrained_threshold_for_review"
+            elif np.isfinite(selected_gap) and selected_gap > 0:
+                issue = "selected_f1"
+                action = "improve_validation_threshold_transfer"
+            else:
+                issue = "ok"
+                action = "monitor"
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": _diagnostic_candidate_type(fold_scope),
+                    "fold_scope": fold_scope,
+                    "fold": int(row.get("fold")),
+                    "selected_threshold": _float(row, "selected_threshold"),
+                    "test_f1_at_selected_threshold": selected_f1,
+                    "test_pred_long_rate_at_selected_threshold": selected_rate,
+                    "constrained_threshold": _float(row, "constrained_threshold"),
+                    "test_f1_at_constrained_threshold": constrained_f1,
+                    "test_pred_long_rate_at_constrained_threshold": constrained_rate,
+                    "test_oracle_best_f1": _float(row, "test_oracle_best_f1"),
+                    "selected_f1_gap_vs_target": selected_gap,
+                    "constrained_f1_gap_vs_target": constrained_gap,
+                    "selected_pred_rate_excess_vs_guardrail": selected_rate_excess,
+                    "constrained_pred_rate_excess_vs_guardrail": constrained_rate_excess,
+                    "primary_issue": issue,
+                    "recommended_action": action,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "constrained_f1_gap_vs_target"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _forensics_markdown(title: str, frame: pd.DataFrame) -> str:
+    return _table_markdown(title, frame)
+
+
+def _write_forensics_reports(
+    path: Path,
+    *,
+    fold_stability_forensics: pd.DataFrame,
+    fold_stability_summary: pd.DataFrame,
+    threshold_forensics: pd.DataFrame,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    reports = [
+        ("fold_stability_forensics", "Fold Stability Forensics", fold_stability_forensics),
+        ("fold_stability_summary", "Fold Stability Summary", fold_stability_summary),
+        ("threshold_forensics", "Threshold Forensics", threshold_forensics),
+    ]
+    for stem, title, frame in reports:
+        frame.to_csv(path / f"{stem}.csv", index=False)
+        (path / f"{stem}.md").write_text(_forensics_markdown(title, frame), encoding="utf-8")
+        _write_json(path / f"{stem}.json", {"rows": frame.to_dict(orient="records")})
 
 
 def _assign_payoff_score_bins(predictions: pd.DataFrame, *, score_column: str, bins: int) -> pd.DataFrame:
@@ -5076,6 +5428,15 @@ def _write_experiment_bundle(
         "performance_gap_analysis.csv",
         "performance_gap_analysis.md",
         "performance_gap_analysis.json",
+        "fold_stability_forensics.csv",
+        "fold_stability_forensics.md",
+        "fold_stability_forensics.json",
+        "fold_stability_summary.csv",
+        "fold_stability_summary.md",
+        "fold_stability_summary.json",
+        "threshold_forensics.csv",
+        "threshold_forensics.md",
+        "threshold_forensics.json",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -5242,6 +5603,9 @@ def run_experiment_matrix(
         config,
         settings,
     )
+    fold_stability_forensics = _fold_stability_forensics_frame(all_results, config)
+    fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, config)
+    threshold_forensics = _threshold_forensics_frame(all_results, config)
     payoff_alignment = _payoff_alignment_frame(all_results, [], config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(all_results, [], config)
@@ -5256,6 +5620,12 @@ def run_experiment_matrix(
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_forensics_reports(
+        run_dir,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+    )
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
@@ -5296,6 +5666,12 @@ def run_experiment_matrix(
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
         "performance_gap_analysis": performance_gap_analysis.to_dict(orient="records"),
+        "fold_stability_summary": fold_stability_summary.to_dict(orient="records"),
+        "threshold_forensics_summary": (
+            threshold_forensics["primary_issue"].value_counts().to_dict()
+            if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
+            else {}
+        ),
         "payoff_alignment_summary": payoff_alignment_summary.to_dict(orient="records"),
         "payoff_policy_robustness_summary": payoff_policy_robustness_summary.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
@@ -5313,6 +5689,9 @@ def run_experiment_matrix(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "fold_stability_forensics": fold_stability_forensics,
+        "fold_stability_summary": fold_stability_summary,
+        "threshold_forensics": threshold_forensics,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
@@ -5550,6 +5929,9 @@ def write_experiment_diagnostics(
         diagnostic_config,
         settings,
     )
+    fold_stability_forensics = _fold_stability_forensics_frame(entries, diagnostic_config)
+    fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, diagnostic_config)
+    threshold_forensics = _threshold_forensics_frame(entries, diagnostic_config)
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
@@ -5561,6 +5943,12 @@ def write_experiment_diagnostics(
     )
     decision["future_oos_candidate_plan"] = future_oos_candidate_plan.to_dict(orient="records")
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
+    decision["fold_stability_summary"] = fold_stability_summary.to_dict(orient="records")
+    decision["threshold_forensics_summary"] = (
+        threshold_forensics["primary_issue"].value_counts().to_dict()
+        if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
+        else {}
+    )
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -5579,6 +5967,12 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
+    _write_forensics_reports(
+        report_dir,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+    )
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
@@ -5629,6 +6023,12 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_forensics_reports(
+        run_dir,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+    )
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -5673,6 +6073,9 @@ def write_experiment_diagnostics(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "fold_stability_forensics": fold_stability_forensics,
+        "fold_stability_summary": fold_stability_summary,
+        "threshold_forensics": threshold_forensics,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,

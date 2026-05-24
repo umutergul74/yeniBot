@@ -248,6 +248,60 @@ def _best_future_candidate(plan: pd.DataFrame) -> dict[str, Any]:
     return _json_ready(scored.iloc[0].to_dict())
 
 
+def _forensics_summary(
+    *,
+    fold_stability_summary: pd.DataFrame,
+    fold_stability_forensics: pd.DataFrame,
+    threshold_forensics: pd.DataFrame,
+    control_profile: str,
+) -> dict[str, Any]:
+    control_summary = {}
+    if not fold_stability_summary.empty and "candidate" in fold_stability_summary.columns:
+        matched = fold_stability_summary[
+            fold_stability_summary["candidate"].astype(str) == str(control_profile)
+        ]
+        if not matched.empty:
+            control_summary = _json_ready(matched.iloc[0].to_dict())
+
+    worst_control_fold = {}
+    top_std_driver = {}
+    if not fold_stability_forensics.empty and "candidate" in fold_stability_forensics.columns:
+        control_folds = fold_stability_forensics[
+            fold_stability_forensics["candidate"].astype(str) == str(control_profile)
+        ].copy()
+        if not control_folds.empty:
+            if "rank_ic" in control_folds.columns:
+                control_folds["rank_ic"] = pd.to_numeric(control_folds["rank_ic"], errors="coerce")
+                ranked = control_folds.dropna(subset=["rank_ic"]).sort_values("rank_ic", ascending=True)
+                if not ranked.empty:
+                    worst_control_fold = _json_ready(ranked.iloc[0].to_dict())
+            if "rank_ic_variance_contribution" in control_folds.columns:
+                control_folds["rank_ic_variance_contribution"] = pd.to_numeric(
+                    control_folds["rank_ic_variance_contribution"],
+                    errors="coerce",
+                )
+                ranked = control_folds.dropna(subset=["rank_ic_variance_contribution"]).sort_values(
+                    "rank_ic_variance_contribution",
+                    ascending=False,
+                )
+                if not ranked.empty:
+                    top_std_driver = _json_ready(ranked.iloc[0].to_dict())
+
+    issue_counts: dict[str, int] = {}
+    if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns:
+        issue_counts = {
+            str(key): int(value)
+            for key, value in threshold_forensics["primary_issue"].astype(str).value_counts().to_dict().items()
+        }
+
+    return {
+        "control_fold_stability_summary": control_summary,
+        "worst_control_fold": worst_control_fold,
+        "top_control_std_driver_fold": top_std_driver,
+        "threshold_issue_counts": issue_counts,
+    }
+
+
 def _next_action(
     *,
     missing_files: list[str],
@@ -503,6 +557,9 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
             "best_cv_blend_by_top_10_lift": review.get("blends", {}).get("best_top_10_lift_blend", {}),
             "best_holdout_diagnostic_by_mean_ic": review.get("holdout", {}).get("best", {}).get("best_mean_rank_ic", {}),
             "best_holdout_diagnostic_by_top_10_lift": review.get("holdout", {}).get("best", {}).get("best_top_10_lift", {}),
+            "control_fold_stability_summary": review.get("forensics", {}).get("control_fold_stability_summary", {}),
+            "top_control_std_driver_fold": review.get("forensics", {}).get("top_control_std_driver_fold", {}),
+            "threshold_issue_counts": review.get("forensics", {}).get("threshold_issue_counts", {}),
         },
         "future_oos": {
             "ready": bool(policy.get("future_oos_ready", False)),
@@ -523,6 +580,9 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     blends = _read_csv(report_path / "profile_blend.csv")
     holdout = _read_csv(report_path / "holdout_evaluation.csv")
     policy_plan = _read_csv(report_path / "future_oos_candidate_plan.csv")
+    fold_stability_summary = _read_csv(report_path / "fold_stability_summary.csv")
+    fold_stability_forensics = _read_csv(report_path / "fold_stability_forensics.csv")
+    threshold_forensics = _read_csv(report_path / "threshold_forensics.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
     missing_profiles = _selected_missing_profiles(report_path)
@@ -580,6 +640,12 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "candidate_count": int(len(policy_plan)) if not policy_plan.empty else 0,
             "best_candidate_plan_row": _best_future_candidate(policy_plan),
         },
+        "forensics": _forensics_summary(
+            fold_stability_summary=fold_stability_summary,
+            fold_stability_forensics=fold_stability_forensics,
+            threshold_forensics=threshold_forensics,
+            control_profile=control_profile,
+        ),
         "next_action": {
             "action": action,
             "reasons": reasons,
@@ -621,6 +687,9 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
     policy = review["holdout"]["policy"]
     phase2 = review.get("phase2_readiness", {})
     transition = review.get("phase1_transition_plan", {})
+    forensics = review.get("forensics", {}) or {}
+    fold_summary = forensics.get("control_fold_stability_summary", {}) or {}
+    std_driver = forensics.get("top_control_std_driver_fold", {}) or {}
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -672,6 +741,14 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         _row_metric_line(review["holdout"]["best"].get("best_mean_rank_ic", {})),
         "- Best holdout row by top-10 lift:",
         _row_metric_line(review["holdout"]["best"].get("best_top_10_lift", {})),
+        "",
+        "## Fold And Threshold Forensics",
+        f"- Control rank IC std: `{_fmt(fold_summary.get('rank_ic_std'))}`",
+        f"- Control bad folds: `{fold_summary.get('bad_fold_count', '')}`",
+        f"- Control negative folds: `{fold_summary.get('negative_fold_count', '')}`",
+        f"- Top std-driver fold: `{std_driver.get('fold', '')}` with rank IC `{_fmt(std_driver.get('rank_ic'))}`",
+        f"- Top std-driver issue: `{std_driver.get('primary_issue', '')}`",
+        f"- Threshold issue counts: `{forensics.get('threshold_issue_counts', {})}`",
         "",
         "## Interpretation",
         "- Treat current holdout results as diagnostics unless `future_oos_ready` is true.",

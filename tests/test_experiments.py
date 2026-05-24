@@ -15,6 +15,8 @@ from yenibot.experiments import (
     _best_profile_blend,
     _experiment_selection_frame,
     _experiment_policy_guard_frame,
+    _fold_stability_forensics_frame,
+    _fold_stability_summary_frame,
     _frozen_policy_monitoring_plan_frame,
     _frozen_policy_robustness_frame,
     _future_oos_candidate_plan_frame,
@@ -28,6 +30,7 @@ from yenibot.experiments import (
     _profile_blend_leaders,
     _profile_blend_predictions,
     _profile_blend_review_frame,
+    _threshold_forensics_frame,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -292,6 +295,9 @@ def test_future_oos_candidate_plan_records_ready_dates() -> None:
     assert set(plan["candidate"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
     assert plan["plan_rank"].tolist() == [1, 2, 3]
     assert set(plan["candidate_label"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
+    assert plan.loc[plan["plan_rank"].eq(2), "candidate"].iloc[0] == "blend_control_benchmark_65_35"
+    assert plan.loc[plan["candidate"].eq("retired_blend"), "candidate_status"].iloc[0] == "historical_retired_policy_do_not_promote"
+    assert bool(plan.loc[plan["candidate"].eq("retired_blend"), "promotion_allowed_now"].iloc[0]) is False
     assert plan["min_ready_at"].eq("2026-06-12 08:00:00+00:00").all()
     assert plan["preferred_ready_at"].eq("2026-08-11 08:00:00+00:00").all()
     future = plan.loc[plan["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
@@ -477,6 +483,108 @@ def test_performance_gap_reasons_separate_selected_and_constrained_f1() -> None:
     assert "cv_constrained_threshold_f1_below_target" in reasons
     assert "cv_selected_threshold_pred_long_rate_above_guardrail" in reasons
     assert "cv_rank_ic_std_above_phase1_target" in reasons
+
+
+def test_fold_stability_forensics_identifies_std_drivers() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "bad_fold_ic_threshold": -0.08,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "diagnostics": {
+            "fold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "rank_ic": 0.08, "long_f1": 0.30, "prauc": 0.35},
+                    {"fold": 1, "rank_ic": -0.12, "long_f1": 0.20, "prauc": 0.30},
+                    {"fold": 2, "rank_ic": 0.06, "long_f1": 0.31, "prauc": 0.36},
+                ]
+            ),
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": 0,
+                        "test_f1_at_selected_threshold": 0.47,
+                        "test_pred_long_rate_at_selected_threshold": 0.80,
+                        "test_f1_at_constrained_threshold": 0.44,
+                        "test_pred_long_rate_at_constrained_threshold": 0.62,
+                    },
+                    {
+                        "fold": 1,
+                        "test_f1_at_selected_threshold": 0.40,
+                        "test_pred_long_rate_at_selected_threshold": 0.82,
+                        "test_f1_at_constrained_threshold": 0.38,
+                        "test_pred_long_rate_at_constrained_threshold": 0.61,
+                    },
+                    {
+                        "fold": 2,
+                        "test_f1_at_selected_threshold": 0.46,
+                        "test_pred_long_rate_at_selected_threshold": 0.78,
+                        "test_f1_at_constrained_threshold": 0.46,
+                        "test_pred_long_rate_at_constrained_threshold": 0.60,
+                    },
+                ]
+            ),
+            "score_band_by_fold": pd.DataFrame(
+                [
+                    {"fold": 0, "band": "top_10", "lift_vs_base": 1.2, "mean_forward_return": 0.002},
+                    {"fold": 1, "band": "top_10", "lift_vs_base": 0.8, "mean_forward_return": -0.001},
+                    {"fold": 2, "band": "top_10", "lift_vs_base": 1.1, "mean_forward_return": 0.001},
+                ]
+            ),
+        },
+    }
+
+    forensics = _fold_stability_forensics_frame([entry], config)
+    summary = _fold_stability_summary_frame(forensics, config)
+
+    worst = forensics.sort_values("rank_ic").iloc[0]
+    assert worst["fold"] == 1
+    assert worst["rank_ic_bucket"] == "bad_rank_ic"
+    assert worst["primary_issue"] == "bad_rank_ic"
+    assert summary.iloc[0]["bad_fold_count"] == 1
+    assert summary.iloc[0]["negative_fold_count"] == 1
+
+
+def test_threshold_forensics_separates_selected_pred_rate_and_constrained_f1() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "diagnostics": {
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": 0,
+                        "selected_threshold": 0.30,
+                        "test_f1_at_selected_threshold": 0.47,
+                        "test_pred_long_rate_at_selected_threshold": 0.86,
+                        "constrained_threshold": 0.42,
+                        "test_f1_at_constrained_threshold": 0.43,
+                        "test_pred_long_rate_at_constrained_threshold": 0.64,
+                        "test_oracle_best_f1": 0.50,
+                    }
+                ]
+            )
+        },
+    }
+
+    frame = _threshold_forensics_frame([entry], config)
+
+    row = frame.iloc[0]
+    assert row["primary_issue"] == "constrained_f1"
+    assert row["selected_pred_rate_excess_vs_guardrail"] > 0
+    assert row["constrained_pred_rate_excess_vs_guardrail"] < 0
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -1925,6 +2033,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -1937,6 +2048,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -1949,6 +2063,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
     assert not diagnostics["performance_gap_analysis"].empty
+    assert not diagnostics["fold_stability_forensics"].empty
+    assert not diagnostics["fold_stability_summary"].empty
+    assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["payoff_alignment"].empty
     assert not diagnostics["payoff_alignment_summary"].empty
     assert not diagnostics["payoff_policy_robustness"].empty
@@ -2032,6 +2149,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()
         assert "matrix/performance_gap_analysis.csv" in archive.namelist()
+        assert "matrix/fold_stability_forensics.csv" in archive.namelist()
+        assert "matrix/fold_stability_summary.csv" in archive.namelist()
+        assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/payoff_alignment.csv" in archive.namelist()
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
@@ -2054,6 +2174,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/performance_gap_analysis.csv" in names
+    assert "matrix/fold_stability_forensics.csv" in names
+    assert "matrix/fold_stability_summary.csv" in names
+    assert "matrix/threshold_forensics.csv" in names
     assert "matrix/payoff_alignment.csv" in names
     assert "matrix/payoff_alignment_summary.csv" in names
     assert "matrix/payoff_policy_robustness.csv" in names
