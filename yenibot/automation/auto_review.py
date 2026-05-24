@@ -368,6 +368,103 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
+    control = review.get("cv", {}).get("control", {}) or {}
+    phase2 = review.get("phase2_readiness", {}) or {}
+    policy = review.get("holdout", {}).get("policy", {}) or {}
+    report_complete = bool(review.get("report_completeness", {}).get("complete", False))
+    leakage_ok = _to_bool(control.get("mtf_leakage_passed"), default=False)
+    stationarity_ok = _to_bool(control.get("stationarity_policy_passed"), default=False)
+    mean_rank_ic = _metric(control, "mean_rank_ic")
+    std_rank_ic = _metric(control, "std_rank_ic")
+    positive_ic_fraction = _metric(control, "positive_ic_fraction")
+    mean_long_f1 = _metric(control, "mean_long_f1")
+    selected_f1 = _metric(control, "test_f1_at_selected_threshold")
+    constrained_f1 = _metric(control, "test_f1_at_constrained_threshold")
+    calibration_separation = _metric(control, "calibration_separation")
+    signal_present = (
+        report_complete
+        and leakage_ok
+        and stationarity_ok
+        and mean_rank_ic is not None
+        and mean_rank_ic > 0.03
+        and positive_ic_fraction is not None
+        and positive_ic_fraction > 0.75
+        and calibration_separation is not None
+        and calibration_separation > 0.0
+    )
+    selected_threshold_near_phase2 = selected_f1 is not None and selected_f1 > 0.45
+    constrained_threshold_near_phase2 = constrained_f1 is not None and constrained_f1 > 0.42
+    research_ready = bool(signal_present and (selected_threshold_near_phase2 or constrained_threshold_near_phase2))
+    if bool(phase2.get("ready_for_phase2", False)):
+        decision = "READY_FOR_PHASE2_DESIGN"
+    elif research_ready:
+        decision = "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
+    else:
+        decision = "CONTINUE_PHASE1_SIGNAL_DEVELOPMENT"
+    metric_gaps = {
+        "mean_rank_ic_margin_vs_0_03": None if mean_rank_ic is None else mean_rank_ic - 0.03,
+        "rank_ic_std_excess_vs_0_03": None if std_rank_ic is None else std_rank_ic - 0.03,
+        "positive_ic_fraction_margin_vs_0_75": (
+            None if positive_ic_fraction is None else positive_ic_fraction - 0.75
+        ),
+        "mean_long_f1_gap_vs_0_45": None if mean_long_f1 is None else 0.45 - mean_long_f1,
+        "selected_threshold_f1_gap_vs_0_45": None if selected_f1 is None else 0.45 - selected_f1,
+        "constrained_threshold_f1_gap_vs_0_45": None if constrained_f1 is None else 0.45 - constrained_f1,
+        "future_oos_min_bars_remaining": policy.get("min_new_bars_remaining"),
+        "future_oos_preferred_bars_remaining": policy.get("preferred_new_bars_remaining"),
+    }
+    allowed_actions = [
+        "run_05_cpu_slim_only_to_monitor_reports",
+        "wait_for_future_unseen_oos_before_promotion",
+        "use_phase1_predictions_for_score_band_diagnostics_only",
+        "work_on_rank_ic_std_and_f1_blockers_inside_phase1",
+    ]
+    if research_ready:
+        allowed_actions.append("prepare_phase2_design_document_without_backtest_or_execution_code")
+    blocked_actions = [
+        "do_not_start_phase2_backtest",
+        "do_not_build_execution_or_live_bot",
+        "do_not_promote_profile_or_blend_from_current_holdout",
+        "do_not_tune_weights_against_current_holdout",
+        "do_not_relax_phase1_success_criteria_silently",
+    ]
+    recommended_focus = []
+    blockers = set(str(item) for item in phase2.get("blockers", []) or [])
+    if "rank_ic_std_above_phase1_target" in blockers:
+        recommended_focus.append("reduce_fold_to_fold_rank_ic_volatility")
+    if "long_f1_below_phase1_target" in blockers:
+        recommended_focus.append("improve_long_class_decision_quality_without_changing_labels_to_3class")
+    if "future_unseen_oos_not_ready" in blockers:
+        recommended_focus.append("wait_for_new_unseen_bars_before_any_promotion")
+    return {
+        "decision": decision,
+        "research_ready_without_phase2": research_ready,
+        "ready_for_phase2": bool(phase2.get("ready_for_phase2", False)),
+        "phase2_blockers": list(phase2.get("blockers", []) or []),
+        "metric_gaps": metric_gaps,
+        "allowed_actions": allowed_actions,
+        "blocked_actions": blocked_actions,
+        "recommended_focus": recommended_focus,
+        "watch_candidates": {
+            "control_profile": review.get("control_profile"),
+            "best_future_oos_candidate_plan_row": review.get("future_oos", {}).get("best_candidate_plan_row", {}),
+            "best_cv_blend_by_mean_ic": review.get("blends", {}).get("best_mean_rank_ic_blend", {}),
+            "best_cv_blend_by_top_10_lift": review.get("blends", {}).get("best_top_10_lift_blend", {}),
+            "best_holdout_diagnostic_by_mean_ic": review.get("holdout", {}).get("best", {}).get("best_mean_rank_ic", {}),
+            "best_holdout_diagnostic_by_top_10_lift": review.get("holdout", {}).get("best", {}).get("best_top_10_lift", {}),
+        },
+        "future_oos": {
+            "ready": bool(policy.get("future_oos_ready", False)),
+            "min_ready_at": policy.get("min_ready_at"),
+            "preferred_ready_at": policy.get("preferred_ready_at"),
+            "new_bars_since_anchor": policy.get("new_bars_since_anchor"),
+            "min_new_bars_remaining": policy.get("min_new_bars_remaining"),
+            "preferred_new_bars_remaining": policy.get("preferred_new_bars_remaining"),
+        },
+    }
+
+
 def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     """Create a deterministic review summary from a Phase 1 experiment report directory."""
     report_path = Path(report_dir)
@@ -441,6 +538,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "decision_recommendation": decision.get("recommendation"),
     }
     review["phase2_readiness"] = _phase2_readiness(review)
+    review["phase1_transition_plan"] = _phase1_transition_plan(review)
     return review
 
 
@@ -472,6 +570,7 @@ def _row_metric_line(row: dict[str, Any]) -> str:
 def auto_review_markdown(review: dict[str, Any]) -> str:
     policy = review["holdout"]["policy"]
     phase2 = review.get("phase2_readiness", {})
+    transition = review.get("phase1_transition_plan", {})
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -481,6 +580,7 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Do not promote from current holdout: `{review['next_action']['do_not_promote_from_current_holdout']}`",
         f"- Decision recommendation from diagnostics: `{review.get('decision_recommendation')}`",
         f"- Phase 2 readiness: `{phase2.get('decision')}`",
+        f"- Transition plan: `{transition.get('decision')}`",
         "",
         "## Report Completeness",
         f"- Complete: `{review['report_completeness']['complete']}`",
@@ -562,6 +662,48 @@ def phase2_readiness_markdown(readiness: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def phase1_transition_plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Phase 1 Transition Plan",
+        "",
+        f"- Decision: `{plan.get('decision')}`",
+        f"- Research ready without Phase 2: `{plan.get('research_ready_without_phase2')}`",
+        f"- Ready for Phase 2: `{plan.get('ready_for_phase2')}`",
+        f"- Phase 2 blockers: `{';'.join(plan.get('phase2_blockers', [])) or 'none'}`",
+        "",
+        "## Metric Gaps",
+        "",
+        "| metric | value |",
+        "| --- | --- |",
+    ]
+    for key, value in (plan.get("metric_gaps") or {}).items():
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "## Allowed Actions", ""])
+    for item in plan.get("allowed_actions", []) or []:
+        lines.append(f"- `{item}`")
+    lines.extend(["", "## Blocked Actions", ""])
+    for item in plan.get("blocked_actions", []) or []:
+        lines.append(f"- `{item}`")
+    lines.extend(["", "## Recommended Focus", ""])
+    for item in plan.get("recommended_focus", []) or []:
+        lines.append(f"- `{item}`")
+    future = plan.get("future_oos", {}) or {}
+    lines.extend(
+        [
+            "",
+            "## Future OOS",
+            "",
+            f"- Ready: `{future.get('ready')}`",
+            f"- New bars since anchor: `{future.get('new_bars_since_anchor')}`",
+            f"- Min bars remaining: `{future.get('min_new_bars_remaining')}`",
+            f"- Preferred bars remaining: `{future.get('preferred_new_bars_remaining')}`",
+            f"- Min ready at: `{future.get('min_ready_at')}`",
+            f"- Preferred ready at: `{future.get('preferred_ready_at')}`",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
     report_path = Path(report_dir)
     report_path.mkdir(parents=True, exist_ok=True)
@@ -571,11 +713,21 @@ def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
     auto_review_path.write_text(auto_review_markdown(review), encoding="utf-8")
     phase2_readiness_path = report_path / "phase2_readiness.json"
     phase2_readiness_md_path = report_path / "phase2_readiness.md"
+    transition_plan_path = report_path / "phase1_transition_plan.json"
+    transition_plan_md_path = report_path / "phase1_transition_plan.md"
     phase2_readiness_path.write_text(
         json.dumps(_json_ready(review["phase2_readiness"]), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     phase2_readiness_md_path.write_text(phase2_readiness_markdown(review["phase2_readiness"]), encoding="utf-8")
+    transition_plan_path.write_text(
+        json.dumps(_json_ready(review["phase1_transition_plan"]), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    transition_plan_md_path.write_text(
+        phase1_transition_plan_markdown(review["phase1_transition_plan"]),
+        encoding="utf-8",
+    )
     next_actions_path.write_text(
         json.dumps(_json_ready(review["next_action"]), indent=2, sort_keys=True),
         encoding="utf-8",
@@ -589,6 +741,8 @@ def write_auto_review(report_dir: str | Path) -> dict[str, Any]:
         "next_actions_path": str(next_actions_path),
         "phase2_readiness_path": str(phase2_readiness_path),
         "phase2_readiness_md_path": str(phase2_readiness_md_path),
+        "phase1_transition_plan_path": str(transition_plan_path),
+        "phase1_transition_plan_md_path": str(transition_plan_md_path),
     }
 
 

@@ -19,8 +19,13 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
                 "mean_rank_ic": 0.05,
                 "std_rank_ic": 0.07,
                 "positive_ic_fraction": 0.80,
+                "mean_long_f1": 0.31,
+                "test_f1_at_selected_threshold": 0.47,
                 "test_f1_at_constrained_threshold": 0.46,
+                "calibration_separation": 0.01,
                 "top_10_lift_global": 1.10,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
             },
             {
                 "profile": challenger,
@@ -28,8 +33,13 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
                 "mean_rank_ic": 0.052,
                 "std_rank_ic": 0.09,
                 "positive_ic_fraction": 0.70,
+                "mean_long_f1": 0.30,
+                "test_f1_at_selected_threshold": 0.45,
                 "test_f1_at_constrained_threshold": 0.44,
+                "calibration_separation": 0.01,
                 "top_10_lift_global": 1.14,
+                "mtf_leakage_passed": True,
+                "stationarity_policy_passed": True,
             },
         ]
     ).to_csv(path / "profile_comparison.csv", index=False)
@@ -139,6 +149,8 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
+    assert review["phase1_transition_plan"]["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
+    assert "do_not_start_phase2_backtest" in review["phase1_transition_plan"]["blocked_actions"]
 
 
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
@@ -160,8 +172,12 @@ def test_write_auto_review_outputs_files(tmp_path) -> None:
     assert (tmp_path / "next_actions.json").exists()
     assert (tmp_path / "phase2_readiness.json").exists()
     assert (tmp_path / "phase2_readiness.md").exists()
+    assert (tmp_path / "phase1_transition_plan.json").exists()
+    assert (tmp_path / "phase1_transition_plan.md").exists()
     next_actions = json.loads((tmp_path / "next_actions.json").read_text(encoding="utf-8"))
     assert next_actions["action"] == "wait_for_new_unseen_bars_keep_control"
     phase2 = json.loads((tmp_path / "phase2_readiness.json").read_text(encoding="utf-8"))
     assert phase2["decision"] == "DO_NOT_PROCEED_TO_PHASE2"
+    transition = json.loads((tmp_path / "phase1_transition_plan.json").read_text(encoding="utf-8"))
+    assert transition["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
     assert result["auto_review_path"].endswith("auto_review.md")

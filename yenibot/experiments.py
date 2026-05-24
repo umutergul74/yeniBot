@@ -5082,6 +5082,8 @@ def _write_experiment_bundle(
         "next_actions.json",
         "phase2_readiness.md",
         "phase2_readiness.json",
+        "phase1_transition_plan.md",
+        "phase1_transition_plan.json",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -5593,17 +5595,24 @@ def write_experiment_diagnostics(
     next_actions_path = Path(auto_review["next_actions_path"])
     phase2_readiness_path = Path(auto_review["phase2_readiness_path"])
     phase2_readiness_md_path = Path(auto_review["phase2_readiness_md_path"])
+    phase1_transition_plan_path = Path(auto_review["phase1_transition_plan_path"])
+    phase1_transition_plan_md_path = Path(auto_review["phase1_transition_plan_md_path"])
     shutil.copyfile(auto_review_path, Path(output_dir) / "latest_auto_review.md")
     shutil.copyfile(auto_review_json_path, Path(output_dir) / "latest_auto_review.json")
     shutil.copyfile(next_actions_path, Path(output_dir) / "latest_next_actions.json")
     shutil.copyfile(phase2_readiness_path, Path(output_dir) / "latest_phase2_readiness.json")
     shutil.copyfile(phase2_readiness_md_path, Path(output_dir) / "latest_phase2_readiness.md")
+    shutil.copyfile(phase1_transition_plan_path, Path(output_dir) / "latest_phase1_transition_plan.json")
+    shutil.copyfile(phase1_transition_plan_md_path, Path(output_dir) / "latest_phase1_transition_plan.md")
     decision["auto_review_path"] = str(auto_review_path)
     decision["auto_review_json_path"] = str(auto_review_json_path)
     decision["next_actions_path"] = str(next_actions_path)
     decision["phase2_readiness_path"] = str(phase2_readiness_path)
     decision["phase2_readiness_md_path"] = str(phase2_readiness_md_path)
     decision["phase2_readiness"] = auto_review["review"].get("phase2_readiness", {})
+    decision["phase1_transition_plan_path"] = str(phase1_transition_plan_path)
+    decision["phase1_transition_plan_md_path"] = str(phase1_transition_plan_md_path)
+    decision["phase1_transition_plan"] = auto_review["review"].get("phase1_transition_plan", {})
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
@@ -5685,4 +5694,6 @@ def write_experiment_diagnostics(
         "next_actions_path": str(next_actions_path),
         "phase2_readiness_path": str(phase2_readiness_path),
         "phase2_readiness_md_path": str(phase2_readiness_md_path),
+        "phase1_transition_plan_path": str(phase1_transition_plan_path),
+        "phase1_transition_plan_md_path": str(phase1_transition_plan_md_path),
     }

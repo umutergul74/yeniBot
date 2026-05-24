@@ -1985,6 +1985,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "next_actions.json").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase2_readiness.json").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase2_readiness.md").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_transition_plan.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_transition_plan.md").exists()
+    assert "phase1_transition_plan" in diagnostics["decision"]
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",
         "promote_best_candidate",
@@ -2013,6 +2016,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/auto_review.md" in archive.namelist()
         assert "matrix/next_actions.json" in archive.namelist()
         assert "matrix/phase2_readiness.json" in archive.namelist()
+        assert "matrix/phase1_transition_plan.json" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -2033,6 +2037,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/auto_review.md" in names
     assert "matrix/next_actions.json" in names
     assert "matrix/phase2_readiness.json" in names
+    assert "matrix/phase1_transition_plan.json" in names
     assert all("/diagnostics/" not in name for name in names)
 
     slim_only = write_experiment_diagnostics(
@@ -2051,6 +2056,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "auto_review.md").exists()
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "next_actions.json").exists()
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "phase2_readiness.json").exists()
+    assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "phase1_transition_plan.json").exists()
 
 
 def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tiny_config, tmp_path) -> None:
