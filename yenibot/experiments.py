@@ -3594,7 +3594,10 @@ def _phase1_blocker_action_plan_frame(
         requires_04=False,
         next_notebook="05",
         promotion_allowed_now=False,
-        source_files="threshold_forensics.csv;threshold_policy_review.csv;profile_comparison.csv;phase2_readiness.json",
+        source_files=(
+            "threshold_forensics.csv;threshold_policy_review.csv;threshold_transfer_review.csv;"
+            "profile_comparison.csv;phase2_readiness.json"
+        ),
         notes="This prevents an unrealistically broad long gate from masking deployment risk.",
     )
 
@@ -4466,6 +4469,442 @@ def _write_threshold_policy_review(path: Path, frame: pd.DataFrame) -> None:
     frame.to_csv(path / "threshold_policy_review.csv", index=False)
     (path / "threshold_policy_review.md").write_text(_threshold_policy_review_markdown(frame), encoding="utf-8")
     _write_json(path / "threshold_policy_review.json", {"rows": frame.to_dict(orient="records")})
+
+
+def _threshold_metrics_at_value(labels: pd.Series, scores: pd.Series, threshold: float) -> dict[str, float]:
+    labels_array = labels.astype(int).to_numpy()
+    scores_array = scores.astype(float).to_numpy()
+    predictions = scores_array >= float(threshold)
+    tp = int(((labels_array == 1) & predictions).sum())
+    fp = int(((labels_array == 0) & predictions).sum())
+    fn = int(((labels_array == 1) & ~predictions).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "pred_long_rate": float(predictions.mean()) if len(predictions) else 0.0,
+    }
+
+
+def _threshold_selection_stats(frame: pd.DataFrame, threshold: float) -> dict[str, float]:
+    if frame.empty or "prob_long" not in frame.columns or "label" not in frame.columns:
+        return {
+            "actual_long_rate": np.nan,
+            "label_lift_vs_base": np.nan,
+            "mean_forward_return": np.nan,
+            "mean_tb_return": np.nan,
+        }
+    scores = pd.to_numeric(frame["prob_long"], errors="coerce")
+    labels = pd.to_numeric(frame["label"], errors="coerce")
+    base_rate = float(labels.mean()) if labels.notna().any() else np.nan
+    selected = frame.loc[scores >= float(threshold)].copy()
+    if selected.empty:
+        return {
+            "actual_long_rate": 0.0,
+            "label_lift_vs_base": 0.0 if np.isfinite(base_rate) and base_rate > 0 else np.nan,
+            "mean_forward_return": np.nan,
+            "mean_tb_return": np.nan,
+        }
+    actual_rate = float(pd.to_numeric(selected["label"], errors="coerce").mean())
+    return {
+        "actual_long_rate": actual_rate,
+        "label_lift_vs_base": float(actual_rate / base_rate) if np.isfinite(base_rate) and base_rate > 0 else np.nan,
+        "mean_forward_return": (
+            float(pd.to_numeric(selected["forward_return"], errors="coerce").mean())
+            if "forward_return" in selected.columns
+            else np.nan
+        ),
+        "mean_tb_return": (
+            float(pd.to_numeric(selected["tb_return"], errors="coerce").mean())
+            if "tb_return" in selected.columns
+            else np.nan
+        ),
+    }
+
+
+def _ewma_last(values: list[float], *, alpha: float = 0.35) -> float:
+    finite = [float(value) for value in values if np.isfinite(value)]
+    if not finite:
+        return np.nan
+    state = finite[0]
+    for value in finite[1:]:
+        state = alpha * value + (1.0 - alpha) * state
+    return float(state)
+
+
+def _threshold_transfer_review_frames(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    by_fold_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold",
+        "threshold",
+        "threshold_source",
+        "threshold_history_count",
+        "selection_guard",
+        "validation_f1_at_policy_threshold",
+        "validation_precision_at_policy_threshold",
+        "validation_pred_long_rate_at_policy_threshold",
+        "test_f1",
+        "test_precision",
+        "test_recall",
+        "test_pred_long_rate",
+        "test_actual_long_rate",
+        "test_label_lift_vs_base",
+        "test_mean_forward_return",
+        "test_mean_tb_return",
+    ]
+    summary_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold_count",
+        "threshold_mean",
+        "threshold_std",
+        "threshold_history_mean",
+        "validation_f1",
+        "validation_precision",
+        "validation_pred_long_rate",
+        "test_f1",
+        "test_precision",
+        "test_recall",
+        "test_pred_long_rate",
+        "test_label_lift_vs_base",
+        "test_mean_forward_return",
+        "test_mean_tb_return",
+        "positive_lift_fold_rate",
+        "positive_forward_return_fold_rate",
+        "f1_delta_vs_official",
+        "pred_long_rate_delta_vs_official",
+        "precision_delta_vs_official",
+        "f1_passed",
+        "precision_passed",
+        "pred_long_rate_passed",
+        "policy_passed_cv_test",
+        "selection_guard",
+        "recommended_action",
+    ]
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    min_precision = float(threshold_cfg.get("min_precision", 0.30))
+    rows: list[dict[str, Any]] = []
+
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        if not {"fold", "label", "prob_long"}.issubset(predictions.columns):
+            continue
+        threshold_metrics = _entry_threshold_policy_frame(entry)
+        if threshold_metrics is None or threshold_metrics.empty or "fold" not in threshold_metrics.columns:
+            continue
+        metric_by_fold = {
+            int(row["fold"]): row.to_dict()
+            for _, row in threshold_metrics.dropna(subset=["fold"]).iterrows()
+        }
+        sorted_folds = sorted(metric_by_fold)
+        prior_constrained: list[float] = []
+        prior_selected: list[float] = []
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+
+        for fold in sorted_folds:
+            fold_part = predictions.loc[predictions["fold"].astype(int) == int(fold)].copy()
+            if fold_part.empty:
+                continue
+            if "split" in fold_part.columns:
+                validation = fold_part.loc[fold_part["split"].astype(str) == "val"].copy()
+                test = fold_part.loc[fold_part["split"].astype(str) == "test"].copy()
+            else:
+                validation = fold_part.copy()
+                test = fold_part.copy()
+            if test.empty:
+                continue
+            metrics_row = metric_by_fold[fold]
+            current_constrained = _float(metrics_row, "constrained_threshold")
+            current_selected = _float(metrics_row, "selected_threshold")
+            current_official = _float(metrics_row, "official_threshold", current_constrained)
+            policy_thresholds: list[dict[str, Any]] = [
+                {
+                    "policy_name": "official_threshold_policy",
+                    "policy_type": "current_fold_validation",
+                    "threshold": current_official,
+                    "threshold_source": str(metrics_row.get("official_threshold_source", "validation_constrained_threshold")),
+                    "threshold_history_count": 0,
+                    "selection_guard": "current_fold_validation_threshold_not_test",
+                },
+                {
+                    "policy_name": "validation_constrained_threshold",
+                    "policy_type": "current_fold_validation",
+                    "threshold": current_constrained,
+                    "threshold_source": "validation_constrained_threshold",
+                    "threshold_history_count": 0,
+                    "selection_guard": "current_fold_validation_threshold_not_test",
+                },
+                {
+                    "policy_name": "validation_selected_threshold",
+                    "policy_type": "current_fold_validation",
+                    "threshold": current_selected,
+                    "threshold_source": "validation_selected_threshold",
+                    "threshold_history_count": 0,
+                    "selection_guard": "current_fold_validation_threshold_not_test",
+                },
+            ]
+            if prior_constrained:
+                policy_thresholds.extend(
+                    [
+                        {
+                            "policy_name": "past_median_constrained_threshold",
+                            "policy_type": "causal_threshold_transfer",
+                            "threshold": float(np.median(prior_constrained)),
+                            "threshold_source": "historical_validation_constrained_thresholds",
+                            "threshold_history_count": len(prior_constrained),
+                            "selection_guard": "past_validation_thresholds_only_first_fold_skipped",
+                        },
+                        {
+                            "policy_name": "past_mean_constrained_threshold",
+                            "policy_type": "causal_threshold_transfer",
+                            "threshold": float(np.mean(prior_constrained)),
+                            "threshold_source": "historical_validation_constrained_thresholds",
+                            "threshold_history_count": len(prior_constrained),
+                            "selection_guard": "past_validation_thresholds_only_first_fold_skipped",
+                        },
+                        {
+                            "policy_name": "past_ewma_constrained_threshold",
+                            "policy_type": "causal_threshold_transfer",
+                            "threshold": _ewma_last(prior_constrained),
+                            "threshold_source": "historical_validation_constrained_thresholds",
+                            "threshold_history_count": len(prior_constrained),
+                            "selection_guard": "past_validation_thresholds_only_first_fold_skipped",
+                        },
+                        {
+                            "policy_name": "previous_fold_constrained_threshold",
+                            "policy_type": "causal_threshold_transfer",
+                            "threshold": float(prior_constrained[-1]),
+                            "threshold_source": "previous_validation_constrained_threshold",
+                            "threshold_history_count": 1,
+                            "selection_guard": "previous_fold_validation_threshold_only",
+                        },
+                    ]
+                )
+            if prior_selected:
+                policy_thresholds.append(
+                    {
+                        "policy_name": "past_median_selected_threshold",
+                        "policy_type": "causal_threshold_transfer",
+                        "threshold": float(np.median(prior_selected)),
+                        "threshold_source": "historical_validation_selected_thresholds",
+                        "threshold_history_count": len(prior_selected),
+                        "selection_guard": "past_validation_thresholds_only_first_fold_skipped",
+                    }
+                )
+
+            for policy in policy_thresholds:
+                threshold = float(policy["threshold"])
+                if not np.isfinite(threshold):
+                    continue
+                threshold = float(np.clip(threshold, 0.0, 1.0))
+                test_metrics = _threshold_metrics_at_value(test["label"], test["prob_long"], threshold)
+                selection_stats = _threshold_selection_stats(test, threshold)
+                if validation.empty:
+                    validation_metrics = {"f1": np.nan, "precision": np.nan, "pred_long_rate": np.nan}
+                else:
+                    validation_metrics = _threshold_metrics_at_value(
+                        validation["label"],
+                        validation["prob_long"],
+                        threshold,
+                    )
+                rows.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_type": candidate_type,
+                        "fold_scope": fold_scope,
+                        "policy_name": policy["policy_name"],
+                        "policy_type": policy["policy_type"],
+                        "fold": int(fold),
+                        "threshold": threshold,
+                        "threshold_source": policy["threshold_source"],
+                        "threshold_history_count": int(policy["threshold_history_count"]),
+                        "selection_guard": policy["selection_guard"],
+                        "validation_f1_at_policy_threshold": validation_metrics["f1"],
+                        "validation_precision_at_policy_threshold": validation_metrics["precision"],
+                        "validation_pred_long_rate_at_policy_threshold": validation_metrics["pred_long_rate"],
+                        "test_f1": test_metrics["f1"],
+                        "test_precision": test_metrics["precision"],
+                        "test_recall": test_metrics["recall"],
+                        "test_pred_long_rate": test_metrics["pred_long_rate"],
+                        "test_actual_long_rate": selection_stats["actual_long_rate"],
+                        "test_label_lift_vs_base": selection_stats["label_lift_vs_base"],
+                        "test_mean_forward_return": selection_stats["mean_forward_return"],
+                        "test_mean_tb_return": selection_stats["mean_tb_return"],
+                    }
+                )
+            if np.isfinite(current_constrained):
+                prior_constrained.append(float(current_constrained))
+            if np.isfinite(current_selected):
+                prior_selected.append(float(current_selected))
+
+    if not rows:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+
+    by_fold = (
+        pd.DataFrame(rows, columns=by_fold_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "policy_name", "fold"])
+        .reset_index(drop=True)
+    )
+    summaries: list[dict[str, Any]] = []
+    group_cols = ["candidate", "candidate_type", "fold_scope", "policy_name", "policy_type"]
+    for keys, part in by_fold.groupby(group_cols, dropna=False):
+        candidate, candidate_type, fold_scope, policy_name, policy_type = keys
+        official = by_fold.loc[
+            (by_fold["candidate"].astype(str) == str(candidate))
+            & (by_fold["fold_scope"].astype(str) == str(fold_scope))
+            & (by_fold["policy_name"].astype(str) == "official_threshold_policy")
+        ]
+        official_f1 = float(pd.to_numeric(official["test_f1"], errors="coerce").mean()) if not official.empty else np.nan
+        official_rate = (
+            float(pd.to_numeric(official["test_pred_long_rate"], errors="coerce").mean())
+            if not official.empty
+            else np.nan
+        )
+        official_precision = (
+            float(pd.to_numeric(official["test_precision"], errors="coerce").mean())
+            if not official.empty
+            else np.nan
+        )
+        test_f1 = float(pd.to_numeric(part["test_f1"], errors="coerce").mean())
+        test_precision = float(pd.to_numeric(part["test_precision"], errors="coerce").mean())
+        test_pred_rate = float(pd.to_numeric(part["test_pred_long_rate"], errors="coerce").mean())
+        f1_passed = bool(np.isfinite(test_f1) and test_f1 > min_long_f1)
+        precision_passed = bool(np.isfinite(test_precision) and test_precision >= min_precision)
+        rate_passed = bool(np.isfinite(test_pred_rate) and test_pred_rate <= max_pred_long_rate)
+        policy_passed = bool(f1_passed and precision_passed and rate_passed)
+        f1_delta = test_f1 - official_f1 if np.isfinite(official_f1) else np.nan
+        rate_delta = test_pred_rate - official_rate if np.isfinite(official_rate) else np.nan
+        precision_delta = test_precision - official_precision if np.isfinite(official_precision) else np.nan
+        if policy_passed and np.isfinite(f1_delta) and f1_delta >= 0.005:
+            action = "pre_register_for_future_oos_threshold_policy"
+        elif not rate_passed:
+            action = "reject_threshold_too_broad"
+        elif not f1_passed:
+            action = "score_separation_gap_not_threshold_only"
+        elif np.isfinite(f1_delta) and f1_delta < -0.005:
+            action = "reject_weaker_than_official"
+        else:
+            action = "monitor_no_clear_advantage"
+        summaries.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "policy_name": policy_name,
+                "policy_type": policy_type,
+                "fold_count": int(part["fold"].nunique()),
+                "threshold_mean": float(pd.to_numeric(part["threshold"], errors="coerce").mean()),
+                "threshold_std": float(pd.to_numeric(part["threshold"], errors="coerce").std(ddof=0)),
+                "threshold_history_mean": float(pd.to_numeric(part["threshold_history_count"], errors="coerce").mean()),
+                "validation_f1": float(pd.to_numeric(part["validation_f1_at_policy_threshold"], errors="coerce").mean()),
+                "validation_precision": float(pd.to_numeric(part["validation_precision_at_policy_threshold"], errors="coerce").mean()),
+                "validation_pred_long_rate": float(
+                    pd.to_numeric(part["validation_pred_long_rate_at_policy_threshold"], errors="coerce").mean()
+                ),
+                "test_f1": test_f1,
+                "test_precision": test_precision,
+                "test_recall": float(pd.to_numeric(part["test_recall"], errors="coerce").mean()),
+                "test_pred_long_rate": test_pred_rate,
+                "test_label_lift_vs_base": float(pd.to_numeric(part["test_label_lift_vs_base"], errors="coerce").mean()),
+                "test_mean_forward_return": float(pd.to_numeric(part["test_mean_forward_return"], errors="coerce").mean()),
+                "test_mean_tb_return": float(pd.to_numeric(part["test_mean_tb_return"], errors="coerce").mean()),
+                "positive_lift_fold_rate": float((pd.to_numeric(part["test_label_lift_vs_base"], errors="coerce") > 1.0).mean()),
+                "positive_forward_return_fold_rate": float(
+                    (pd.to_numeric(part["test_mean_forward_return"], errors="coerce") > 0.0).mean()
+                ),
+                "f1_delta_vs_official": f1_delta,
+                "pred_long_rate_delta_vs_official": rate_delta,
+                "precision_delta_vs_official": precision_delta,
+                "f1_passed": f1_passed,
+                "precision_passed": precision_passed,
+                "pred_long_rate_passed": rate_passed,
+                "policy_passed_cv_test": policy_passed,
+                "selection_guard": ";".join(sorted({str(value) for value in part["selection_guard"].dropna()})),
+                "recommended_action": action,
+            }
+        )
+    summary = (
+        pd.DataFrame(summaries, columns=summary_columns)
+        .sort_values(
+            ["candidate_type", "candidate", "fold_scope", "policy_passed_cv_test", "test_f1", "test_pred_long_rate"],
+            ascending=[True, True, True, False, False, True],
+        )
+        .reset_index(drop=True)
+    )
+    return summary, by_fold
+
+
+def _threshold_transfer_review_markdown(summary: pd.DataFrame, by_fold: pd.DataFrame) -> str:
+    lines = ["# Threshold Transfer Review", ""]
+    if summary.empty:
+        lines.append("No threshold transfer rows were produced.")
+        return "\n".join(lines)
+    lines.append(
+        "This report compares current validation thresholds with causal threshold-transfer policies "
+        "built only from prior validation folds. It is diagnostic only and must not override Phase 1 gates."
+    )
+    lines.append("")
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "policy_name",
+        "fold_count",
+        "test_f1",
+        "test_precision",
+        "test_pred_long_rate",
+        "f1_delta_vs_official",
+        "test_label_lift_vs_base",
+        "positive_lift_fold_rate",
+        "policy_passed_cv_test",
+        "recommended_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    if not by_fold.empty:
+        lines.append("")
+        lines.append(f"By-fold rows: {len(by_fold)}. See `threshold_transfer_by_fold.csv` for fold-level evidence.")
+    return "\n".join(lines)
+
+
+def _write_threshold_transfer_review(path: Path, summary: pd.DataFrame, by_fold: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(path / "threshold_transfer_review.csv", index=False)
+    by_fold.to_csv(path / "threshold_transfer_by_fold.csv", index=False)
+    (path / "threshold_transfer_review.md").write_text(
+        _threshold_transfer_review_markdown(summary, by_fold),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "threshold_transfer_review.json",
+        {
+            "summary": summary.to_dict(orient="records"),
+            "by_fold": by_fold.to_dict(orient="records"),
+        },
+    )
 
 
 def _forensics_markdown(title: str, frame: pd.DataFrame) -> str:
@@ -6573,6 +7012,10 @@ def _write_experiment_bundle(
         "threshold_policy_review.csv",
         "threshold_policy_review.md",
         "threshold_policy_review.json",
+        "threshold_transfer_review.csv",
+        "threshold_transfer_review.md",
+        "threshold_transfer_review.json",
+        "threshold_transfer_by_fold.csv",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -6743,6 +7186,7 @@ def run_experiment_matrix(
     fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, config)
     threshold_forensics = _threshold_forensics_frame(all_results, config)
     threshold_policy_review = _threshold_policy_review_frame(all_results, config)
+    threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(all_results, config)
     payoff_alignment = _payoff_alignment_frame(all_results, [], config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(all_results, [], config)
@@ -6778,6 +7222,7 @@ def run_experiment_matrix(
         threshold_forensics=threshold_forensics,
     )
     _write_threshold_policy_review(run_dir, threshold_policy_review)
+    _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
@@ -6826,6 +7271,7 @@ def run_experiment_matrix(
             else {}
         ),
         "threshold_policy_review": threshold_policy_review.to_dict(orient="records"),
+        "threshold_transfer_review": threshold_transfer_review.to_dict(orient="records"),
         "payoff_alignment_summary": payoff_alignment_summary.to_dict(orient="records"),
         "payoff_policy_robustness_summary": payoff_policy_robustness_summary.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
@@ -6848,6 +7294,8 @@ def run_experiment_matrix(
         "fold_stability_summary": fold_stability_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
+        "threshold_transfer_review": threshold_transfer_review,
+        "threshold_transfer_by_fold": threshold_transfer_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
@@ -7089,6 +7537,7 @@ def write_experiment_diagnostics(
     fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, diagnostic_config)
     threshold_forensics = _threshold_forensics_frame(entries, diagnostic_config)
     threshold_policy_review = _threshold_policy_review_frame(entries, diagnostic_config)
+    threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(entries, diagnostic_config)
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
@@ -7107,6 +7556,7 @@ def write_experiment_diagnostics(
         else {}
     )
     decision["threshold_policy_review"] = threshold_policy_review.to_dict(orient="records")
+    decision["threshold_transfer_review"] = threshold_transfer_review.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -7132,6 +7582,7 @@ def write_experiment_diagnostics(
         threshold_forensics=threshold_forensics,
     )
     _write_threshold_policy_review(report_dir, threshold_policy_review)
+    _write_threshold_transfer_review(report_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
@@ -7198,6 +7649,7 @@ def write_experiment_diagnostics(
         threshold_forensics=threshold_forensics,
     )
     _write_threshold_policy_review(run_dir, threshold_policy_review)
+    _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -7247,6 +7699,8 @@ def write_experiment_diagnostics(
         "fold_stability_summary": fold_stability_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
+        "threshold_transfer_review": threshold_transfer_review,
+        "threshold_transfer_by_fold": threshold_transfer_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,

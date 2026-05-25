@@ -32,6 +32,7 @@ from yenibot.experiments import (
     _profile_blend_review_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
+    _threshold_transfer_review_frames,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -705,6 +706,55 @@ def test_threshold_policy_review_lists_validation_selected_constrained_and_caps(
     assert bool(selected["pred_long_rate_passed"]) is False
     constrained = frame.loc[frame["policy_name"] == "validation_constrained_threshold"].iloc[0]
     assert constrained["source_selection_metric"] == "source_constrained_f1"
+
+
+def test_threshold_transfer_review_uses_prior_fold_thresholds_only() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        }
+    }
+    rows = []
+    for fold in range(3):
+        for split in ("val", "test"):
+            for idx, score in enumerate([0.20, 0.35, 0.55, 0.80]):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(hours=fold * 10 + idx),
+                        "label": int(idx >= 2),
+                        "prob_long": score + fold * 0.01,
+                        "forward_return": 0.001 * (idx - 1),
+                        "tb_return": 0.002 * idx,
+                    }
+                )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "selected_threshold": 0.30, "constrained_threshold": 0.40},
+                    {"fold": 1, "selected_threshold": 0.50, "constrained_threshold": 0.60},
+                    {"fold": 2, "selected_threshold": 0.70, "constrained_threshold": 0.80},
+                ]
+            )
+        },
+    }
+
+    summary, by_fold = _threshold_transfer_review_frames([entry], config)
+
+    median_rows = by_fold.loc[by_fold["policy_name"] == "past_median_constrained_threshold"]
+    assert median_rows["fold"].tolist() == [1, 2]
+    assert float(median_rows.loc[median_rows["fold"] == 1, "threshold"].iloc[0]) == pytest.approx(0.40)
+    assert float(median_rows.loc[median_rows["fold"] == 2, "threshold"].iloc[0]) == pytest.approx(0.50)
+    assert set(median_rows["selection_guard"]) == {"past_validation_thresholds_only_first_fold_skipped"}
+    summary_row = summary.loc[summary["policy_name"] == "past_median_constrained_threshold"].iloc[0]
+    assert int(summary_row["fold_count"]) == 2
+    assert "test_f1" in summary.columns
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -2159,6 +2209,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_by_fold.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -2176,6 +2228,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_by_fold.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -2193,6 +2247,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["fold_stability_summary"].empty
     assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["threshold_policy_review"].empty
+    assert not diagnostics["threshold_transfer_review"].empty
+    assert not diagnostics["threshold_transfer_by_fold"].empty
     assert not diagnostics["payoff_alignment"].empty
     assert not diagnostics["payoff_alignment_summary"].empty
     assert not diagnostics["payoff_policy_robustness"].empty
@@ -2218,6 +2274,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "test_f1_at_official_threshold" in diagnostics["comparison"].columns
     assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
+    assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
+    assert "threshold_transfer_review" in diagnostics["decision"]
     assert "profile_calibrated_threshold_summary.csv" in {
         path.name for path in (tmp_path / "reports" / "experiments" / "matrix").iterdir()
     }
@@ -2298,6 +2356,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
+        assert "matrix/threshold_transfer_review.csv" in archive.namelist()
+        assert "matrix/threshold_transfer_by_fold.csv" in archive.namelist()
         assert "matrix/payoff_alignment.csv" in archive.namelist()
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
@@ -2326,6 +2386,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/fold_stability_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
     assert "matrix/threshold_policy_review.csv" in names
+    assert "matrix/threshold_transfer_review.csv" in names
+    assert "matrix/threshold_transfer_by_fold.csv" in names
     assert "matrix/payoff_alignment.csv" in names
     assert "matrix/payoff_alignment_summary.csv" in names
     assert "matrix/payoff_policy_robustness.csv" in names
