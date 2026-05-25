@@ -2013,6 +2013,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "resume_existing": True,
         "force_retrain": False,
     }
+    config["validation"]["calibration"] = {"enabled": True, "method": "isotonic"}
     frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
 
     result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="matrix", device="cpu")
@@ -2088,9 +2089,13 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "promotion_allowed_now",
         "source_files",
     }.issubset(diagnostics["phase1_blocker_action_plan"].columns)
-    assert {"fold_stability", "guarded_threshold_f1", "future_unseen_oos"}.issubset(
+    assert {"fold_stability", "official_threshold_f1", "future_unseen_oos"}.issubset(
         set(diagnostics["phase1_blocker_action_plan"]["blocker"])
     )
+    assert "test_f1_at_official_threshold" in diagnostics["comparison"].columns
+    assert "profile_calibrated_threshold_summary.csv" in {
+        path.name for path in (tmp_path / "reports" / "experiments" / "matrix").iterdir()
+    }
     assert {
         "candidate",
         "evaluation_scope",
@@ -2163,6 +2168,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_blend.csv" in archive.namelist()
         assert "matrix/performance_gap_analysis.csv" in archive.namelist()
         assert "matrix/phase1_blocker_action_plan.csv" in archive.namelist()
+        assert "matrix/profile_calibrated_threshold_summary.csv" in archive.namelist()
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
@@ -2189,6 +2195,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/performance_gap_analysis.csv" in names
     assert "matrix/phase1_blocker_action_plan.csv" in names
+    assert "matrix/profile_calibrated_threshold_summary.csv" in names
     assert "matrix/fold_stability_forensics.csv" in names
     assert "matrix/fold_stability_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names

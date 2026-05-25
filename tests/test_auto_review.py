@@ -170,6 +170,25 @@ def test_auto_review_uses_guarded_f1_when_selected_threshold_is_too_broad(tmp_pa
     assert "long_f1_below_phase1_target" in review["phase2_readiness"]["blockers"]
 
 
+def test_auto_review_uses_official_calibrated_threshold_when_available(tmp_path) -> None:
+    _write_minimal_report(tmp_path)
+    comparison = pd.read_csv(tmp_path / "profile_comparison.csv")
+    mask = comparison["profile"] == "control_profile"
+    comparison.loc[mask, "test_f1_at_guarded_threshold"] = 0.43
+    comparison.loc[mask, "test_pred_long_rate_at_guarded_threshold"] = 0.64
+    comparison.loc[mask, "guarded_threshold_source"] = "validation_constrained_threshold"
+    comparison.loc[mask, "test_f1_at_official_threshold"] = 0.455
+    comparison.loc[mask, "test_pred_long_rate_at_official_threshold"] = 0.63
+    comparison.loc[mask, "official_threshold_source"] = "calibrated_validation_constrained_threshold"
+    comparison.loc[mask, "official_threshold_uses_calibration"] = True
+    comparison.to_csv(tmp_path / "profile_comparison.csv", index=False)
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["phase2_readiness"]["long_f1_source"] == "calibrated_validation_constrained_threshold"
+    assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
+
+
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
     _write_minimal_report(tmp_path, missing_selected=True)
 

@@ -1,6 +1,6 @@
 """Diagnostics and validation metrics."""
 
-from yenibot.diagnostics.calibration import calibrate_test_probabilities_from_val
+from yenibot.diagnostics.calibration import calibrate_split_probabilities_from_val, calibrate_test_probabilities_from_val
 from yenibot.diagnostics.metrics import (
     calibration_table,
     classification_metrics,
@@ -61,6 +61,7 @@ __all__ = [
     "bad_fold_group_forensics_summary",
     "bad_fold_regime_diagnostics",
     "calibrate_test_probabilities_from_val",
+    "calibrate_split_probabilities_from_val",
     "calibration_table",
     "classify_feature_column",
     "classification_metrics",

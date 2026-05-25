@@ -20,7 +20,7 @@ import torch
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
     calibration_table,
-    calibrate_test_probabilities_from_val,
+    calibrate_split_probabilities_from_val,
     bad_fold_regime_diagnostics,
     experiment_ledger_diagnostics,
     feature_group_diagnostics,
@@ -716,6 +716,151 @@ def _test_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
     return predictions.copy()
 
 
+def _threshold_guard_from_report(report: dict[str, Any], *, prefix: str = "") -> dict[str, Any]:
+    guarded = report.get("threshold_guarded", {}) or {}
+    source = str(guarded.get("threshold_source", ""))
+    if prefix and source:
+        source = f"{prefix}_{source}"
+    return {
+        "threshold_source": source,
+        "reject_reason": str(guarded.get("reject_reason", "")),
+        "threshold_mean": guarded.get("threshold_mean", np.nan),
+        "f1": guarded.get("test_f1_at_guarded_threshold", np.nan),
+        "precision": guarded.get("test_precision_at_guarded_threshold", np.nan),
+        "recall": guarded.get("test_recall_at_guarded_threshold", np.nan),
+        "pred_long_rate": guarded.get("test_pred_long_rate_at_guarded_threshold", np.nan),
+        "passed": bool(report.get("passed_threshold_guarded", False)),
+    }
+
+
+def _threshold_summary_metric(threshold_summary: pd.DataFrame | None, metric: str) -> float:
+    if threshold_summary is None or threshold_summary.empty:
+        return np.nan
+    if "metric" not in threshold_summary.columns or "mean" not in threshold_summary.columns:
+        return np.nan
+    row = threshold_summary.loc[threshold_summary["metric"].astype(str) == str(metric)]
+    if row.empty:
+        return np.nan
+    return _float(row.iloc[0].to_dict(), "mean")
+
+
+def _threshold_selection_score(
+    threshold_summary: pd.DataFrame | None,
+    source: str,
+) -> float:
+    if "constrained" in str(source):
+        score = _threshold_summary_metric(threshold_summary, "source_constrained_f1")
+        if np.isfinite(score):
+            return score
+    score = _threshold_summary_metric(threshold_summary, "source_best_f1")
+    if np.isfinite(score):
+        return score
+    return np.nan
+
+
+def _threshold_candidate_is_guarded(
+    candidate: dict[str, Any],
+    *,
+    max_pred_long_rate: float,
+    min_precision: float,
+) -> bool:
+    f1 = _optional_float(candidate.get("f1"))
+    precision = _optional_float(candidate.get("precision"))
+    pred_rate = _optional_float(candidate.get("pred_long_rate"))
+    return bool(
+        f1 is not None
+        and precision is not None
+        and pred_rate is not None
+        and pred_rate <= max_pred_long_rate
+        and precision >= min_precision
+    )
+
+
+def _select_official_threshold_candidate(
+    *,
+    raw_report: dict[str, Any],
+    raw_threshold_summary: pd.DataFrame | None,
+    calibrated_threshold_report: dict[str, Any] | None,
+    calibrated_threshold_summary: pd.DataFrame | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    min_precision = float(threshold_cfg.get("min_precision", 0.30))
+    raw_candidate = _threshold_guard_from_report(raw_report)
+    raw_candidate["candidate_order"] = 0
+    raw_candidate["selection_score"] = _threshold_selection_score(
+        raw_threshold_summary,
+        str(raw_candidate.get("threshold_source", "")),
+    )
+    candidates = [raw_candidate]
+    if calibrated_threshold_report:
+        calibrated_candidate = _threshold_guard_from_report(calibrated_threshold_report, prefix="calibrated")
+        calibrated_candidate["candidate_order"] = 1
+        calibrated_candidate["selection_score"] = _threshold_selection_score(
+            calibrated_threshold_summary,
+            str(calibrated_candidate.get("threshold_source", "")),
+        )
+        candidates.append(calibrated_candidate)
+    guarded_candidates = [
+        candidate
+        for candidate in candidates
+        if _threshold_candidate_is_guarded(
+            candidate,
+            max_pred_long_rate=max_pred_long_rate,
+            min_precision=min_precision,
+        )
+    ]
+    if guarded_candidates:
+        selected = max(
+            guarded_candidates,
+            key=lambda item: (
+                _optional_float(item.get("selection_score")) or -np.inf,
+                -int(item.get("candidate_order", 999) or 999),
+            ),
+        )
+    else:
+        selected = candidates[0]
+    selected = dict(selected)
+    selected["uses_calibration"] = str(selected.get("threshold_source", "")).startswith("calibrated_")
+    selected["candidate_count"] = len(candidates)
+    selected["guarded_candidate_count"] = len(guarded_candidates)
+    return selected
+
+
+def _apply_official_threshold_fields(
+    row: dict[str, Any],
+    ledger: pd.DataFrame,
+    *,
+    official: dict[str, Any],
+    calibrated: dict[str, Any] | None = None,
+) -> None:
+    calibrated = calibrated or {}
+    additions = {
+        "official_threshold_source": str(official.get("threshold_source", "")),
+        "official_threshold_reason": str(official.get("reject_reason", "")),
+        "official_threshold_mean": official.get("threshold_mean", np.nan),
+        "test_f1_at_official_threshold": official.get("f1", np.nan),
+        "test_precision_at_official_threshold": official.get("precision", np.nan),
+        "test_recall_at_official_threshold": official.get("recall", np.nan),
+        "test_pred_long_rate_at_official_threshold": official.get("pred_long_rate", np.nan),
+        "official_threshold_uses_calibration": bool(official.get("uses_calibration", False)),
+        "official_threshold_candidate_count": int(official.get("candidate_count", 1) or 1),
+        "official_threshold_guarded_candidate_count": int(official.get("guarded_candidate_count", 0) or 0),
+        "official_threshold_selection_score": official.get("selection_score", np.nan),
+        "calibrated_guarded_threshold_source": str(calibrated.get("threshold_source", "")),
+        "calibrated_guarded_threshold_reason": str(calibrated.get("reject_reason", "")),
+        "calibrated_guarded_threshold_mean": calibrated.get("threshold_mean", np.nan),
+        "test_f1_at_calibrated_guarded_threshold": calibrated.get("f1", np.nan),
+        "test_precision_at_calibrated_guarded_threshold": calibrated.get("precision", np.nan),
+        "test_recall_at_calibrated_guarded_threshold": calibrated.get("recall", np.nan),
+        "test_pred_long_rate_at_calibrated_guarded_threshold": calibrated.get("pred_long_rate", np.nan),
+    }
+    row.update(additions)
+    for column, value in additions.items():
+        ledger.loc[:, column] = value
+
+
 def summarize_profile_predictions(
     predictions: pd.DataFrame,
     config: dict[str, Any],
@@ -753,18 +898,45 @@ def summarize_profile_predictions(
     calibrated_report = None
     calibrated_calibration = pd.DataFrame()
     calibrated_predictions = pd.DataFrame()
+    calibrated_threshold_report = None
+    calibrated_threshold_metrics = pd.DataFrame()
+    calibrated_threshold_summary = pd.DataFrame()
     calibration_cfg = _cfg(profile_cfg, ["validation", "calibration"], {}) or {}
     if bool(calibration_cfg.get("enabled", False)):
         try:
-            calibrated_predictions, calibrated_report, calibrated_calibration = calibrate_test_probabilities_from_val(
+            calibration_method = str(calibration_cfg.get("method", "isotonic"))
+            calibrated_splits = calibrate_split_probabilities_from_val(
                 predictions,
+                method=calibration_method,
+            )
+            calibrated_predictions = calibrated_splits[calibrated_splits["split"] == "test"].copy()
+            report_frame = calibrated_predictions.copy()
+            report_frame["prob_long"] = report_frame["prob_long_calibrated"]
+            calibrated_report = phase1_report(report_frame, profile_cfg)
+            calibrated_calibration = calibration_table(
+                report_frame["label"],
+                report_frame["prob_long"],
+                bins=int(_cfg(profile_cfg, ["validation", "calibration_bins"], 10)),
+            )
+            calibrated_threshold_metrics = threshold_diagnostics(
+                calibrated_splits,
+                score_column="prob_long_calibrated",
+                max_pred_long_rate=float(threshold_cfg.get("max_pred_long_rate", 0.70)),
+                min_precision=float(threshold_cfg.get("min_precision", 0.30)),
+            )
+            calibrated_threshold_summary = threshold_summary_diagnostics(calibrated_threshold_metrics)
+            calibrated_threshold_report = attach_threshold_summary_to_phase1_report(
+                dict(calibrated_report),
+                calibrated_threshold_summary,
                 profile_cfg,
-                method=str(calibration_cfg.get("method", "isotonic")),
             )
         except ValueError:
             calibrated_report = None
             calibrated_calibration = pd.DataFrame()
             calibrated_predictions = pd.DataFrame()
+            calibrated_threshold_report = None
+            calibrated_threshold_metrics = pd.DataFrame()
+            calibrated_threshold_summary = pd.DataFrame()
     score_bins = int(_cfg(profile_cfg, ["validation", "score_lift_bins"], _cfg(profile_cfg, ["validation", "calibration_bins"], 10)))
     score_bands = _cfg(profile_cfg, ["validation", "score_bands"], None)
     policy_cfg = _cfg(profile_cfg, ["validation", "policy_selection"], {}) or {}
@@ -812,6 +984,36 @@ def summarize_profile_predictions(
         reject_reason=reject_reason,
     )
     row = ledger.iloc[0].to_dict()
+    calibrated_guard = (
+        _threshold_guard_from_report(calibrated_threshold_report, prefix="calibrated")
+        if calibrated_threshold_report
+        else {}
+    )
+    official_threshold = _select_official_threshold_candidate(
+        raw_report=report,
+        raw_threshold_summary=threshold_summary,
+        calibrated_threshold_report=calibrated_threshold_report,
+        calibrated_threshold_summary=calibrated_threshold_summary,
+        config=profile_cfg,
+    )
+    _apply_official_threshold_fields(
+        row,
+        ledger,
+        official=official_threshold,
+        calibrated=calibrated_guard,
+    )
+    min_long_f1 = float(_cfg(profile_cfg, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(profile_cfg, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    official_f1 = _optional_float(row.get("test_f1_at_official_threshold"))
+    official_pred_rate = _optional_float(row.get("test_pred_long_rate_at_official_threshold"))
+    official_checks = dict(report.get("checks", {}) or {})
+    official_checks["long_f1"] = bool(official_f1 is not None and official_f1 > min_long_f1)
+    official_checks["threshold_pred_long_rate"] = bool(
+        official_pred_rate is not None and official_pred_rate <= max_pred_long_rate
+    )
+    row["passed_phase1_official_threshold"] = all(bool(value) for value in official_checks.values())
+    ledger.loc[:, "passed_phase1_official_threshold"] = row["passed_phase1_official_threshold"]
     row["mtf_leakage_passed"] = bool(mtf.empty or mtf["passed"].all())
     row["stationarity_policy_passed"] = bool(stationarity.empty or stationarity["passed"].all())
     row["fold_count"] = int(fold_metrics["fold"].nunique()) if not fold_metrics.empty else 0
@@ -821,6 +1023,9 @@ def summarize_profile_predictions(
         "calibrated_report": calibrated_report,
         "calibrated_calibration": calibrated_calibration,
         "calibrated_predictions": calibrated_predictions,
+        "calibrated_threshold_report": calibrated_threshold_report,
+        "calibrated_threshold_metrics": calibrated_threshold_metrics,
+        "calibrated_threshold_summary": calibrated_threshold_summary,
         "fold_metrics": fold_metrics,
         "regime_metrics": regime_metrics,
         "regime_by_fold": regime_by_fold,
@@ -986,33 +1191,45 @@ def _passes_full(row: dict[str, Any], control: dict[str, Any], config: dict[str,
         reasons.append("std_rank_ic")
     selected_f1 = _metric_or(
         row,
-        "test_f1_at_guarded_threshold",
+        "test_f1_at_official_threshold",
         _metric_or(
             row,
-            "test_f1_at_constrained_threshold",
-            _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+            "test_f1_at_guarded_threshold",
+            _metric_or(
+                row,
+                "test_f1_at_constrained_threshold",
+                _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+            ),
         ),
     )
     control_selected_f1 = _metric_or(
         control,
-        "test_f1_at_guarded_threshold",
+        "test_f1_at_official_threshold",
         _metric_or(
             control,
-            "test_f1_at_constrained_threshold",
-            _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+            "test_f1_at_guarded_threshold",
+            _metric_or(
+                control,
+                "test_f1_at_constrained_threshold",
+                _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+            ),
         ),
     )
     selected_f1_floor = _optional_gate_float(gates, "min_selected_threshold_f1", None)
     if selected_f1_floor is not None and selected_f1 < selected_f1_floor:
-        reasons.append("guarded_threshold_f1")
+        reasons.append("official_threshold_f1")
     selected_f1_delta = _optional_gate_float(gates, "min_selected_threshold_f1_delta", None)
     if selected_f1_delta is not None and selected_f1 < control_selected_f1 + selected_f1_delta:
-        reasons.append("guarded_threshold_f1_delta")
+        reasons.append("official_threshold_f1_delta")
     threshold_checks = _cfg(config, ["validation", "threshold_checks"], {}) or {}
     max_pred_long_rate = float(threshold_checks.get("max_pred_long_rate", 0.70))
-    constrained_pred_rate = _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan)
-    if np.isfinite(constrained_pred_rate) and constrained_pred_rate > max_pred_long_rate:
-        reasons.append("constrained_pred_long_rate")
+    official_pred_rate = _float(
+        row,
+        "test_pred_long_rate_at_official_threshold",
+        _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan),
+    )
+    if np.isfinite(official_pred_rate) and official_pred_rate > max_pred_long_rate:
+        reasons.append("official_pred_long_rate")
     mean_long_f1_delta = _optional_gate_float(gates, "min_long_f1_delta", None)
     if mean_long_f1_delta is not None and _float(row, "mean_long_f1") < _float(control, "mean_long_f1") + mean_long_f1_delta:
         reasons.append("mean_long_f1_delta")
@@ -1122,6 +1339,18 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "test_recall_at_guarded_threshold",
         "test_pred_long_rate_at_guarded_threshold",
         "guarded_threshold_mean",
+        "official_threshold_source",
+        "official_threshold_reason",
+        "test_f1_at_official_threshold",
+        "test_precision_at_official_threshold",
+        "test_recall_at_official_threshold",
+        "test_pred_long_rate_at_official_threshold",
+        "official_threshold_mean",
+        "official_threshold_uses_calibration",
+        "official_threshold_selection_score",
+        "calibrated_guarded_threshold_source",
+        "test_f1_at_calibrated_guarded_threshold",
+        "test_pred_long_rate_at_calibrated_guarded_threshold",
         "mean_prauc",
         "calibration_separation",
         "recent_rank_ic_mean",
@@ -1141,6 +1370,7 @@ def _comparison_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "passed_phase1_selected_threshold",
         "passed_phase1_constrained_threshold",
         "passed_phase1_guarded_threshold",
+        "passed_phase1_official_threshold",
         "promotable",
         "reject_reason",
         "data_start",
@@ -1189,12 +1419,17 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "test_f1_at_guarded_threshold",
             "guarded_threshold_source",
             "test_pred_long_rate_at_guarded_threshold",
+            "test_f1_at_official_threshold",
+            "official_threshold_source",
+            "test_pred_long_rate_at_official_threshold",
+            "test_f1_at_calibrated_guarded_threshold",
             "test_pred_long_rate_at_constrained_threshold",
             "top_10_lift_global",
             "top_10_bad_fold_lift_mean",
             "passed_phase1_selected_threshold",
             "passed_phase1_constrained_threshold",
             "passed_phase1_guarded_threshold",
+            "passed_phase1_official_threshold",
             "promotable",
             "reject_reason",
         ]
@@ -2818,6 +3053,7 @@ def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str
     selected_f1 = _float(row, "test_f1_at_selected_threshold", np.nan)
     constrained_f1 = _float(row, "test_f1_at_constrained_threshold", np.nan)
     guarded_f1 = _float(row, "test_f1_at_guarded_threshold", np.nan)
+    official_f1 = _float(row, "test_f1_at_official_threshold", guarded_f1)
     fixed_f1 = _float(row, "mean_long_f1", np.nan)
     if selected_f1 < min_long_f1:
         reasons.append("cv_selected_threshold_f1_below_target")
@@ -2825,12 +3061,16 @@ def _performance_gap_reasons(row: dict[str, Any], config: dict[str, Any]) -> str
         reasons.append("cv_constrained_threshold_f1_below_target")
     if np.isfinite(guarded_f1) and guarded_f1 < min_long_f1:
         reasons.append("cv_guarded_threshold_f1_below_target")
-    if not np.isfinite(selected_f1) and not np.isfinite(constrained_f1) and not np.isfinite(guarded_f1) and fixed_f1 < min_long_f1:
+    if np.isfinite(official_f1) and official_f1 < min_long_f1:
+        reasons.append("cv_official_threshold_f1_below_target")
+    if not np.isfinite(selected_f1) and not np.isfinite(constrained_f1) and not np.isfinite(guarded_f1) and not np.isfinite(official_f1) and fixed_f1 < min_long_f1:
         reasons.append("cv_fixed_0_50_f1_below_target")
     if _float(row, "test_pred_long_rate_at_selected_threshold", np.nan) > max_pred_long_rate:
         reasons.append("cv_selected_threshold_pred_long_rate_above_guardrail")
     if _float(row, "test_pred_long_rate_at_constrained_threshold", np.nan) > max_pred_long_rate:
         reasons.append("cv_constrained_threshold_pred_long_rate_above_guardrail")
+    if _float(row, "test_pred_long_rate_at_official_threshold", np.nan) > max_pred_long_rate:
+        reasons.append("cv_official_threshold_pred_long_rate_above_guardrail")
     if _float(row, "top_10_lift_global") < 1.0:
         reasons.append("cv_top_10_lift_below_base")
     if not bool(row.get("mtf_leakage_passed", False)):
@@ -2908,6 +3148,11 @@ def _performance_gap_analysis_frame(
         "cv_guarded_threshold_f1",
         "cv_guarded_threshold_source",
         "cv_guarded_threshold_pred_long_rate",
+        "cv_official_threshold_f1",
+        "cv_official_threshold_source",
+        "cv_official_threshold_pred_long_rate",
+        "cv_calibrated_guarded_threshold_f1",
+        "cv_calibrated_guarded_threshold_pred_long_rate",
         "holdout_available",
         "holdout_mean_rank_ic",
         "holdout_top_10_lift_global",
@@ -2979,6 +3224,11 @@ def _performance_gap_analysis_frame(
                 "cv_guarded_threshold_f1": _float(row, "test_f1_at_guarded_threshold"),
                 "cv_guarded_threshold_source": str(row.get("guarded_threshold_source", "")),
                 "cv_guarded_threshold_pred_long_rate": _float(row, "test_pred_long_rate_at_guarded_threshold"),
+                "cv_official_threshold_f1": _float(row, "test_f1_at_official_threshold"),
+                "cv_official_threshold_source": str(row.get("official_threshold_source", "")),
+                "cv_official_threshold_pred_long_rate": _float(row, "test_pred_long_rate_at_official_threshold"),
+                "cv_calibrated_guarded_threshold_f1": _float(row, "test_f1_at_calibrated_guarded_threshold"),
+                "cv_calibrated_guarded_threshold_pred_long_rate": _float(row, "test_pred_long_rate_at_calibrated_guarded_threshold"),
                 "holdout_available": bool(holdout_row),
                 "holdout_mean_rank_ic": _float(holdout_row, "mean_rank_ic") if holdout_row else np.nan,
                 "holdout_top_10_lift_global": _float(holdout_row, "top_10_lift_global") if holdout_row else np.nan,
@@ -3039,6 +3289,8 @@ def _performance_gap_markdown(frame: pd.DataFrame) -> str:
         "cv_top_10_lift_global",
         "cv_guarded_threshold_f1",
         "cv_guarded_threshold_source",
+        "cv_official_threshold_f1",
+        "cv_official_threshold_source",
         "holdout_mean_rank_ic",
         "holdout_top_10_lift_global",
         "holdout_top_10_forward_return_global",
@@ -3299,11 +3551,20 @@ def _phase1_blocker_action_plan_frame(
         notes="This is the main remaining statistical blocker after mean IC improved.",
     )
 
+    official_f1 = _float(control, "test_f1_at_official_threshold", _float(control, "test_f1_at_guarded_threshold"))
+    official_rate = _float(
+        control,
+        "test_pred_long_rate_at_official_threshold",
+        _float(control, "test_pred_long_rate_at_guarded_threshold"),
+    )
+    official_source = str(control.get("official_threshold_source") or control.get("guarded_threshold_source") or "")
+    calibrated_f1 = _float(control, "test_f1_at_calibrated_guarded_threshold")
+    calibrated_rate = _float(control, "test_pred_long_rate_at_calibrated_guarded_threshold")
     guarded_f1 = _float(control, "test_f1_at_guarded_threshold")
     guarded_rate = _float(control, "test_pred_long_rate_at_guarded_threshold")
     selected_rate = _float(control, "test_pred_long_rate_at_selected_threshold")
     guarded_source = str(control.get("guarded_threshold_source", ""))
-    threshold_passed = bool(np.isfinite(guarded_f1) and guarded_f1 > min_long_f1 and guarded_rate <= max_pred_rate)
+    threshold_passed = bool(np.isfinite(official_f1) and official_f1 > min_long_f1 and official_rate <= max_pred_rate)
     issue_counts = (
         control_thresholds["primary_issue"].value_counts().to_dict()
         if not control_thresholds.empty and "primary_issue" in control_thresholds.columns
@@ -3311,14 +3572,17 @@ def _phase1_blocker_action_plan_frame(
     )
     add_row(
         priority=4,
-        blocker="guarded_threshold_f1",
+        blocker="official_threshold_f1",
         severity="critical" if not threshold_passed else "ok",
-        metric_value=guarded_f1,
-        target=f"guarded_f1>{min_long_f1:.2f}; pred_long_rate<={max_pred_rate:.2f}",
+        metric_value=official_f1,
+        target=f"official_f1>{min_long_f1:.2f}; pred_long_rate<={max_pred_rate:.2f}",
         passed=threshold_passed,
         evidence=(
-            f"Guarded F1={_fmt_metric(guarded_f1)} from {guarded_source or 'NA'}; "
+            f"Official F1={_fmt_metric(official_f1)} from {official_source or 'NA'}; "
+            f"official pred-long rate={_fmt_metric(official_rate)}; "
+            f"raw guarded F1={_fmt_metric(guarded_f1)} from {guarded_source or 'NA'}; "
             f"guarded pred-long rate={_fmt_metric(guarded_rate)}; selected pred-long rate={_fmt_metric(selected_rate)}; "
+            f"calibrated guarded F1={_fmt_metric(calibrated_f1)}; calibrated pred-long rate={_fmt_metric(calibrated_rate)}; "
             f"threshold issue counts={issue_counts}."
         ),
         recommended_action=(
@@ -5620,12 +5884,20 @@ def _profile_blend_review_frame(
         row["top_10_lift_global_delta_vs_control"] = _float(row, "top_10_lift_global") - _float(control, "top_10_lift_global")
         row["selected_threshold_f1_delta_vs_control"] = _metric_or(
             row,
-            "test_f1_at_constrained_threshold",
-            _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+            "test_f1_at_official_threshold",
+            _metric_or(
+                row,
+                "test_f1_at_constrained_threshold",
+                _metric_or(row, "test_f1_at_selected_threshold", _float(row, "mean_long_f1")),
+            ),
         ) - _metric_or(
             control,
-            "test_f1_at_constrained_threshold",
-            _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+            "test_f1_at_official_threshold",
+            _metric_or(
+                control,
+                "test_f1_at_constrained_threshold",
+                _metric_or(control, "test_f1_at_selected_threshold", _float(control, "mean_long_f1")),
+            ),
         )
         row["worst_5_rank_ic_delta_vs_control"] = _float(row, "worst_5_rank_ic_mean") - _float(control, "worst_5_rank_ic_mean")
         reasons = []
@@ -5833,6 +6105,7 @@ def _write_profile_diagnostic_summaries(path: Path, entries: list[dict[str, Any]
     for key, filename in [
         ("fold_metrics", "profile_fold_metrics.csv"),
         ("threshold_summary", "profile_threshold_summary.csv"),
+        ("calibrated_threshold_summary", "profile_calibrated_threshold_summary.csv"),
         ("threshold_grid_summary", "profile_threshold_grid_summary.csv"),
         ("score_band_summary", "profile_score_band_summary.csv"),
         ("score_policy_grid", "profile_score_policy_grid.csv"),
@@ -5871,6 +6144,7 @@ def _write_experiment_bundle(
         "profile_blend.json",
         "profile_fold_metrics.csv",
         "profile_threshold_summary.csv",
+        "profile_calibrated_threshold_summary.csv",
         "profile_threshold_grid_summary.csv",
         "profile_score_band_summary.csv",
         "profile_score_policy_grid.csv",

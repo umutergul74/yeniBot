@@ -88,6 +88,23 @@ def _metric(row: dict[str, Any], key: str, default: float | None = None) -> floa
 def _official_long_f1(control: dict[str, Any]) -> tuple[float | None, str, dict[str, Any]]:
     """Return the Phase 1 F1 source after enforcing the pred-long-rate guardrail."""
 
+    official_f1 = _metric(control, "test_f1_at_official_threshold")
+    official_rate = _metric(control, "test_pred_long_rate_at_official_threshold")
+    official_source = str(control.get("official_threshold_source") or "")
+    if official_f1 is not None:
+        return official_f1, official_source or "validation_official_threshold", {
+            "official_threshold_value": official_f1,
+            "official_threshold_pred_long_rate": official_rate,
+            "official_threshold_source": official_source,
+            "official_threshold_uses_calibration": _to_bool(control.get("official_threshold_uses_calibration", False)),
+            "official_threshold_selection_score": _metric(control, "official_threshold_selection_score"),
+            "calibrated_guarded_threshold_value": _metric(control, "test_f1_at_calibrated_guarded_threshold"),
+            "calibrated_guarded_threshold_pred_long_rate": _metric(
+                control,
+                "test_pred_long_rate_at_calibrated_guarded_threshold",
+            ),
+        }
+
     guarded_f1 = _metric(control, "test_f1_at_guarded_threshold")
     guarded_rate = _metric(control, "test_pred_long_rate_at_guarded_threshold")
     guarded_source = str(control.get("guarded_threshold_source") or "")
@@ -705,8 +722,8 @@ def _row_metric_line(row: dict[str, Any]) -> str:
         f"- `{_profile_label(row)}`: mean IC `{_fmt(row.get('mean_rank_ic'))}`, "
         f"std `{_fmt(row.get('std_rank_ic'))}`, positive folds `{_fmt(row.get('positive_ic_fraction'))}`, "
         f"top-10 lift `{_fmt(row.get('top_10_lift_global'))}`, "
-        f"guarded F1 `{_fmt(row.get('test_f1_at_guarded_threshold'))}`, "
-        f"guarded source `{row.get('guarded_threshold_source', '')}`"
+        f"official F1 `{_fmt(row.get('test_f1_at_official_threshold', row.get('test_f1_at_guarded_threshold')))}`, "
+        f"official source `{row.get('official_threshold_source', row.get('guarded_threshold_source', ''))}`"
     )
 
 

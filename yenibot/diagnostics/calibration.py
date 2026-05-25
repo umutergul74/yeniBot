@@ -18,6 +18,42 @@ def calibrate_test_probabilities_from_val(
 ) -> tuple[pd.DataFrame, dict[str, object], pd.DataFrame]:
     """Fit calibration on each fold's validation split and apply it to test rows."""
 
+    calibrated_splits = calibrate_split_probabilities_from_val(
+        predictions,
+        method=method,
+        prob_column=prob_column,
+        label_column=label_column,
+    )
+    calibrated_test = calibrated_splits[calibrated_splits["split"] == "test"].copy()
+    if calibrated_test.empty:
+        raise ValueError("No calibrated test predictions were produced")
+
+    report_frame = calibrated_test.copy()
+    report_frame["prob_long"] = report_frame["prob_long_calibrated"]
+    calibrated_report = phase1_report(report_frame, config)
+    bins = _config_get(config, ["validation", "calibration_bins"], 10)
+    calibrated_table = calibration_table(
+        report_frame["label"],
+        report_frame["prob_long"],
+        bins=int(bins),
+    )
+    return calibrated_test, calibrated_report, calibrated_table
+
+
+def calibrate_split_probabilities_from_val(
+    predictions: pd.DataFrame,
+    *,
+    method: str = "isotonic",
+    prob_column: str = "prob_long",
+    label_column: str = "label",
+) -> pd.DataFrame:
+    """Fit calibration on each fold's validation split and transform val/test rows.
+
+    Threshold transfer diagnostics need calibrated validation scores as well as
+    calibrated test scores. The calibrator is still fit only on the validation
+    split for that fold; test rows are transformed forward from that fit.
+    """
+
     if method not in {"isotonic", "platt"}:
         raise ValueError("method must be one of: isotonic, platt")
     if "split" not in predictions.columns:
@@ -29,31 +65,24 @@ def calibrate_test_probabilities_from_val(
         test = fold_part[fold_part["split"] == "test"].copy()
         if val.empty or test.empty:
             continue
-        calibrated = test.copy()
-        calibrated["prob_long_raw"] = calibrated[prob_column]
-        calibrated["prob_long_calibrated"] = _fit_transform_calibrator(
-            val[prob_column].to_numpy(dtype=float),
-            val[label_column].to_numpy(dtype=int),
-            test[prob_column].to_numpy(dtype=float),
-            method=method,
-        )
-        calibrated["calibration_method"] = method
-        calibrated_parts.append(calibrated)
+        train_probs = val[prob_column].to_numpy(dtype=float)
+        train_labels = val[label_column].to_numpy(dtype=int)
+        for part in (val, test):
+            calibrated = part.copy()
+            calibrated["prob_long_raw"] = calibrated[prob_column]
+            calibrated["prob_long_calibrated"] = _fit_transform_calibrator(
+                train_probs,
+                train_labels,
+                calibrated[prob_column].to_numpy(dtype=float),
+                method=method,
+            )
+            calibrated["calibration_method"] = method
+            calibrated_parts.append(calibrated)
 
     if not calibrated_parts:
         raise ValueError("No folds with both val and test predictions were found")
 
-    calibrated_test = pd.concat(calibrated_parts, ignore_index=True)
-    report_frame = calibrated_test.copy()
-    report_frame["prob_long"] = report_frame["prob_long_calibrated"]
-    calibrated_report = phase1_report(report_frame, config)
-    bins = _config_get(config, ["validation", "calibration_bins"], 10)
-    calibrated_table = calibration_table(
-        report_frame["label"],
-        report_frame["prob_long"],
-        bins=int(bins),
-    )
-    return calibrated_test, calibrated_report, calibrated_table
+    return pd.concat(calibrated_parts, ignore_index=True)
 
 
 def _fit_transform_calibrator(

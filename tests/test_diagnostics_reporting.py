@@ -11,6 +11,7 @@ from yenibot.diagnostics import (
     bad_fold_feature_forensics_summary,
     bad_fold_group_forensics,
     bad_fold_group_forensics_summary,
+    calibrate_split_probabilities_from_val,
     calibrate_test_probabilities_from_val,
     calibration_table,
     experiment_ledger_diagnostics,
@@ -166,10 +167,13 @@ def test_calibration_threshold_and_leakage_diagnostics() -> None:
     }
 
     calibrated, report, calibrated_table = calibrate_test_probabilities_from_val(predictions, config)
+    calibrated_splits = calibrate_split_probabilities_from_val(predictions)
     thresholds = threshold_diagnostics(predictions)
+    calibrated_thresholds = threshold_diagnostics(calibrated_splits, score_column="prob_long_calibrated")
     leakage = mtf_leakage_diagnostics(predictions[predictions["split"] == "test"])
 
     assert "prob_long_calibrated" in calibrated.columns
+    assert set(calibrated_splits["split"]) == {"val", "test"}
     assert "mean_rank_ic" in report
     assert len(calibrated_table) == 4
     assert {
@@ -179,6 +183,7 @@ def test_calibration_threshold_and_leakage_diagnostics() -> None:
         "test_pred_long_rate_at_constrained_threshold",
         "test_oracle_best_f1",
     }.issubset(thresholds.columns)
+    assert "test_f1_at_constrained_threshold" in calibrated_thresholds.columns
     assert leakage["passed"].all()
 
 
