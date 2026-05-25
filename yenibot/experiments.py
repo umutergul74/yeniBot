@@ -3062,6 +3062,462 @@ def _write_performance_gap_analysis(path: Path, frame: pd.DataFrame) -> None:
     _write_json(path / "performance_gap_analysis.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _fmt_metric(value: Any, digits: int = 4) -> str:
+    number = _optional_float(value)
+    if number is None:
+        return "NA"
+    return f"{number:.{digits}f}"
+
+
+def _first_frame_row(frame: pd.DataFrame, mask: pd.Series | None = None) -> dict[str, Any]:
+    if frame.empty:
+        return {}
+    selected = frame.loc[mask] if mask is not None else frame
+    if selected.empty:
+        return {}
+    return selected.iloc[0].to_dict()
+
+
+def _control_comparison_row(comparison: pd.DataFrame, control_profile: str) -> dict[str, Any]:
+    if comparison.empty:
+        return {}
+    full_mask = (comparison["profile"].astype(str) == str(control_profile)) & (
+        comparison["fold_scope"].astype(str) == "full"
+    )
+    row = _first_frame_row(comparison, full_mask)
+    if row:
+        return row
+    control_mask = comparison["profile"].astype(str) == str(control_profile)
+    return _first_frame_row(comparison, control_mask)
+
+
+def _control_gap_row(performance_gap_analysis: pd.DataFrame, control_profile: str) -> dict[str, Any]:
+    if performance_gap_analysis.empty:
+        return {}
+    mask = (performance_gap_analysis["candidate"].astype(str) == str(control_profile)) & (
+        performance_gap_analysis["fold_scope"].astype(str) == "full"
+    )
+    row = _first_frame_row(performance_gap_analysis, mask)
+    if row:
+        return row
+    return _first_frame_row(performance_gap_analysis, performance_gap_analysis["candidate"].astype(str) == str(control_profile))
+
+
+def _phase1_blocker_action_plan_frame(
+    *,
+    comparison: pd.DataFrame,
+    profile_blend: pd.DataFrame,
+    performance_gap_analysis: pd.DataFrame,
+    fold_stability_forensics: pd.DataFrame,
+    fold_stability_summary: pd.DataFrame,
+    threshold_forensics: pd.DataFrame,
+    payoff_policy_robustness_summary: pd.DataFrame,
+    future_oos_candidate_plan: pd.DataFrame,
+    phase2_readiness: dict[str, Any] | None,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "priority",
+        "blocker",
+        "severity",
+        "control_profile",
+        "metric_value",
+        "target",
+        "passed",
+        "evidence",
+        "recommended_action",
+        "allowed_now",
+        "requires_02_03",
+        "requires_04",
+        "next_notebook",
+        "promotion_allowed_now",
+        "source_files",
+        "notes",
+    ]
+    control_profile = str(settings.get("control_profile", ""))
+    guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
+    readiness = phase2_readiness or {}
+    checks = readiness.get("checks", {}) or {}
+    blockers = {str(item) for item in readiness.get("blockers", []) or []}
+    rows: list[dict[str, Any]] = []
+
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    max_rank_ic_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
+    min_positive_ic = float(_cfg(config, ["validation", "min_positive_ic_fraction"], 0.75))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    max_pred_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+
+    control = _control_comparison_row(comparison, control_profile)
+    control_gap = _control_gap_row(performance_gap_analysis, control_profile)
+    control_stability = _first_frame_row(
+        fold_stability_summary,
+        (fold_stability_summary["candidate"].astype(str) == control_profile)
+        & (fold_stability_summary["fold_scope"].astype(str) == "full")
+        if not fold_stability_summary.empty
+        else None,
+    )
+    control_thresholds = (
+        threshold_forensics.loc[
+            (threshold_forensics["candidate"].astype(str) == control_profile)
+            & (threshold_forensics["fold_scope"].astype(str) == "full")
+        ].copy()
+        if not threshold_forensics.empty
+        else pd.DataFrame()
+    )
+    control_payoff = (
+        payoff_policy_robustness_summary.loc[
+            (payoff_policy_robustness_summary["candidate"].astype(str) == control_profile)
+            & (payoff_policy_robustness_summary["evaluation_scope"].astype(str) == "cv_test")
+        ].copy()
+        if not payoff_policy_robustness_summary.empty
+        and {"candidate", "evaluation_scope"}.issubset(payoff_policy_robustness_summary.columns)
+        else pd.DataFrame()
+    )
+
+    def add_row(
+        *,
+        priority: int,
+        blocker: str,
+        severity: str,
+        metric_value: Any = np.nan,
+        target: str = "",
+        passed: bool = False,
+        evidence: str,
+        recommended_action: str,
+        allowed_now: bool,
+        requires_02_03: bool,
+        requires_04: bool,
+        next_notebook: str,
+        promotion_allowed_now: bool,
+        source_files: str,
+        notes: str = "",
+    ) -> None:
+        rows.append(
+            {
+                "priority": int(priority),
+                "blocker": blocker,
+                "severity": severity,
+                "control_profile": control_profile,
+                "metric_value": metric_value,
+                "target": target,
+                "passed": bool(passed),
+                "evidence": evidence,
+                "recommended_action": recommended_action,
+                "allowed_now": bool(allowed_now),
+                "requires_02_03": bool(requires_02_03),
+                "requires_04": bool(requires_04),
+                "next_notebook": next_notebook,
+                "promotion_allowed_now": bool(promotion_allowed_now),
+                "source_files": source_files,
+                "notes": notes,
+            }
+        )
+
+    missing_selected = performance_gap_analysis.empty and comparison.empty
+    add_row(
+        priority=1,
+        blocker="experiment_integrity",
+        severity="critical" if missing_selected else "ok",
+        metric_value=0 if missing_selected else 1,
+        target="all selected profiles present in comparison and diagnostics",
+        passed=not missing_selected,
+        evidence=(
+            "No comparison rows were available; rerun 04 before trusting diagnostics."
+            if missing_selected
+            else f"{len(comparison)} comparison rows and {len(performance_gap_analysis)} performance-gap rows are available."
+        ),
+        recommended_action=(
+            "Rerun 04_training_walk_forward.ipynb to produce completed profile predictions."
+            if missing_selected
+            else "Continue using 05 diagnostics; experiment integrity is sufficient for review."
+        ),
+        allowed_now=True,
+        requires_02_03=False,
+        requires_04=missing_selected,
+        next_notebook="04" if missing_selected else "05",
+        promotion_allowed_now=False,
+        source_files="profile_comparison.csv;performance_gap_analysis.csv;experiment_selection.csv",
+        notes="This check prevents empty or stale diagnostics from being interpreted as model performance.",
+    )
+
+    mean_rank_ic = _float(control, "mean_rank_ic")
+    positive_fraction = _float(control, "positive_ic_fraction")
+    mean_passed = bool(np.isfinite(mean_rank_ic) and mean_rank_ic > target_rank_ic)
+    positive_passed = bool(np.isfinite(positive_fraction) and positive_fraction >= min_positive_ic)
+    add_row(
+        priority=2,
+        blocker="signal_strength",
+        severity="ok" if mean_passed and positive_passed else "high",
+        metric_value=mean_rank_ic,
+        target=f"mean_rank_ic>{target_rank_ic:.3f}; positive_ic_fraction>={min_positive_ic:.2f}",
+        passed=mean_passed and positive_passed,
+        evidence=(
+            f"Control mean Rank IC={_fmt_metric(mean_rank_ic)}, "
+            f"positive IC fraction={_fmt_metric(positive_fraction)}."
+        ),
+        recommended_action=(
+            "Keep the current control as the safe benchmark; do not weaken it with holdout-derived promotions."
+            if mean_passed and positive_passed
+            else "Stop promotion review and return to feature quality only if this remains weak on future OOS."
+        ),
+        allowed_now=False,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="none",
+        promotion_allowed_now=False,
+        source_files="profile_comparison.csv;phase2_readiness.json",
+        notes="Mean signal is not the current bottleneck; stability and deployment-quality thresholding are.",
+    )
+
+    rank_ic_std = _float(control, "std_rank_ic")
+    std_passed = bool(np.isfinite(rank_ic_std) and rank_ic_std <= max_rank_ic_std)
+    worst_fold = control_stability.get("worst_fold", "NA") if control_stability else "NA"
+    worst_ic = control_stability.get("worst_fold_rank_ic", np.nan) if control_stability else np.nan
+    top5_var = control_stability.get("top_5_variance_contribution", np.nan) if control_stability else np.nan
+    add_row(
+        priority=3,
+        blocker="fold_stability",
+        severity="critical" if not std_passed else "ok",
+        metric_value=rank_ic_std,
+        target=f"std_rank_ic<={max_rank_ic_std:.3f}",
+        passed=std_passed,
+        evidence=(
+            f"Control Rank IC std={_fmt_metric(rank_ic_std)}; worst fold={worst_fold} "
+            f"Rank IC={_fmt_metric(worst_ic)}; top-5 variance contribution={_fmt_metric(top5_var)}."
+        ),
+        recommended_action=(
+            "Use fold_stability_forensics to isolate recurring bad-fold regimes. Do not create new broad profiles or tune "
+            "against holdout; any new hypothesis must be pre-registered and checked on CV/future OOS."
+        ),
+        allowed_now=True,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="05",
+        promotion_allowed_now=False,
+        source_files="fold_stability_summary.csv;fold_stability_forensics.csv",
+        notes="This is the main remaining statistical blocker after mean IC improved.",
+    )
+
+    guarded_f1 = _float(control, "test_f1_at_guarded_threshold")
+    guarded_rate = _float(control, "test_pred_long_rate_at_guarded_threshold")
+    selected_rate = _float(control, "test_pred_long_rate_at_selected_threshold")
+    guarded_source = str(control.get("guarded_threshold_source", ""))
+    threshold_passed = bool(np.isfinite(guarded_f1) and guarded_f1 > min_long_f1 and guarded_rate <= max_pred_rate)
+    issue_counts = (
+        control_thresholds["primary_issue"].value_counts().to_dict()
+        if not control_thresholds.empty and "primary_issue" in control_thresholds.columns
+        else {}
+    )
+    add_row(
+        priority=4,
+        blocker="guarded_threshold_f1",
+        severity="critical" if not threshold_passed else "ok",
+        metric_value=guarded_f1,
+        target=f"guarded_f1>{min_long_f1:.2f}; pred_long_rate<={max_pred_rate:.2f}",
+        passed=threshold_passed,
+        evidence=(
+            f"Guarded F1={_fmt_metric(guarded_f1)} from {guarded_source or 'NA'}; "
+            f"guarded pred-long rate={_fmt_metric(guarded_rate)}; selected pred-long rate={_fmt_metric(selected_rate)}; "
+            f"threshold issue counts={issue_counts}."
+        ),
+        recommended_action=(
+            "Optimize score separation/calibration on CV only. Selected-threshold F1 is not official when it exceeds "
+            "the pred-long-rate guardrail."
+        ),
+        allowed_now=True,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="05",
+        promotion_allowed_now=False,
+        source_files="threshold_forensics.csv;profile_comparison.csv;phase2_readiness.json",
+        notes="This prevents an unrealistically broad long gate from masking deployment risk.",
+    )
+
+    top10_lift = _float(control, "top_10_lift_global")
+    holdout_top10_return = _float(control_gap, "holdout_top_10_forward_return_global")
+    top10_forward = _float(control_gap, "cv_top_10_forward_return_global")
+    payoff_pass = bool(np.isfinite(top10_lift) and top10_lift > 1.0)
+    if np.isfinite(holdout_top10_return) and holdout_top10_return <= 0:
+        payoff_pass = False
+    top_payoff_rows = (
+        control_payoff.loc[control_payoff["band"].astype(str) == "top_10"]
+        if not control_payoff.empty and "band" in control_payoff.columns
+        else pd.DataFrame()
+    )
+    top_payoff = top_payoff_rows.iloc[0].to_dict() if not top_payoff_rows.empty else {}
+    add_row(
+        priority=5,
+        blocker="score_band_payoff",
+        severity="high" if not payoff_pass else "medium",
+        metric_value=top10_lift,
+        target="top_10 lift>1.0 and forward-return alignment positive",
+        passed=payoff_pass,
+        evidence=(
+            f"CV top-10 lift={_fmt_metric(top10_lift)}; CV top-10 forward return={_fmt_metric(top10_forward, 6)}; "
+            f"holdout top-10 forward return={_fmt_metric(holdout_top10_return, 6)}; "
+            f"CV payoff alignment fold rate={_fmt_metric(top_payoff.get('payoff_alignment_fold_rate'))}."
+        ),
+        recommended_action=(
+            "Treat score-band rows as policy diagnostics only. If holdout payoff is weak, wait for future OOS instead of "
+            "changing the score band on the seen holdout."
+        ),
+        allowed_now=True,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="05",
+        promotion_allowed_now=False,
+        source_files="payoff_policy_robustness_summary.csv;performance_gap_analysis.csv;holdout_evaluation.csv",
+        notes="Label lift alone is insufficient; forward-return payoff must survive unseen data.",
+    )
+
+    best_blend = {}
+    if not profile_blend.empty:
+        sortable = profile_blend.copy()
+        if "reviewable" in sortable.columns:
+            sortable = sortable.sort_values(
+                ["reviewable", "mean_rank_ic", "top_10_lift_global"],
+                ascending=[False, False, False],
+            )
+        else:
+            sortable = sortable.sort_values(["mean_rank_ic", "top_10_lift_global"], ascending=[False, False])
+        best_blend = sortable.iloc[0].to_dict() if not sortable.empty else {}
+    best_blend_name = str(best_blend.get("blend_name") or best_blend.get("profile") or "none")
+    best_blend_ic = _float(best_blend, "mean_rank_ic")
+    best_blend_std = _float(best_blend, "std_rank_ic")
+    best_blend_reviewable = bool(best_blend.get("reviewable", False)) if best_blend else False
+    add_row(
+        priority=6,
+        blocker="candidate_promotion",
+        severity="medium",
+        metric_value=best_blend_ic,
+        target="candidate/blend must beat control gates without worse stability",
+        passed=False,
+        evidence=(
+            f"Best blend by review ordering={best_blend_name}; mean IC={_fmt_metric(best_blend_ic)}; "
+            f"std={_fmt_metric(best_blend_std)}; reviewable={best_blend_reviewable}; "
+            f"profile search locked={bool(guard.get('profile_search_locked', False))}."
+        ),
+        recommended_action=(
+            "Keep the control profile as the working baseline. Use pre-registered future-OOS candidates only; do not "
+            "promote current-holdout winners."
+        ),
+        allowed_now=False,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="none",
+        promotion_allowed_now=False,
+        source_files="profile_blend.csv;profile_comparison.csv;future_oos_candidate_plan.csv",
+        notes="This row intentionally blocks opportunistic promotion from already-seen diagnostics.",
+    )
+
+    future_ready = bool(guard.get("future_oos_ready", False))
+    future_plan = _first_frame_row(future_oos_candidate_plan)
+    min_remaining = guard.get("min_new_bars_remaining", future_plan.get("min_new_bars_remaining", "NA"))
+    min_ready_at = future_plan.get("min_ready_at") or guard.get("min_ready_at") or ""
+    preferred_ready_at = future_plan.get("preferred_ready_at") or guard.get("preferred_ready_at") or ""
+    future_blocked = "future_unseen_oos_not_ready" in blockers or not future_ready
+    add_row(
+        priority=7,
+        blocker="future_unseen_oos",
+        severity="critical" if future_blocked else "ok",
+        metric_value=0 if future_blocked else 1,
+        target="future_oos_ready=True before promotion",
+        passed=not future_blocked,
+        evidence=(
+            f"future_oos_ready={future_ready}; min bars remaining={min_remaining}; "
+            f"min_ready_at={min_ready_at}; preferred_ready_at={preferred_ready_at}."
+        ),
+        recommended_action=(
+            "Wait for fresh unseen bars after the anchor, then evaluate only pre-registered candidates. Do not roll "
+            "or retune the frozen holdout."
+        ),
+        allowed_now=False,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="none_until_future_oos_ready",
+        promotion_allowed_now=future_ready,
+        source_files="future_oos_candidate_plan.csv;experiment_policy_guard.csv;phase2_readiness.json",
+        notes="This is a governance gate, not a model-performance tweak.",
+    )
+
+    phase2_passed = bool(readiness.get("ready_for_phase2", False) or readiness.get("passed", False))
+    add_row(
+        priority=8,
+        blocker="phase2_decision",
+        severity="critical" if not phase2_passed else "ok",
+        metric_value=1 if phase2_passed else 0,
+        target="all Phase 1 readiness checks pass",
+        passed=phase2_passed,
+        evidence=(
+            f"Phase 2 status={readiness.get('status', 'NA')}; blockers={sorted(blockers)}; "
+            f"checks={checks}."
+        ),
+        recommended_action=(
+            "Do not build Phase 2 execution/backtest code. Continue diagnostics and future-OOS monitoring until the "
+            "official gates pass."
+        ),
+        allowed_now=True,
+        requires_02_03=False,
+        requires_04=False,
+        next_notebook="05",
+        promotion_allowed_now=phase2_passed,
+        source_files="phase2_readiness.json;phase1_transition_plan.json;auto_review.json",
+        notes="This final row keeps the project aligned with SKILLS.md and the Phase 1 boundary.",
+    )
+
+    return pd.DataFrame(rows, columns=columns).sort_values("priority").reset_index(drop=True)
+
+
+def _phase1_blocker_action_plan_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Phase 1 Blocker Action Plan", ""]
+    if frame.empty:
+        lines.append("No blocker action plan rows were produced.")
+        return "\n".join(lines)
+    lines.append(
+        "This file translates the current diagnostics into operational actions. "
+        "Rows marked as not promotion-allowed must not be used to justify Phase 2."
+    )
+    lines.append("")
+    display_cols = [
+        "priority",
+        "blocker",
+        "severity",
+        "metric_value",
+        "target",
+        "passed",
+        "recommended_action",
+        "next_notebook",
+        "promotion_allowed_now",
+        "source_files",
+    ]
+    visible = frame[[column for column in display_cols if column in frame.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append("## Evidence")
+    for _, row in frame.iterrows():
+        lines.append("")
+        lines.append(f"### {int(row['priority'])}. {row['blocker']}")
+        lines.append(str(row["evidence"]))
+        if str(row.get("notes", "")):
+            lines.append("")
+            lines.append(f"Notes: {row['notes']}")
+    return "\n".join(lines)
+
+
+def _write_phase1_blocker_action_plan(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "phase1_blocker_action_plan.csv", index=False)
+    (path / "phase1_blocker_action_plan.md").write_text(
+        _phase1_blocker_action_plan_markdown(frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "phase1_blocker_action_plan.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _diagnostic_candidate_type(fold_scope: str) -> str:
     return "blend" if str(fold_scope).startswith("blend_") else "profile"
 
@@ -5456,6 +5912,9 @@ def _write_experiment_bundle(
         "future_oos_candidate_plan.csv",
         "future_oos_candidate_plan.md",
         "future_oos_candidate_plan.json",
+        "phase1_blocker_action_plan.csv",
+        "phase1_blocker_action_plan.md",
+        "phase1_blocker_action_plan.json",
         "performance_gap_analysis.csv",
         "performance_gap_analysis.md",
         "performance_gap_analysis.json",
@@ -5646,11 +6105,25 @@ def run_experiment_matrix(
         config,
         payoff_policy_robustness_summary,
     )
+    phase1_blocker_action_plan = _phase1_blocker_action_plan_frame(
+        comparison=comparison,
+        profile_blend=profile_blend,
+        performance_gap_analysis=performance_gap_analysis,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+        payoff_policy_robustness_summary=payoff_policy_robustness_summary,
+        future_oos_candidate_plan=future_oos_candidate_plan,
+        phase2_readiness={},
+        config=config,
+        settings=settings,
+    )
     _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
     _write_forensics_reports(
         run_dir,
         fold_stability_forensics=fold_stability_forensics,
@@ -5697,6 +6170,7 @@ def run_experiment_matrix(
         "experiment_policy_guard": settings.get("experiment_policy_guard", {}) or {},
         "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
         "performance_gap_analysis": performance_gap_analysis.to_dict(orient="records"),
+        "phase1_blocker_action_plan": phase1_blocker_action_plan.to_dict(orient="records"),
         "fold_stability_summary": fold_stability_summary.to_dict(orient="records"),
         "threshold_forensics_summary": (
             threshold_forensics["primary_issue"].value_counts().to_dict()
@@ -5720,6 +6194,7 @@ def run_experiment_matrix(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "phase1_blocker_action_plan": phase1_blocker_action_plan,
         "fold_stability_forensics": fold_stability_forensics,
         "fold_stability_summary": fold_stability_summary,
         "threshold_forensics": threshold_forensics,
@@ -6039,6 +6514,21 @@ def write_experiment_diagnostics(
     decision["phase1_transition_plan_path"] = str(phase1_transition_plan_path)
     decision["phase1_transition_plan_md_path"] = str(phase1_transition_plan_md_path)
     decision["phase1_transition_plan"] = auto_review["review"].get("phase1_transition_plan", {})
+    phase1_blocker_action_plan = _phase1_blocker_action_plan_frame(
+        comparison=comparison,
+        profile_blend=profile_blend,
+        performance_gap_analysis=performance_gap_analysis,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+        payoff_policy_robustness_summary=payoff_policy_robustness_summary,
+        future_oos_candidate_plan=future_oos_candidate_plan,
+        phase2_readiness=decision["phase2_readiness"],
+        config=diagnostic_config,
+        settings=settings,
+    )
+    decision["phase1_blocker_action_plan"] = phase1_blocker_action_plan.to_dict(orient="records")
+    _write_phase1_blocker_action_plan(report_dir, phase1_blocker_action_plan)
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
@@ -6047,6 +6537,7 @@ def write_experiment_diagnostics(
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
+    _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
     _write_forensics_reports(
         run_dir,
         fold_stability_forensics=fold_stability_forensics,
@@ -6097,6 +6588,7 @@ def write_experiment_diagnostics(
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
+        "phase1_blocker_action_plan": phase1_blocker_action_plan,
         "fold_stability_forensics": fold_stability_forensics,
         "fold_stability_summary": fold_stability_summary,
         "threshold_forensics": threshold_forensics,

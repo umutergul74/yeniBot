@@ -2033,6 +2033,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
@@ -2048,6 +2049,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
@@ -2063,6 +2065,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["profile_delta"].empty
     assert not diagnostics["profile_blend"].empty
     assert not diagnostics["performance_gap_analysis"].empty
+    assert not diagnostics["phase1_blocker_action_plan"].empty
     assert not diagnostics["fold_stability_forensics"].empty
     assert not diagnostics["fold_stability_summary"].empty
     assert not diagnostics["threshold_forensics"].empty
@@ -2078,6 +2081,16 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "next_action",
         "research_track",
     }.issubset(diagnostics["performance_gap_analysis"].columns)
+    assert {
+        "blocker",
+        "severity",
+        "recommended_action",
+        "promotion_allowed_now",
+        "source_files",
+    }.issubset(diagnostics["phase1_blocker_action_plan"].columns)
+    assert {"fold_stability", "guarded_threshold_f1", "future_unseen_oos"}.issubset(
+        set(diagnostics["phase1_blocker_action_plan"]["blocker"])
+    )
     assert {
         "candidate",
         "evaluation_scope",
@@ -2149,6 +2162,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_delta_vs_control.csv" in archive.namelist()
         assert "matrix/profile_blend.csv" in archive.namelist()
         assert "matrix/performance_gap_analysis.csv" in archive.namelist()
+        assert "matrix/phase1_blocker_action_plan.csv" in archive.namelist()
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
@@ -2174,6 +2188,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/performance_gap_analysis.csv" in names
+    assert "matrix/phase1_blocker_action_plan.csv" in names
     assert "matrix/fold_stability_forensics.csv" in names
     assert "matrix/fold_stability_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
