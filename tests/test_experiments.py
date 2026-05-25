@@ -31,6 +31,7 @@ from yenibot.experiments import (
     _profile_blend_predictions,
     _profile_blend_review_frame,
     _threshold_forensics_frame,
+    _threshold_policy_review_frame,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -582,9 +583,128 @@ def test_threshold_forensics_separates_selected_pred_rate_and_constrained_f1() -
     frame = _threshold_forensics_frame([entry], config)
 
     row = frame.iloc[0]
-    assert row["primary_issue"] == "constrained_f1"
+    assert row["primary_issue"] == "official_f1"
+    assert row["official_threshold_source"] == "validation_constrained_threshold"
+    assert row["test_f1_at_official_threshold"] == row["test_f1_at_constrained_threshold"]
     assert row["selected_pred_rate_excess_vs_guardrail"] > 0
     assert row["constrained_pred_rate_excess_vs_guardrail"] < 0
+
+
+def test_threshold_forensics_uses_calibrated_official_source_when_selected() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "diagnostics": {
+            "row": {"official_threshold_source": "calibrated_validation_constrained_threshold"},
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": 0,
+                        "selected_threshold": 0.30,
+                        "test_f1_at_selected_threshold": 0.47,
+                        "test_pred_long_rate_at_selected_threshold": 0.86,
+                        "constrained_threshold": 0.42,
+                        "test_f1_at_constrained_threshold": 0.41,
+                        "test_precision_at_constrained_threshold": 0.31,
+                        "test_recall_at_constrained_threshold": 0.60,
+                        "test_pred_long_rate_at_constrained_threshold": 0.64,
+                        "test_oracle_best_f1": 0.50,
+                    }
+                ]
+            ),
+            "calibrated_threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": 0,
+                        "constrained_threshold": 0.39,
+                        "test_f1_at_constrained_threshold": 0.46,
+                        "test_precision_at_constrained_threshold": 0.35,
+                        "test_recall_at_constrained_threshold": 0.68,
+                        "test_pred_long_rate_at_constrained_threshold": 0.62,
+                    }
+                ]
+            ),
+        },
+    }
+
+    frame = _threshold_forensics_frame([entry], config)
+
+    row = frame.iloc[0]
+    assert bool(row["official_threshold_uses_calibration"]) is True
+    assert row["official_threshold"] == 0.39
+    assert row["test_f1_at_official_threshold"] == 0.46
+    assert row["primary_issue"] == "selected_threshold_too_broad"
+
+
+def test_threshold_policy_review_lists_validation_selected_constrained_and_caps() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        }
+    }
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "diagnostics": {
+            "threshold_summary": pd.DataFrame(
+                [
+                    {"metric": "selected_threshold", "mean": 0.25},
+                    {"metric": "source_best_f1", "mean": 0.49},
+                    {"metric": "test_f1_at_selected_threshold", "mean": 0.47},
+                    {"metric": "test_precision_at_selected_threshold", "mean": 0.32},
+                    {"metric": "test_recall_at_selected_threshold", "mean": 0.90},
+                    {"metric": "test_pred_long_rate_at_selected_threshold", "mean": 0.86},
+                    {"metric": "constrained_threshold", "mean": 0.42},
+                    {"metric": "source_constrained_f1", "mean": 0.46},
+                    {"metric": "source_constrained_precision", "mean": 0.35},
+                    {"metric": "source_constrained_pred_long_rate", "mean": 0.62},
+                    {"metric": "test_f1_at_constrained_threshold", "mean": 0.43},
+                    {"metric": "test_precision_at_constrained_threshold", "mean": 0.34},
+                    {"metric": "test_recall_at_constrained_threshold", "mean": 0.68},
+                    {"metric": "test_pred_long_rate_at_constrained_threshold", "mean": 0.64},
+                ]
+            ),
+            "threshold_grid_summary": pd.DataFrame(
+                [
+                    {
+                        "max_pred_long_rate": 0.5,
+                        "threshold_mean": 0.45,
+                        "mean_source_f1": 0.44,
+                        "mean_source_precision": 0.36,
+                        "mean_source_pred_long_rate": 0.50,
+                        "mean_f1": 0.41,
+                        "mean_precision": 0.35,
+                        "mean_recall": 0.55,
+                        "mean_selection_rate": 0.49,
+                        "mean_lift_vs_base": 1.1,
+                        "mean_forward_return": 0.001,
+                        "positive_lift_fold_rate": 0.75,
+                        "positive_forward_return_fold_rate": 0.70,
+                        "constraints_satisfied_fold_rate": 1.0,
+                    }
+                ]
+            ),
+        },
+    }
+
+    frame = _threshold_policy_review_frame([entry], config)
+
+    assert {
+        "validation_selected_threshold",
+        "validation_constrained_threshold",
+        "validation_threshold_cap_0.50",
+    }.issubset(set(frame["policy_name"]))
+    selected = frame.loc[frame["policy_name"] == "validation_selected_threshold"].iloc[0]
+    assert bool(selected["pred_long_rate_passed"]) is False
+    constrained = frame.loc[frame["policy_name"] == "validation_constrained_threshold"].iloc[0]
+    assert constrained["source_selection_metric"] == "source_constrained_f1"
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -2038,6 +2158,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -2054,6 +2175,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -2070,6 +2192,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["fold_stability_forensics"].empty
     assert not diagnostics["fold_stability_summary"].empty
     assert not diagnostics["threshold_forensics"].empty
+    assert not diagnostics["threshold_policy_review"].empty
     assert not diagnostics["payoff_alignment"].empty
     assert not diagnostics["payoff_alignment_summary"].empty
     assert not diagnostics["payoff_policy_robustness"].empty
@@ -2093,6 +2216,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         set(diagnostics["phase1_blocker_action_plan"]["blocker"])
     )
     assert "test_f1_at_official_threshold" in diagnostics["comparison"].columns
+    assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
+    assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "profile_calibrated_threshold_summary.csv" in {
         path.name for path in (tmp_path / "reports" / "experiments" / "matrix").iterdir()
     }
@@ -2172,6 +2297,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
+        assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/payoff_alignment.csv" in archive.namelist()
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
@@ -2199,6 +2325,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/fold_stability_forensics.csv" in names
     assert "matrix/fold_stability_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
+    assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/payoff_alignment.csv" in names
     assert "matrix/payoff_alignment_summary.csv" in names
     assert "matrix/payoff_policy_robustness.csv" in names
