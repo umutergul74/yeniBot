@@ -1337,6 +1337,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+        "baseline_stable_no_4h_taker_mean12",
+        "baseline_stable_no_4h_large_trade_ratio",
+        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
         "baseline_control_plus_futures_oi_change_context",
         "baseline_control_plus_futures_positioning_context",
@@ -1357,6 +1360,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["status"] == "failed_clean_holdout_review"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
+        "baseline_stable_no_4h_taker_mean12",
+        "baseline_stable_no_4h_large_trade_ratio",
+        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
         "blend_control_long_pressure_65_35",
         "baseline_control_plus_futures_oi_change_context",
         "baseline_control_plus_futures_positioning_context",
@@ -1654,6 +1660,27 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_taker_imbalance_mean_12" not in stable_no_slow_flow_columns
     assert "4h_taker_imbalance_mean_24" not in stable_no_slow_flow_columns
     assert "cvd_cumulative_rate_norm" in stable_no_slow_flow_columns
+
+    stable_no_mean12 = profile_config(config, "baseline_stable_no_4h_taker_mean12")
+    stable_no_mean12_columns = filter_feature_columns(columns, stable_no_mean12)
+    assert "4h_taker_imbalance_mean_12" not in stable_no_mean12_columns
+    assert "4h_taker_imbalance_mean_24" in stable_no_mean12_columns
+    assert "4h_large_trade_ratio" in stable_no_mean12_columns
+    assert "gk_vol_14" not in stable_no_mean12_columns
+
+    stable_no_4h_ratio = profile_config(config, "baseline_stable_no_4h_large_trade_ratio")
+    stable_no_4h_ratio_columns = filter_feature_columns(columns, stable_no_4h_ratio)
+    assert "4h_large_trade_ratio" not in stable_no_4h_ratio_columns
+    assert "4h_taker_imbalance_mean_12" in stable_no_4h_ratio_columns
+
+    stable_no_mean12_no_ratio = profile_config(
+        config,
+        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
+    )
+    stable_no_mean12_no_ratio_columns = filter_feature_columns(columns, stable_no_mean12_no_ratio)
+    assert "4h_taker_imbalance_mean_12" not in stable_no_mean12_no_ratio_columns
+    assert "4h_taker_imbalance_mean_24" in stable_no_mean12_no_ratio_columns
+    assert "4h_large_trade_ratio" not in stable_no_mean12_no_ratio_columns
 
     stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
     stable_combined_columns = filter_feature_columns(columns, stable_combined)

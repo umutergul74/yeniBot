@@ -462,6 +462,21 @@ features:
       append_exclude_patterns:
         - "4h_taker_imbalance_mean_12"
         - "4h_taker_imbalance_mean_24"
+    baseline_stable_no_4h_taker_mean12:
+      description: "Feature-drift forensic candidate: remove only the 12-bar aligned 4H taker-imbalance mean that showed bad-fold signal reversal; keep 24-bar context to avoid repeating the rejected broad slow-flow ablation."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      append_exclude_patterns:
+        - "4h_taker_imbalance_mean_12"
+    baseline_stable_no_4h_large_trade_ratio:
+      description: "Feature-drift forensic candidate: remove only raw aligned 4H large_trade_ratio after bad-fold distribution drift; keep 4H VPT z-score, volume-per-trade z-score, and sparse whale flags."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      append_exclude_patterns:
+        - "4h_large_trade_ratio"
+    baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio:
+      description: "Combined forensic candidate removing the two current bad-fold suspects: 4H taker-imbalance mean 12 and raw 4H large-trade ratio; keep slower 24-bar flow and other whale context."
+      inherit: baseline_stable_no_4h_taker_mean12
+      append_exclude_patterns:
+        - "4h_large_trade_ratio"
     baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate:
       description: "Stability control with the two most plausible bad-fold stabilizers combined: no slow 4H flow means and no local CVD rate."
       inherit: baseline_stable_no_slow_4h_bounded_flow
@@ -1667,6 +1682,9 @@ experiments:
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+    - baseline_stable_no_4h_taker_mean12
+    - baseline_stable_no_4h_large_trade_ratio
+    - baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
     - baseline_control_plus_futures_oi_change_context
     - baseline_control_plus_futures_positioning_context
@@ -1699,6 +1717,9 @@ experiments:
     threshold_deployment_allowed: false
     note: "Clean holdout run 20260522_135424 invalidated this frozen top_10 score-band as an active review candidate: forward return was negative. Keep it as a benchmark only; do not deploy or promote from the same holdout."
     future_oos_candidates:
+      - baseline_stable_no_4h_taker_mean12
+      - baseline_stable_no_4h_large_trade_ratio
+      - baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio
       - blend_control_long_pressure_65_35
       - baseline_control_plus_futures_oi_change_context
       - baseline_control_plus_futures_positioning_context
@@ -1736,6 +1757,9 @@ experiments:
       baseline_control_plus_futures_oi_change_context: "Pre-registered narrow futures track: Binance Vision open-interest change context only."
       baseline_control_plus_futures_positioning_context: "Pre-registered narrow futures track: Binance Vision top-trader/global/taker long-short ratio context only."
       baseline_control_plus_futures_funding_context: "Pre-registered narrow futures track: Binance funding-rate context only; skipped automatically if funding REST data is unavailable."
+      baseline_stable_no_4h_taker_mean12: "Pre-registered after 2026-05-26 feature-drift forensics: isolate only 4h_taker_imbalance_mean_12 bad-fold signal reversal while keeping the previously useful 24-bar slow-flow context."
+      baseline_stable_no_4h_large_trade_ratio: "Pre-registered after 2026-05-26 feature-drift forensics: isolate raw 4H large_trade_ratio distribution drift while preserving other 4H whale context."
+      baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio: "Pre-registered combined forensic candidate; not a promotion until future unseen OOS validates it."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
