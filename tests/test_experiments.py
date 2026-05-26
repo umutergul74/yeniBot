@@ -32,6 +32,10 @@ from yenibot.experiments import (
     _profile_blend_leaders,
     _profile_blend_predictions,
     _profile_blend_review_frame,
+    _probability_quality_forensics_frame,
+    _probability_quality_summary_frame,
+    _score_distribution_shift_frame,
+    _score_distribution_shift_summary_frame,
     _bad_fold_signature_frame,
     _score_separation_forensics_frame,
     _threshold_forensics_frame,
@@ -895,6 +899,81 @@ def test_feature_drift_forensics_flags_bad_fold_signal_reversal() -> None:
     assert row["likely_issue"] == "feature_return_ic_reversal"
     assert not summary.empty
     assert int(summary.iloc[0]["return_ic_reversal_count"]) == 1
+
+
+def test_probability_quality_and_score_shift_forensics_explain_bad_folds() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_long_f1": 0.45,
+            "calibration_bins": 4,
+            "score_lift_bins": 4,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        }
+    }
+    rows = []
+    for fold in range(3):
+        if fold == 1:
+            scores = [0.91, 0.88, 0.82, 0.79, 0.18, 0.16, 0.12, 0.10]
+            labels = [0, 0, 0, 0, 1, 1, 1, 1]
+            returns = [0.004, 0.003, 0.002, 0.001, -0.001, -0.002, -0.003, -0.004]
+        else:
+            scores = [0.12, 0.18, 0.22, 0.28, 0.72, 0.78, 0.82, 0.88]
+            labels = [0, 0, 0, 0, 1, 1, 1, 1]
+            returns = [-0.004, -0.003, -0.002, -0.001, 0.001, 0.002, 0.003, 0.004]
+        for idx, (score, label, forward_return) in enumerate(zip(scores, labels, returns)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-03-01") + pd.Timedelta(hours=fold * 20 + idx),
+                    "label": label,
+                    "prob_long": score,
+                    "forward_return": forward_return,
+                    "tb_return": max(forward_return, 0.0),
+                }
+            )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "feature_columns": [],
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "fold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "rank_ic": 0.20},
+                    {"fold": 1, "rank_ic": -0.20},
+                    {"fold": 2, "rank_ic": 0.18},
+                ]
+            ),
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "official_threshold": 0.5, "test_f1_at_official_threshold": 1.0},
+                    {"fold": 1, "official_threshold": 0.5, "test_f1_at_official_threshold": 0.0},
+                    {"fold": 2, "official_threshold": 0.5, "test_f1_at_official_threshold": 1.0},
+                ]
+            ),
+        },
+    }
+
+    quality = _probability_quality_forensics_frame([entry], config)
+    quality_summary = _probability_quality_summary_frame(quality, config)
+    score_shift = _score_distribution_shift_frame([entry], config)
+    score_shift_summary = _score_distribution_shift_summary_frame(score_shift, config)
+
+    bad_quality = quality.loc[quality["fold"] == 1].iloc[0]
+    assert bad_quality["primary_issue"] == "negative_rank_ic"
+    assert bad_quality["brier_score"] > quality.loc[quality["fold"] == 0, "brier_score"].iloc[0]
+    assert not quality_summary.empty
+    assert quality_summary.iloc[0]["probability_quality_issue"] in {
+        "bad_folds_lose_ranking_resolution",
+        "bad_folds_calibration_worsens",
+        "monitor",
+    }
+    bad_shift = score_shift.loc[score_shift["fold"] == 1].iloc[0]
+    assert bad_shift["score_ks_vs_reference"] > 0
+    assert bad_shift["score_psi_vs_reference"] >= 0
+    assert not score_shift_summary.empty
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -2351,6 +2430,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "probability_quality_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "probability_quality_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "score_distribution_shift.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "score_distribution_shift_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2374,6 +2457,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "probability_quality_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "probability_quality_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "score_distribution_shift.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "score_distribution_shift_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2399,6 +2486,18 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     )
     assert {"feature_family", "top_suspect_feature", "recommended_next_action"}.issubset(
         diagnostics["feature_family_drift_summary"].columns
+    )
+    assert {"brier_score", "log_loss", "average_precision", "ece_equal_count"}.issubset(
+        diagnostics["probability_quality_forensics"].columns
+    )
+    assert {"mean_brier_score", "mean_average_precision", "probability_quality_issue"}.issubset(
+        diagnostics["probability_quality_summary"].columns
+    )
+    assert {"score_ks_vs_reference", "score_psi_vs_reference", "score_shift_issue"}.issubset(
+        diagnostics["score_distribution_shift"].columns
+    )
+    assert {"max_score_psi", "high_shift_folds", "recommended_next_action"}.issubset(
+        diagnostics["score_distribution_shift_summary"].columns
     )
     assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["threshold_policy_review"].empty
@@ -2431,6 +2530,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "likely_signature" in diagnostics["bad_fold_signature"].columns
     assert "bad_fold_signature" in diagnostics["decision"]
     assert "feature_family_drift_summary" in diagnostics["decision"]
+    assert "probability_quality_summary" in diagnostics["decision"]
+    assert "score_distribution_shift_summary" in diagnostics["decision"]
     assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
@@ -2517,6 +2618,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/bad_fold_signature.csv" in archive.namelist()
         assert "matrix/feature_drift_forensics.csv" in archive.namelist()
         assert "matrix/feature_family_drift_summary.csv" in archive.namelist()
+        assert "matrix/probability_quality_forensics.csv" in archive.namelist()
+        assert "matrix/probability_quality_summary.csv" in archive.namelist()
+        assert "matrix/score_distribution_shift.csv" in archive.namelist()
+        assert "matrix/score_distribution_shift_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_review.csv" in archive.namelist()
@@ -2551,6 +2656,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/bad_fold_signature.csv" in names
     assert "matrix/feature_drift_forensics.csv" in names
     assert "matrix/feature_family_drift_summary.csv" in names
+    assert "matrix/probability_quality_forensics.csv" in names
+    assert "matrix/probability_quality_summary.csv" in names
+    assert "matrix/score_distribution_shift.csv" in names
+    assert "matrix/score_distribution_shift_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
     assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/threshold_transfer_review.csv" in names

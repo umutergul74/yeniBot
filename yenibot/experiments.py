@@ -16,6 +16,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.metrics import average_precision_score
 
 from yenibot.diagnostics import (
     attach_threshold_summary_to_phase1_report,
@@ -3549,7 +3550,8 @@ def _phase1_blocker_action_plan_frame(
         promotion_allowed_now=False,
         source_files=(
             "fold_stability_summary.csv;fold_stability_forensics.csv;bad_fold_signature.csv;"
-            "score_separation_forensics.csv;feature_drift_forensics.csv;feature_family_drift_summary.csv"
+            "score_separation_forensics.csv;feature_drift_forensics.csv;feature_family_drift_summary.csv;"
+            "score_distribution_shift.csv;score_distribution_shift_summary.csv"
         ),
         notes="This is the main remaining statistical blocker after mean IC improved.",
     )
@@ -3599,7 +3601,8 @@ def _phase1_blocker_action_plan_frame(
         promotion_allowed_now=False,
         source_files=(
             "threshold_forensics.csv;threshold_policy_review.csv;threshold_transfer_review.csv;"
-            "score_separation_forensics.csv;feature_drift_forensics.csv;profile_comparison.csv;phase2_readiness.json"
+            "score_separation_forensics.csv;probability_quality_forensics.csv;probability_quality_summary.csv;"
+            "feature_drift_forensics.csv;profile_comparison.csv;phase2_readiness.json"
         ),
         notes="This prevents an unrealistically broad long gate from masking deployment risk.",
     )
@@ -5647,6 +5650,620 @@ def _write_feature_drift_forensics(path: Path, detail: pd.DataFrame, summary: pd
         {
             "feature_drift_forensics": detail.to_dict(orient="records"),
             "feature_family_drift_summary": summary.to_dict(orient="records"),
+        },
+    )
+
+
+def _clean_probability_inputs(labels: pd.Series, scores: pd.Series) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "label": pd.to_numeric(labels, errors="coerce"),
+            "score": pd.to_numeric(scores, errors="coerce"),
+        }
+    )
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    if frame.empty:
+        return frame
+    frame["label"] = frame["label"].astype(int)
+    frame["score"] = frame["score"].clip(1e-6, 1.0 - 1e-6)
+    return frame
+
+
+def _calibration_error(labels: pd.Series, scores: pd.Series, *, bins: int, strategy: str) -> tuple[float, float, int]:
+    frame = _clean_probability_inputs(labels, scores)
+    if frame.empty:
+        return np.nan, np.nan, 0
+    bins = max(2, int(bins))
+    if strategy == "equal_count":
+        try:
+            frame["bin"] = pd.qcut(frame["score"].rank(method="first"), q=min(bins, len(frame)), labels=False, duplicates="drop")
+        except ValueError:
+            return np.nan, np.nan, 0
+    else:
+        edges = np.linspace(0.0, 1.0, bins + 1)
+        frame["bin"] = pd.cut(frame["score"], bins=edges, labels=False, include_lowest=True)
+    frame = frame.dropna(subset=["bin"]).copy()
+    if frame.empty:
+        return np.nan, np.nan, 0
+    total = float(len(frame))
+    weighted_error = 0.0
+    max_error = 0.0
+    used_bins = 0
+    for _, part in frame.groupby("bin"):
+        if part.empty:
+            continue
+        predicted = float(part["score"].mean())
+        actual = float(part["label"].mean())
+        error = abs(actual - predicted)
+        weighted_error += (len(part) / total) * error
+        max_error = max(max_error, error)
+        used_bins += 1
+    return float(weighted_error), float(max_error), int(used_bins)
+
+
+def _safe_average_precision(labels: pd.Series, scores: pd.Series) -> float:
+    frame = _clean_probability_inputs(labels, scores)
+    if frame.empty or frame["label"].nunique(dropna=True) < 2:
+        return np.nan
+    try:
+        return float(average_precision_score(frame["label"], frame["score"]))
+    except ValueError:
+        return np.nan
+
+
+def _binary_probability_metrics(labels: pd.Series, scores: pd.Series, *, bins: int) -> dict[str, float]:
+    frame = _clean_probability_inputs(labels, scores)
+    if frame.empty:
+        return {
+            "brier_score": np.nan,
+            "log_loss": np.nan,
+            "average_precision": np.nan,
+            "ece_equal_width": np.nan,
+            "mce_equal_width": np.nan,
+            "ece_equal_count": np.nan,
+            "mce_equal_count": np.nan,
+            "score_entropy_mean": np.nan,
+            "score_sharpness_mean": np.nan,
+            "prob_long_mean": np.nan,
+            "prob_long_std": np.nan,
+            "prob_long_iqr": np.nan,
+        }
+    labels_array = frame["label"].astype(float)
+    scores_array = frame["score"].astype(float)
+    ece_width, mce_width, _ = _calibration_error(labels_array, scores_array, bins=bins, strategy="equal_width")
+    ece_count, mce_count, _ = _calibration_error(labels_array, scores_array, bins=bins, strategy="equal_count")
+    entropy = -(scores_array * np.log(scores_array) + (1.0 - scores_array) * np.log(1.0 - scores_array))
+    return {
+        "brier_score": float(np.mean((scores_array - labels_array) ** 2)),
+        "log_loss": float(-np.mean(labels_array * np.log(scores_array) + (1.0 - labels_array) * np.log(1.0 - scores_array))),
+        "average_precision": _safe_average_precision(labels_array, scores_array),
+        "ece_equal_width": ece_width,
+        "mce_equal_width": mce_width,
+        "ece_equal_count": ece_count,
+        "mce_equal_count": mce_count,
+        "score_entropy_mean": float(entropy.mean()),
+        "score_sharpness_mean": float((scores_array * (1.0 - scores_array)).mean()),
+        "prob_long_mean": float(scores_array.mean()),
+        "prob_long_std": float(scores_array.std(ddof=0)),
+        "prob_long_iqr": float(scores_array.quantile(0.75) - scores_array.quantile(0.25)),
+    }
+
+
+def _probability_quality_forensics_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold",
+        "start",
+        "end",
+        "count",
+        "label_long_rate",
+        "rank_ic",
+        "rank_ic_bucket",
+        "brier_score",
+        "log_loss",
+        "average_precision",
+        "ece_equal_width",
+        "mce_equal_width",
+        "ece_equal_count",
+        "mce_equal_count",
+        "score_entropy_mean",
+        "score_sharpness_mean",
+        "prob_long_mean",
+        "prob_long_std",
+        "prob_long_iqr",
+        "official_threshold",
+        "official_f1",
+        "official_pred_long_rate",
+        "primary_issue",
+    ]
+    rows: list[dict[str, Any]] = []
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    max_pred_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    bins = int(_cfg(config, ["validation", "calibration_bins"], 10))
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        test_predictions = _test_predictions(predictions)
+        if test_predictions.empty or not {"fold", "label", "prob_long"}.issubset(test_predictions.columns):
+            continue
+        diagnostics = entry.get("diagnostics", {}) or {}
+        fold_metrics = diagnostics.get("fold_metrics")
+        fold_by_id = (
+            {int(row["fold"]): row.to_dict() for _, row in fold_metrics.dropna(subset=["fold"]).iterrows()}
+            if isinstance(fold_metrics, pd.DataFrame) and not fold_metrics.empty and "fold" in fold_metrics.columns
+            else {}
+        )
+        threshold_metrics = _entry_threshold_policy_frame(entry)
+        threshold_by_id = (
+            {int(row["fold"]): row.to_dict() for _, row in threshold_metrics.dropna(subset=["fold"]).iterrows()}
+            if threshold_metrics is not None and not threshold_metrics.empty and "fold" in threshold_metrics.columns
+            else {}
+        )
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for fold, part in test_predictions.groupby("fold"):
+            fold_id = int(fold)
+            part = part.replace([np.inf, -np.inf], np.nan).dropna(subset=["label", "prob_long"]).copy()
+            if part.empty:
+                continue
+            rank_row = fold_by_id.get(fold_id, {})
+            threshold_row = threshold_by_id.get(fold_id, {})
+            rank_ic_value = _float(rank_row, "rank_ic")
+            metrics = _binary_probability_metrics(part["label"], part["prob_long"], bins=bins)
+            official_f1 = _float(threshold_row, "test_f1_at_official_threshold", _float(threshold_row, "test_f1_at_constrained_threshold"))
+            official_rate = _float(
+                threshold_row,
+                "test_pred_long_rate_at_official_threshold",
+                _float(threshold_row, "test_pred_long_rate_at_constrained_threshold"),
+            )
+            if np.isfinite(rank_ic_value) and rank_ic_value < 0.0:
+                issue = "negative_rank_ic"
+            elif np.isfinite(metrics["ece_equal_count"]) and metrics["ece_equal_count"] > 0.10:
+                issue = "calibration_error"
+            elif np.isfinite(official_f1) and official_f1 < min_long_f1:
+                issue = "official_f1_gap"
+            elif np.isfinite(official_rate) and official_rate > max_pred_rate:
+                issue = "pred_long_rate_guardrail"
+            else:
+                issue = "ok"
+            bucket = (
+                "negative_rank_ic"
+                if np.isfinite(rank_ic_value) and rank_ic_value < 0.0
+                else ("below_target_rank_ic" if np.isfinite(rank_ic_value) and rank_ic_value < target_rank_ic else "rank_ic_ok")
+            )
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": candidate_type,
+                    "fold_scope": fold_scope,
+                    "fold": fold_id,
+                    "start": str(part["timestamp"].min()) if "timestamp" in part.columns else str(rank_row.get("start", "")),
+                    "end": str(part["timestamp"].max()) if "timestamp" in part.columns else str(rank_row.get("end", "")),
+                    "count": int(len(part)),
+                    "label_long_rate": float(pd.to_numeric(part["label"], errors="coerce").mean()),
+                    "rank_ic": rank_ic_value,
+                    "rank_ic_bucket": bucket,
+                    **metrics,
+                    "official_threshold": _float(threshold_row, "official_threshold"),
+                    "official_f1": official_f1,
+                    "official_pred_long_rate": official_rate,
+                    "primary_issue": issue,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "rank_ic"], ascending=[True, True, True, True])
+        .reset_index(drop=True)
+    )
+
+
+def _probability_quality_summary_frame(probability_quality: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "bad_definition",
+        "bad_fold_count",
+        "good_fold_count",
+        "mean_brier_score",
+        "mean_log_loss",
+        "mean_average_precision",
+        "mean_ece_equal_count",
+        "mean_score_entropy",
+        "bad_brier_score_mean",
+        "good_brier_score_mean",
+        "bad_average_precision_mean",
+        "good_average_precision_mean",
+        "bad_ece_equal_count_mean",
+        "good_ece_equal_count_mean",
+        "bad_score_entropy_mean",
+        "good_score_entropy_mean",
+        "probability_quality_issue",
+        "recommended_next_action",
+    ]
+    if probability_quality.empty:
+        return pd.DataFrame(columns=columns)
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    rows: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope), part in probability_quality.groupby(
+        ["candidate", "candidate_type", "fold_scope"],
+        dropna=False,
+    ):
+        rank = pd.to_numeric(part["rank_ic"], errors="coerce")
+        bad_mask = rank < 0.0
+        bad_definition = "negative_rank_ic"
+        if int(bad_mask.sum()) < 1:
+            bad_mask = rank < target_rank_ic
+            bad_definition = f"rank_ic_below_target_{target_rank_ic:.3f}"
+        good_mask = rank >= target_rank_ic
+        bad_count = int(bad_mask.sum())
+        good_count = int(good_mask.sum())
+        bad_brier = _mean_for_mask(part, bad_mask, "brier_score")
+        good_brier = _mean_for_mask(part, good_mask, "brier_score")
+        bad_ap = _mean_for_mask(part, bad_mask, "average_precision")
+        good_ap = _mean_for_mask(part, good_mask, "average_precision")
+        bad_ece = _mean_for_mask(part, bad_mask, "ece_equal_count")
+        good_ece = _mean_for_mask(part, good_mask, "ece_equal_count")
+        bad_entropy = _mean_for_mask(part, bad_mask, "score_entropy_mean")
+        good_entropy = _mean_for_mask(part, good_mask, "score_entropy_mean")
+        if np.isfinite(bad_ap) and np.isfinite(good_ap) and bad_ap < good_ap - 0.05:
+            issue = "bad_folds_lose_ranking_resolution"
+            action = "prioritize_score_separation_features_over_threshold_smoothing"
+        elif np.isfinite(bad_ece) and np.isfinite(good_ece) and bad_ece > good_ece + 0.03:
+            issue = "bad_folds_calibration_worsens"
+            action = "review_calibration_by_fold_but_do_not_fit_on_test_or_holdout"
+        elif np.isfinite(bad_entropy) and np.isfinite(good_entropy) and bad_entropy > good_entropy + 0.03:
+            issue = "bad_folds_scores_become_uncertain"
+            action = "inspect_feature_drift_and_score_distribution_shift"
+        else:
+            issue = "monitor"
+            action = "monitor"
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "fold_count": int(part["fold"].nunique()),
+                "bad_definition": bad_definition,
+                "bad_fold_count": bad_count,
+                "good_fold_count": good_count,
+                "mean_brier_score": float(pd.to_numeric(part["brier_score"], errors="coerce").mean()),
+                "mean_log_loss": float(pd.to_numeric(part["log_loss"], errors="coerce").mean()),
+                "mean_average_precision": float(pd.to_numeric(part["average_precision"], errors="coerce").mean()),
+                "mean_ece_equal_count": float(pd.to_numeric(part["ece_equal_count"], errors="coerce").mean()),
+                "mean_score_entropy": float(pd.to_numeric(part["score_entropy_mean"], errors="coerce").mean()),
+                "bad_brier_score_mean": bad_brier,
+                "good_brier_score_mean": good_brier,
+                "bad_average_precision_mean": bad_ap,
+                "good_average_precision_mean": good_ap,
+                "bad_ece_equal_count_mean": bad_ece,
+                "good_ece_equal_count_mean": good_ece,
+                "bad_score_entropy_mean": bad_entropy,
+                "good_score_entropy_mean": good_entropy,
+                "probability_quality_issue": issue,
+                "recommended_next_action": action,
+            }
+        )
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "mean_average_precision"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _population_stability_index(actual: pd.Series, expected: pd.Series, *, bins: int) -> float:
+    actual_values = pd.to_numeric(actual, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
+    expected_values = pd.to_numeric(expected, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
+    if len(actual_values) == 0 or len(expected_values) == 0:
+        return np.nan
+    bins = max(2, int(bins))
+    try:
+        edges = np.unique(np.quantile(expected_values, np.linspace(0.0, 1.0, bins + 1)))
+    except ValueError:
+        return np.nan
+    if len(edges) < 3:
+        low = min(float(np.min(actual_values)), float(np.min(expected_values)))
+        high = max(float(np.max(actual_values)), float(np.max(expected_values)))
+        if not np.isfinite(low) or not np.isfinite(high) or low == high:
+            return 0.0
+        edges = np.linspace(low, high, bins + 1)
+    edges[0] = -np.inf
+    edges[-1] = np.inf
+    actual_counts, _ = np.histogram(actual_values, bins=edges)
+    expected_counts, _ = np.histogram(expected_values, bins=edges)
+    epsilon = 1e-6
+    actual_pct = np.maximum(actual_counts / max(1, actual_counts.sum()), epsilon)
+    expected_pct = np.maximum(expected_counts / max(1, expected_counts.sum()), epsilon)
+    return float(np.sum((actual_pct - expected_pct) * np.log(actual_pct / expected_pct)))
+
+
+def _score_distribution_shift_frame(entries: list[dict[str, Any]], config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold",
+        "rank_ic",
+        "rank_ic_bucket",
+        "reference_definition",
+        "reference_fold_count",
+        "score_ks_vs_reference",
+        "score_psi_vs_reference",
+        "prob_long_mean",
+        "reference_prob_long_mean",
+        "prob_long_mean_delta",
+        "prob_long_std",
+        "reference_prob_long_std",
+        "prob_long_std_ratio",
+        "prob_long_iqr",
+        "reference_prob_long_iqr",
+        "score_entropy_mean",
+        "reference_score_entropy_mean",
+        "score_entropy_delta",
+        "score_shift_issue",
+    ]
+    rows: list[dict[str, Any]] = []
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    bins = int(_cfg(config, ["validation", "score_lift_bins"], 10))
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        test_predictions = _test_predictions(predictions)
+        if test_predictions.empty or not {"fold", "prob_long"}.issubset(test_predictions.columns):
+            continue
+        diagnostics = entry.get("diagnostics", {}) or {}
+        fold_metrics = diagnostics.get("fold_metrics")
+        fold_by_id = (
+            {int(row["fold"]): row.to_dict() for _, row in fold_metrics.dropna(subset=["fold"]).iterrows()}
+            if isinstance(fold_metrics, pd.DataFrame) and not fold_metrics.empty and "fold" in fold_metrics.columns
+            else {}
+        )
+        rank_by_id = {fold: _float(row, "rank_ic") for fold, row in fold_by_id.items()}
+        all_folds = sorted({int(fold) for fold in pd.to_numeric(test_predictions["fold"], errors="coerce").dropna().astype(int)})
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for fold in all_folds:
+            part = test_predictions.loc[pd.to_numeric(test_predictions["fold"], errors="coerce") == fold].copy()
+            scores = pd.to_numeric(part["prob_long"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if scores.empty:
+                continue
+            good_reference_folds = [
+                other_fold
+                for other_fold in all_folds
+                if other_fold != fold and np.isfinite(rank_by_id.get(other_fold, np.nan)) and rank_by_id[other_fold] >= target_rank_ic
+            ]
+            reference_definition = f"other_folds_rank_ic_ge_{target_rank_ic:.3f}"
+            if not good_reference_folds:
+                good_reference_folds = [other_fold for other_fold in all_folds if other_fold != fold]
+                reference_definition = "all_other_folds"
+            reference = test_predictions.loc[test_predictions["fold"].astype(int).isin(good_reference_folds), "prob_long"]
+            reference_scores = pd.to_numeric(reference, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if reference_scores.empty:
+                continue
+            rank_ic_value = rank_by_id.get(fold, np.nan)
+            metrics = _binary_probability_metrics(pd.Series(np.zeros(len(scores))), scores, bins=bins)
+            reference_metrics = _binary_probability_metrics(pd.Series(np.zeros(len(reference_scores))), reference_scores, bins=bins)
+            score_std = float(scores.std(ddof=0))
+            ref_std = float(reference_scores.std(ddof=0))
+            score_iqr = float(scores.quantile(0.75) - scores.quantile(0.25))
+            ref_iqr = float(reference_scores.quantile(0.75) - reference_scores.quantile(0.25))
+            ks = _score_ks_statistic(scores, reference_scores)
+            psi = _population_stability_index(scores, reference_scores, bins=bins)
+            entropy_delta = metrics["score_entropy_mean"] - reference_metrics["score_entropy_mean"]
+            if np.isfinite(psi) and psi >= 0.25:
+                issue = "major_score_distribution_shift"
+            elif np.isfinite(ks) and ks >= 0.20:
+                issue = "large_score_distribution_ks_shift"
+            elif np.isfinite(entropy_delta) and abs(entropy_delta) >= 0.05:
+                issue = "score_uncertainty_shift"
+            else:
+                issue = "monitor"
+            bucket = (
+                "negative_rank_ic"
+                if np.isfinite(rank_ic_value) and rank_ic_value < 0.0
+                else ("below_target_rank_ic" if np.isfinite(rank_ic_value) and rank_ic_value < target_rank_ic else "rank_ic_ok")
+            )
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": candidate_type,
+                    "fold_scope": fold_scope,
+                    "fold": fold,
+                    "rank_ic": rank_ic_value,
+                    "rank_ic_bucket": bucket,
+                    "reference_definition": reference_definition,
+                    "reference_fold_count": len(good_reference_folds),
+                    "score_ks_vs_reference": ks,
+                    "score_psi_vs_reference": psi,
+                    "prob_long_mean": float(scores.mean()),
+                    "reference_prob_long_mean": float(reference_scores.mean()),
+                    "prob_long_mean_delta": float(scores.mean() - reference_scores.mean()),
+                    "prob_long_std": score_std,
+                    "reference_prob_long_std": ref_std,
+                    "prob_long_std_ratio": float(score_std / ref_std) if ref_std > 0 else np.nan,
+                    "prob_long_iqr": score_iqr,
+                    "reference_prob_long_iqr": ref_iqr,
+                    "score_entropy_mean": metrics["score_entropy_mean"],
+                    "reference_score_entropy_mean": reference_metrics["score_entropy_mean"],
+                    "score_entropy_delta": entropy_delta,
+                    "score_shift_issue": issue,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "score_psi_vs_reference"], ascending=[True, True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _score_distribution_shift_summary_frame(score_shift: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "bad_fold_count",
+        "mean_score_ks",
+        "max_score_ks",
+        "mean_score_psi",
+        "max_score_psi",
+        "bad_score_psi_mean",
+        "good_score_psi_mean",
+        "bad_score_ks_mean",
+        "good_score_ks_mean",
+        "high_shift_fold_count",
+        "high_shift_folds",
+        "score_shift_issue",
+        "recommended_next_action",
+    ]
+    if score_shift.empty:
+        return pd.DataFrame(columns=columns)
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    rows: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope), part in score_shift.groupby(
+        ["candidate", "candidate_type", "fold_scope"],
+        dropna=False,
+    ):
+        rank = pd.to_numeric(part["rank_ic"], errors="coerce")
+        bad_mask = rank < target_rank_ic
+        good_mask = rank >= target_rank_ic
+        high_shift = (pd.to_numeric(part["score_psi_vs_reference"], errors="coerce") >= 0.25) | (
+            pd.to_numeric(part["score_ks_vs_reference"], errors="coerce") >= 0.20
+        )
+        high_folds = sorted(part.loc[high_shift, "fold"].dropna().astype(int).tolist())
+        bad_psi = _mean_for_mask(part, bad_mask, "score_psi_vs_reference")
+        good_psi = _mean_for_mask(part, good_mask, "score_psi_vs_reference")
+        bad_ks = _mean_for_mask(part, bad_mask, "score_ks_vs_reference")
+        good_ks = _mean_for_mask(part, good_mask, "score_ks_vs_reference")
+        if high_folds and np.isfinite(bad_psi) and np.isfinite(good_psi) and bad_psi > good_psi + 0.05:
+            issue = "bad_folds_show_score_distribution_shift"
+            action = "inspect_feature_drift_for_shifted_folds_before_new_profile_search"
+        elif high_folds:
+            issue = "score_distribution_shift_not_specific_to_bad_folds"
+            action = "monitor_score_distribution_shift"
+        else:
+            issue = "monitor"
+            action = "monitor"
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "fold_count": int(part["fold"].nunique()),
+                "bad_fold_count": int(bad_mask.sum()),
+                "mean_score_ks": float(pd.to_numeric(part["score_ks_vs_reference"], errors="coerce").mean()),
+                "max_score_ks": float(pd.to_numeric(part["score_ks_vs_reference"], errors="coerce").max()),
+                "mean_score_psi": float(pd.to_numeric(part["score_psi_vs_reference"], errors="coerce").mean()),
+                "max_score_psi": float(pd.to_numeric(part["score_psi_vs_reference"], errors="coerce").max()),
+                "bad_score_psi_mean": bad_psi,
+                "good_score_psi_mean": good_psi,
+                "bad_score_ks_mean": bad_ks,
+                "good_score_ks_mean": good_ks,
+                "high_shift_fold_count": len(high_folds),
+                "high_shift_folds": ",".join(str(fold) for fold in high_folds),
+                "score_shift_issue": issue,
+                "recommended_next_action": action,
+            }
+        )
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate_type", "candidate", "max_score_psi"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _probability_quality_markdown(summary: pd.DataFrame) -> str:
+    lines = ["# Probability Quality Forensics", ""]
+    if summary.empty:
+        lines.append("No probability-quality rows were produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "mean_brier_score",
+        "mean_average_precision",
+        "mean_ece_equal_count",
+        "bad_average_precision_mean",
+        "good_average_precision_mean",
+        "bad_ece_equal_count_mean",
+        "good_ece_equal_count_mean",
+        "probability_quality_issue",
+        "recommended_next_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _score_distribution_shift_markdown(summary: pd.DataFrame) -> str:
+    lines = ["# Score Distribution Shift", ""]
+    if summary.empty:
+        lines.append("No score-distribution shift rows were produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "mean_score_ks",
+        "max_score_ks",
+        "mean_score_psi",
+        "max_score_psi",
+        "bad_score_psi_mean",
+        "good_score_psi_mean",
+        "high_shift_folds",
+        "score_shift_issue",
+        "recommended_next_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_probability_quality_forensics(path: Path, detail: pd.DataFrame, summary: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    detail.to_csv(path / "probability_quality_forensics.csv", index=False)
+    summary.to_csv(path / "probability_quality_summary.csv", index=False)
+    (path / "probability_quality_forensics.md").write_text(_probability_quality_markdown(summary), encoding="utf-8")
+    _write_json(
+        path / "probability_quality_forensics.json",
+        {
+            "probability_quality_forensics": detail.to_dict(orient="records"),
+            "probability_quality_summary": summary.to_dict(orient="records"),
+        },
+    )
+
+
+def _write_score_distribution_shift(path: Path, detail: pd.DataFrame, summary: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    detail.to_csv(path / "score_distribution_shift.csv", index=False)
+    summary.to_csv(path / "score_distribution_shift_summary.csv", index=False)
+    (path / "score_distribution_shift.md").write_text(_score_distribution_shift_markdown(summary), encoding="utf-8")
+    _write_json(
+        path / "score_distribution_shift.json",
+        {
+            "score_distribution_shift": detail.to_dict(orient="records"),
+            "score_distribution_shift_summary": summary.to_dict(orient="records"),
         },
     )
 
@@ -7758,6 +8375,14 @@ def _write_experiment_bundle(
         "feature_family_drift_summary.csv",
         "feature_drift_forensics.md",
         "feature_drift_forensics.json",
+        "probability_quality_forensics.csv",
+        "probability_quality_summary.csv",
+        "probability_quality_forensics.md",
+        "probability_quality_forensics.json",
+        "score_distribution_shift.csv",
+        "score_distribution_shift_summary.csv",
+        "score_distribution_shift.md",
+        "score_distribution_shift.json",
         "threshold_forensics.csv",
         "threshold_forensics.md",
         "threshold_forensics.json",
@@ -7940,6 +8565,10 @@ def run_experiment_matrix(
     bad_fold_signature = _bad_fold_signature_frame(score_separation_forensics, config)
     feature_drift_forensics = _feature_drift_forensics_frame(all_results, score_separation_forensics, config)
     feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
+    probability_quality_forensics = _probability_quality_forensics_frame(all_results, config)
+    probability_quality_summary = _probability_quality_summary_frame(probability_quality_forensics, config)
+    score_distribution_shift = _score_distribution_shift_frame(all_results, config)
+    score_distribution_shift_summary = _score_distribution_shift_summary_frame(score_distribution_shift, config)
     threshold_forensics = _threshold_forensics_frame(all_results, config)
     threshold_policy_review = _threshold_policy_review_frame(all_results, config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(all_results, config)
@@ -7979,6 +8608,8 @@ def run_experiment_matrix(
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
+    _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
+    _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
@@ -8026,6 +8657,8 @@ def run_experiment_matrix(
         "score_separation_forensics": score_separation_forensics.to_dict(orient="records"),
         "bad_fold_signature": bad_fold_signature.to_dict(orient="records"),
         "feature_family_drift_summary": feature_family_drift_summary.to_dict(orient="records"),
+        "probability_quality_summary": probability_quality_summary.to_dict(orient="records"),
+        "score_distribution_shift_summary": score_distribution_shift_summary.to_dict(orient="records"),
         "threshold_forensics_summary": (
             threshold_forensics["primary_issue"].value_counts().to_dict()
             if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
@@ -8057,6 +8690,10 @@ def run_experiment_matrix(
         "bad_fold_signature": bad_fold_signature,
         "feature_drift_forensics": feature_drift_forensics,
         "feature_family_drift_summary": feature_family_drift_summary,
+        "probability_quality_forensics": probability_quality_forensics,
+        "probability_quality_summary": probability_quality_summary,
+        "score_distribution_shift": score_distribution_shift,
+        "score_distribution_shift_summary": score_distribution_shift_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
@@ -8304,6 +8941,10 @@ def write_experiment_diagnostics(
     bad_fold_signature = _bad_fold_signature_frame(score_separation_forensics, diagnostic_config)
     feature_drift_forensics = _feature_drift_forensics_frame(entries, score_separation_forensics, diagnostic_config)
     feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
+    probability_quality_forensics = _probability_quality_forensics_frame(entries, diagnostic_config)
+    probability_quality_summary = _probability_quality_summary_frame(probability_quality_forensics, diagnostic_config)
+    score_distribution_shift = _score_distribution_shift_frame(entries, diagnostic_config)
+    score_distribution_shift_summary = _score_distribution_shift_summary_frame(score_distribution_shift, diagnostic_config)
     threshold_forensics = _threshold_forensics_frame(entries, diagnostic_config)
     threshold_policy_review = _threshold_policy_review_frame(entries, diagnostic_config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(entries, diagnostic_config)
@@ -8321,6 +8962,8 @@ def write_experiment_diagnostics(
     decision["fold_stability_summary"] = fold_stability_summary.to_dict(orient="records")
     decision["bad_fold_signature"] = bad_fold_signature.to_dict(orient="records")
     decision["feature_family_drift_summary"] = feature_family_drift_summary.to_dict(orient="records")
+    decision["probability_quality_summary"] = probability_quality_summary.to_dict(orient="records")
+    decision["score_distribution_shift_summary"] = score_distribution_shift_summary.to_dict(orient="records")
     decision["threshold_forensics_summary"] = (
         threshold_forensics["primary_issue"].value_counts().to_dict()
         if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
@@ -8354,6 +8997,8 @@ def write_experiment_diagnostics(
     )
     _write_score_separation_forensics(report_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(report_dir, feature_drift_forensics, feature_family_drift_summary)
+    _write_probability_quality_forensics(report_dir, probability_quality_forensics, probability_quality_summary)
+    _write_score_distribution_shift(report_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_threshold_policy_review(report_dir, threshold_policy_review)
     _write_threshold_transfer_review(report_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
@@ -8423,6 +9068,8 @@ def write_experiment_diagnostics(
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
+    _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
+    _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
@@ -8476,6 +9123,10 @@ def write_experiment_diagnostics(
         "bad_fold_signature": bad_fold_signature,
         "feature_drift_forensics": feature_drift_forensics,
         "feature_family_drift_summary": feature_family_drift_summary,
+        "probability_quality_forensics": probability_quality_forensics,
+        "probability_quality_summary": probability_quality_summary,
+        "score_distribution_shift": score_distribution_shift,
+        "score_distribution_shift_summary": score_distribution_shift_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
