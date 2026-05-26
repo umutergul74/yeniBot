@@ -30,6 +30,8 @@ from yenibot.experiments import (
     _profile_blend_leaders,
     _profile_blend_predictions,
     _profile_blend_review_frame,
+    _bad_fold_signature_frame,
+    _score_separation_forensics_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
     _threshold_transfer_review_frames,
@@ -755,6 +757,74 @@ def test_threshold_transfer_review_uses_prior_fold_thresholds_only() -> None:
     summary_row = summary.loc[summary["policy_name"] == "past_median_constrained_threshold"].iloc[0]
     assert int(summary_row["fold_count"]) == 2
     assert "test_f1" in summary.columns
+
+
+def test_score_separation_forensics_flags_bad_fold_signature() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        }
+    }
+    rows = []
+    for fold, scores in {
+        0: [0.20, 0.30, 0.75, 0.85],
+        1: [0.80, 0.70, 0.30, 0.20],
+        2: [0.25, 0.35, 0.70, 0.90],
+    }.items():
+        for idx, score in enumerate(scores):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-02-01") + pd.Timedelta(hours=fold * 10 + idx),
+                    "label": int(idx >= 2),
+                    "prob_long": score,
+                    "forward_return": 0.002 if idx >= 2 else -0.001,
+                    "tb_return": 0.003 if idx >= 2 else 0.0,
+                }
+            )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "fold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "rank_ic": 0.12},
+                    {"fold": 1, "rank_ic": -0.10},
+                    {"fold": 2, "rank_ic": 0.09},
+                ]
+            ),
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 1.0},
+                    {"fold": 1, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 0.0},
+                    {"fold": 2, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 1.0},
+                ]
+            ),
+            "score_band_by_fold": pd.DataFrame(
+                [
+                    {"fold": 0, "band": "top_10", "lift_vs_base": 1.5, "mean_forward_return": 0.002},
+                    {"fold": 1, "band": "top_10", "lift_vs_base": 0.5, "mean_forward_return": -0.001},
+                    {"fold": 2, "band": "top_10", "lift_vs_base": 1.4, "mean_forward_return": 0.002},
+                ]
+            ),
+        },
+    }
+
+    score_forensics = _score_separation_forensics_frame([entry], config)
+    signature = _bad_fold_signature_frame(score_forensics, config)
+
+    bad_row = score_forensics.loc[score_forensics["fold"] == 1].iloc[0]
+    assert bad_row["primary_issue"] == "negative_rank_ic"
+    assert bad_row["score_gap_pos_minus_neg"] < 0
+    assert not signature.empty
+    signature_row = signature.iloc[0]
+    assert signature_row["bad_fold_count"] == 1
+    assert "score_separation_compresses_or_reverses" in signature_row["likely_signature"]
+    assert "top_score_payoff_reverses" in signature_row["likely_signature"]
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -2207,6 +2277,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2226,6 +2298,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2245,6 +2319,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["phase1_blocker_action_plan"].empty
     assert not diagnostics["fold_stability_forensics"].empty
     assert not diagnostics["fold_stability_summary"].empty
+    assert not diagnostics["score_separation_forensics"].empty
     assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["threshold_policy_review"].empty
     assert not diagnostics["threshold_transfer_review"].empty
@@ -2272,6 +2347,9 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         set(diagnostics["phase1_blocker_action_plan"]["blocker"])
     )
     assert "test_f1_at_official_threshold" in diagnostics["comparison"].columns
+    assert "score_gap_pos_minus_neg" in diagnostics["score_separation_forensics"].columns
+    assert "likely_signature" in diagnostics["bad_fold_signature"].columns
+    assert "bad_fold_signature" in diagnostics["decision"]
     assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
@@ -2354,6 +2432,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_calibrated_threshold_summary.csv" in archive.namelist()
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
+        assert "matrix/score_separation_forensics.csv" in archive.namelist()
+        assert "matrix/bad_fold_signature.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_review.csv" in archive.namelist()
@@ -2384,6 +2464,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/profile_calibrated_threshold_summary.csv" in names
     assert "matrix/fold_stability_forensics.csv" in names
     assert "matrix/fold_stability_summary.csv" in names
+    assert "matrix/score_separation_forensics.csv" in names
+    assert "matrix/bad_fold_signature.csv" in names
     assert "matrix/threshold_forensics.csv" in names
     assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/threshold_transfer_review.csv" in names
