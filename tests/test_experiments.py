@@ -20,6 +20,8 @@ from yenibot.experiments import (
     _frozen_policy_monitoring_plan_frame,
     _frozen_policy_robustness_frame,
     _future_oos_candidate_plan_frame,
+    _feature_drift_forensics_frame,
+    _feature_family_drift_summary_frame,
     _holdout_boundary_audit_frame,
     _holdout_reservation_frame,
     _performance_gap_reasons,
@@ -825,6 +827,74 @@ def test_score_separation_forensics_flags_bad_fold_signature() -> None:
     assert signature_row["bad_fold_count"] == 1
     assert "score_separation_compresses_or_reverses" in signature_row["likely_signature"]
     assert "top_score_payoff_reverses" in signature_row["likely_signature"]
+
+
+def test_feature_drift_forensics_flags_bad_fold_signal_reversal() -> None:
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        }
+    }
+    rows = []
+    for fold in range(3):
+        feature_values = [0.1, 0.2, 0.8, 0.9]
+        returns = [0.0, 0.001, 0.003, 0.004] if fold != 1 else [0.004, 0.003, 0.001, 0.0]
+        scores = [0.20, 0.30, 0.75, 0.85] if fold != 1 else [0.80, 0.70, 0.30, 0.20]
+        for idx, (feature_value, forward_return, score) in enumerate(zip(feature_values, returns, scores)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-02-01") + pd.Timedelta(hours=fold * 10 + idx),
+                    "label": int(idx >= 2),
+                    "prob_long": score,
+                    "forward_return": forward_return,
+                    "tb_return": max(forward_return, 0.0),
+                    "taker_imbalance": feature_value,
+                }
+            )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "feature_columns": ["taker_imbalance"],
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "fold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "rank_ic": 0.12},
+                    {"fold": 1, "rank_ic": -0.10},
+                    {"fold": 2, "rank_ic": 0.09},
+                ]
+            ),
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {"fold": 0, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 1.0},
+                    {"fold": 1, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 0.0},
+                    {"fold": 2, "constrained_threshold": 0.5, "test_f1_at_constrained_threshold": 1.0},
+                ]
+            ),
+            "score_band_by_fold": pd.DataFrame(
+                [
+                    {"fold": 0, "band": "top_10", "lift_vs_base": 1.5, "mean_forward_return": 0.002},
+                    {"fold": 1, "band": "top_10", "lift_vs_base": 0.5, "mean_forward_return": -0.001},
+                    {"fold": 2, "band": "top_10", "lift_vs_base": 1.4, "mean_forward_return": 0.002},
+                ]
+            ),
+        },
+    }
+
+    score_forensics = _score_separation_forensics_frame([entry], config)
+    drift = _feature_drift_forensics_frame([entry], score_forensics, config)
+    summary = _feature_family_drift_summary_frame(drift)
+
+    row = drift.loc[drift["feature"] == "taker_imbalance"].iloc[0]
+    assert row["feature_family"] == "order_flow"
+    assert bool(row["return_ic_reversal"]) is True
+    assert row["likely_issue"] == "feature_return_ic_reversal"
+    assert not summary.empty
+    assert int(summary.iloc[0]["return_ic_reversal_count"]) == 1
 
 
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
@@ -2279,6 +2349,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2300,6 +2372,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2320,6 +2394,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["fold_stability_forensics"].empty
     assert not diagnostics["fold_stability_summary"].empty
     assert not diagnostics["score_separation_forensics"].empty
+    assert {"feature", "feature_family", "suspect_score", "likely_issue"}.issubset(
+        diagnostics["feature_drift_forensics"].columns
+    )
+    assert {"feature_family", "top_suspect_feature", "recommended_next_action"}.issubset(
+        diagnostics["feature_family_drift_summary"].columns
+    )
     assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["threshold_policy_review"].empty
     assert not diagnostics["threshold_transfer_review"].empty
@@ -2350,6 +2430,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "score_gap_pos_minus_neg" in diagnostics["score_separation_forensics"].columns
     assert "likely_signature" in diagnostics["bad_fold_signature"].columns
     assert "bad_fold_signature" in diagnostics["decision"]
+    assert "feature_family_drift_summary" in diagnostics["decision"]
     assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
@@ -2434,6 +2515,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
         assert "matrix/score_separation_forensics.csv" in archive.namelist()
         assert "matrix/bad_fold_signature.csv" in archive.namelist()
+        assert "matrix/feature_drift_forensics.csv" in archive.namelist()
+        assert "matrix/feature_family_drift_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_review.csv" in archive.namelist()
@@ -2466,6 +2549,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/fold_stability_summary.csv" in names
     assert "matrix/score_separation_forensics.csv" in names
     assert "matrix/bad_fold_signature.csv" in names
+    assert "matrix/feature_drift_forensics.csv" in names
+    assert "matrix/feature_family_drift_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
     assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/threshold_transfer_review.csv" in names

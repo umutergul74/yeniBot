@@ -3547,7 +3547,10 @@ def _phase1_blocker_action_plan_frame(
         requires_04=False,
         next_notebook="05",
         promotion_allowed_now=False,
-        source_files="fold_stability_summary.csv;fold_stability_forensics.csv;bad_fold_signature.csv;score_separation_forensics.csv",
+        source_files=(
+            "fold_stability_summary.csv;fold_stability_forensics.csv;bad_fold_signature.csv;"
+            "score_separation_forensics.csv;feature_drift_forensics.csv;feature_family_drift_summary.csv"
+        ),
         notes="This is the main remaining statistical blocker after mean IC improved.",
     )
 
@@ -3596,7 +3599,7 @@ def _phase1_blocker_action_plan_frame(
         promotion_allowed_now=False,
         source_files=(
             "threshold_forensics.csv;threshold_policy_review.csv;threshold_transfer_review.csv;"
-            "score_separation_forensics.csv;profile_comparison.csv;phase2_readiness.json"
+            "score_separation_forensics.csv;feature_drift_forensics.csv;profile_comparison.csv;phase2_readiness.json"
         ),
         notes="This prevents an unrealistically broad long gate from masking deployment risk.",
     )
@@ -5280,6 +5283,370 @@ def _write_score_separation_forensics(
         {
             "score_separation_forensics": score_forensics.to_dict(orient="records"),
             "bad_fold_signature": bad_signature.to_dict(orient="records"),
+        },
+    )
+
+
+def _feature_family(feature: str) -> str:
+    name = str(feature)
+    timeframe = "4h" if name.startswith("4h_") else "1h"
+    base = name[3:] if timeframe == "4h" else name
+    if base.startswith("ih15_"):
+        return "ih15_intrahour_order_flow"
+    if base.startswith("fut_") or any(token in base for token in ("funding", "open_interest", "positioning")):
+        return "futures_context"
+    if "large_trade_pressure" in base or "signed_ltp" in base or base.startswith("ltp"):
+        family = "large_trade_pressure"
+    elif "cvd_pressure" in base:
+        family = "cvd_pressure"
+    elif any(token in base for token in ("taker", "imbalance", "cvd", "orderflow", "absorption", "pressure")):
+        family = "order_flow"
+    elif any(token in base for token in ("whale", "vpt", "vol_per_trade", "large_trade_ratio")):
+        family = "whale_ticket_size"
+    elif "volume" in base or "trade_share" in base:
+        family = "volume_context"
+    elif any(token in base for token in ("realized_vol", "gk_vol", "atr", "adx", "vwap", "return")):
+        family = "volatility_structure"
+    else:
+        family = "other"
+    return f"{timeframe}_{family}" if timeframe == "4h" else family
+
+
+def _safe_spearman(left: pd.Series, right: pd.Series) -> float:
+    frame = pd.DataFrame({"left": left, "right": right}).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(frame) < 4:
+        return np.nan
+    if frame["left"].nunique(dropna=True) < 2 or frame["right"].nunique(dropna=True) < 2:
+        return np.nan
+    value = frame["left"].corr(frame["right"], method="spearman")
+    return float(value) if np.isfinite(value) else np.nan
+
+
+def _label_gap(frame: pd.DataFrame, feature: str) -> float:
+    if frame.empty or feature not in frame.columns or "label" not in frame.columns:
+        return np.nan
+    values = pd.to_numeric(frame[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    labels = pd.to_numeric(frame["label"], errors="coerce")
+    pos = values.loc[labels == 1].dropna()
+    neg = values.loc[labels == 0].dropna()
+    if pos.empty or neg.empty:
+        return np.nan
+    return float(pos.mean() - neg.mean())
+
+
+def _feature_drift_columns() -> list[str]:
+    return [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "feature",
+        "feature_family",
+        "bad_definition",
+        "bad_fold_count",
+        "good_fold_count",
+        "bad_fold_ids",
+        "good_fold_ids",
+        "bad_count",
+        "good_count",
+        "bad_mean",
+        "good_mean",
+        "drift_effect_size",
+        "bad_std",
+        "good_std",
+        "bad_feature_return_ic",
+        "good_feature_return_ic",
+        "return_ic_delta_bad_minus_good",
+        "bad_label_gap",
+        "good_label_gap",
+        "label_gap_delta_bad_minus_good",
+        "return_ic_reversal",
+        "label_gap_reversal",
+        "distribution_drift_flag",
+        "suspect_score",
+        "likely_issue",
+    ]
+
+
+def _feature_drift_forensics_frame(
+    entries: list[dict[str, Any]],
+    score_forensics: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = _feature_drift_columns()
+    if score_forensics.empty:
+        return pd.DataFrame(columns=columns)
+
+    target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
+    rows: list[dict[str, Any]] = []
+    score_groups = {
+        (str(candidate), str(fold_scope)): part.copy()
+        for (candidate, _candidate_type, fold_scope), part in score_forensics.groupby(
+            ["candidate", "candidate_type", "fold_scope"],
+            dropna=False,
+        )
+    }
+
+    for entry in entries:
+        candidate = str(entry.get("profile", ""))
+        fold_scope = str(entry.get("fold_scope", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        if candidate_type != "profile" or fold_scope != "full":
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        feature_columns = [str(column) for column in entry.get("feature_columns", [])]
+        usable_features = [
+            column
+            for column in feature_columns
+            if column in predictions.columns and pd.api.types.is_numeric_dtype(predictions[column])
+        ]
+        if not usable_features:
+            continue
+        test_predictions = _test_predictions(predictions)
+        required = {"fold", "label", "forward_return"}
+        if test_predictions.empty or not required.issubset(test_predictions.columns):
+            continue
+        score_part = score_groups.get((candidate, fold_scope))
+        if score_part is None or score_part.empty or "rank_ic" not in score_part.columns:
+            continue
+        rank_values = pd.to_numeric(score_part["rank_ic"], errors="coerce")
+        bad_score = score_part.loc[rank_values < 0.0].copy()
+        bad_definition = "negative_rank_ic"
+        if bad_score.empty:
+            bad_score = score_part.loc[rank_values < target_rank_ic].copy()
+            bad_definition = f"rank_ic_below_target_{target_rank_ic:.3f}"
+        good_score = score_part.loc[rank_values >= target_rank_ic].copy()
+        bad_folds = sorted({int(fold) for fold in bad_score["fold"].dropna().astype(int).tolist()})
+        good_folds = sorted({int(fold) for fold in good_score["fold"].dropna().astype(int).tolist()})
+        if not bad_folds or not good_folds:
+            continue
+        frame = test_predictions.copy().replace([np.inf, -np.inf], np.nan)
+        frame["fold"] = pd.to_numeric(frame["fold"], errors="coerce")
+        frame["forward_return"] = pd.to_numeric(frame["forward_return"], errors="coerce")
+        frame["label"] = pd.to_numeric(frame["label"], errors="coerce")
+        bad_frame = frame.loc[frame["fold"].isin(bad_folds)].copy()
+        good_frame = frame.loc[frame["fold"].isin(good_folds)].copy()
+        if bad_frame.empty or good_frame.empty:
+            continue
+
+        for feature in usable_features:
+            bad_values = pd.to_numeric(bad_frame[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            good_values = pd.to_numeric(good_frame[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if bad_values.empty or good_values.empty:
+                continue
+            bad_mean = float(bad_values.mean())
+            good_mean = float(good_values.mean())
+            bad_std = float(bad_values.std(ddof=0))
+            good_std = float(good_values.std(ddof=0))
+            pooled_std = float(np.sqrt((bad_std**2 + good_std**2) / 2.0))
+            drift_effect = float((bad_mean - good_mean) / pooled_std) if pooled_std > 0 else np.nan
+            bad_return_ic = _safe_spearman(bad_frame[feature], bad_frame["forward_return"])
+            good_return_ic = _safe_spearman(good_frame[feature], good_frame["forward_return"])
+            return_ic_delta = (
+                bad_return_ic - good_return_ic
+                if np.isfinite(bad_return_ic) and np.isfinite(good_return_ic)
+                else np.nan
+            )
+            bad_gap = _label_gap(bad_frame, feature)
+            good_gap = _label_gap(good_frame, feature)
+            label_gap_delta = bad_gap - good_gap if np.isfinite(bad_gap) and np.isfinite(good_gap) else np.nan
+            return_reversal = bool(
+                np.isfinite(bad_return_ic)
+                and np.isfinite(good_return_ic)
+                and bad_return_ic * good_return_ic < 0
+                and abs(bad_return_ic) >= 0.02
+                and abs(good_return_ic) >= 0.02
+            )
+            label_reversal = bool(
+                np.isfinite(bad_gap)
+                and np.isfinite(good_gap)
+                and bad_gap * good_gap < 0
+                and abs(bad_gap) >= 0.03
+                and abs(good_gap) >= 0.03
+            )
+            distribution_drift = bool(np.isfinite(drift_effect) and abs(drift_effect) >= 0.50)
+            suspect_score = 0.0
+            if np.isfinite(drift_effect):
+                suspect_score += min(abs(drift_effect), 3.0)
+            if np.isfinite(return_ic_delta):
+                suspect_score += min(abs(return_ic_delta), 2.0)
+            if np.isfinite(label_gap_delta):
+                suspect_score += min(abs(label_gap_delta), 2.0) * 0.5
+            if return_reversal:
+                suspect_score += 1.0
+            if label_reversal:
+                suspect_score += 0.75
+            if distribution_drift:
+                suspect_score += 0.5
+
+            if return_reversal and label_reversal:
+                issue = "feature_signal_and_label_gap_reversal"
+            elif return_reversal:
+                issue = "feature_return_ic_reversal"
+            elif label_reversal:
+                issue = "feature_label_gap_reversal"
+            elif distribution_drift:
+                issue = "bad_fold_distribution_drift"
+            elif np.isfinite(return_ic_delta) and return_ic_delta < -0.08:
+                issue = "bad_fold_feature_return_ic_degrades"
+            else:
+                issue = "monitor"
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": candidate_type,
+                    "fold_scope": fold_scope,
+                    "feature": feature,
+                    "feature_family": _feature_family(feature),
+                    "bad_definition": bad_definition,
+                    "bad_fold_count": len(bad_folds),
+                    "good_fold_count": len(good_folds),
+                    "bad_fold_ids": ",".join(str(fold) for fold in bad_folds),
+                    "good_fold_ids": ",".join(str(fold) for fold in good_folds),
+                    "bad_count": int(len(bad_values)),
+                    "good_count": int(len(good_values)),
+                    "bad_mean": bad_mean,
+                    "good_mean": good_mean,
+                    "drift_effect_size": drift_effect,
+                    "bad_std": bad_std,
+                    "good_std": good_std,
+                    "bad_feature_return_ic": bad_return_ic,
+                    "good_feature_return_ic": good_return_ic,
+                    "return_ic_delta_bad_minus_good": return_ic_delta,
+                    "bad_label_gap": bad_gap,
+                    "good_label_gap": good_gap,
+                    "label_gap_delta_bad_minus_good": label_gap_delta,
+                    "return_ic_reversal": return_reversal,
+                    "label_gap_reversal": label_reversal,
+                    "distribution_drift_flag": distribution_drift,
+                    "suspect_score": float(suspect_score),
+                    "likely_issue": issue,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(["candidate", "fold_scope", "suspect_score"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+
+def _feature_family_drift_summary_frame(feature_drift: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "feature_family",
+        "feature_count",
+        "top_suspect_feature",
+        "top_suspect_score",
+        "mean_abs_drift_effect",
+        "mean_bad_return_ic",
+        "mean_good_return_ic",
+        "return_ic_reversal_count",
+        "label_gap_reversal_count",
+        "distribution_drift_count",
+        "top_likely_issue",
+        "recommended_next_action",
+    ]
+    if feature_drift.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope, family), part in feature_drift.groupby(
+        ["candidate", "candidate_type", "fold_scope", "feature_family"],
+        dropna=False,
+    ):
+        sorted_part = part.sort_values("suspect_score", ascending=False)
+        top = sorted_part.iloc[0].to_dict()
+        reversal_count = int(part["return_ic_reversal"].astype(bool).sum())
+        label_reversal_count = int(part["label_gap_reversal"].astype(bool).sum())
+        drift_count = int(part["distribution_drift_flag"].astype(bool).sum())
+        if reversal_count > 0 or label_reversal_count > 0:
+            action = "inspect_or_ablate_family_in_pre_registered_future_oos_candidate"
+        elif drift_count > 0:
+            action = "prefer_stable_bounded_transforms_or_family_ablation_hypothesis"
+        else:
+            action = "monitor"
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "feature_family": family,
+                "feature_count": int(part["feature"].nunique()),
+                "top_suspect_feature": str(top.get("feature", "")),
+                "top_suspect_score": _float(top, "suspect_score"),
+                "mean_abs_drift_effect": float(pd.to_numeric(part["drift_effect_size"], errors="coerce").abs().mean()),
+                "mean_bad_return_ic": float(pd.to_numeric(part["bad_feature_return_ic"], errors="coerce").mean()),
+                "mean_good_return_ic": float(pd.to_numeric(part["good_feature_return_ic"], errors="coerce").mean()),
+                "return_ic_reversal_count": reversal_count,
+                "label_gap_reversal_count": label_reversal_count,
+                "distribution_drift_count": drift_count,
+                "top_likely_issue": str(top.get("likely_issue", "")),
+                "recommended_next_action": action,
+            }
+        )
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(
+            ["candidate", "top_suspect_score", "return_ic_reversal_count", "label_gap_reversal_count"],
+            ascending=[True, False, False, False],
+        )
+        .reset_index(drop=True)
+    )
+
+
+def _feature_drift_markdown(detail: pd.DataFrame, summary: pd.DataFrame) -> str:
+    lines = ["# Bad Fold Feature Drift Forensics", ""]
+    if detail.empty and summary.empty:
+        lines.append("No feature drift rows were produced.")
+        return "\n".join(lines)
+    lines.append(
+        "These diagnostics compare bad folds against good folds using existing OOS predictions. "
+        "They identify distribution drift and feature/return or feature/label signal reversals. "
+        "They are diagnostic evidence, not automatic feature-selection output."
+    )
+    if not summary.empty:
+        lines.append("")
+        lines.append("## Feature Family Summary")
+        display_cols = [
+            "candidate",
+            "fold_scope",
+            "feature_family",
+            "feature_count",
+            "top_suspect_feature",
+            "top_suspect_score",
+            "return_ic_reversal_count",
+            "label_gap_reversal_count",
+            "distribution_drift_count",
+            "recommended_next_action",
+        ]
+        visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+        lines.append("| " + " | ".join(visible.columns) + " |")
+        lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+        for _, row in visible.iterrows():
+            lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    if not detail.empty:
+        lines.append("")
+        lines.append(f"Feature-level rows: {len(detail)}. See `feature_drift_forensics.csv` for detail.")
+    return "\n".join(lines)
+
+
+def _write_feature_drift_forensics(path: Path, detail: pd.DataFrame, summary: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    detail.to_csv(path / "feature_drift_forensics.csv", index=False)
+    summary.to_csv(path / "feature_family_drift_summary.csv", index=False)
+    (path / "feature_drift_forensics.md").write_text(
+        _feature_drift_markdown(detail, summary),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "feature_drift_forensics.json",
+        {
+            "feature_drift_forensics": detail.to_dict(orient="records"),
+            "feature_family_drift_summary": summary.to_dict(orient="records"),
         },
     )
 
@@ -7387,6 +7754,10 @@ def _write_experiment_bundle(
         "bad_fold_signature.csv",
         "bad_fold_signature.md",
         "bad_fold_signature.json",
+        "feature_drift_forensics.csv",
+        "feature_family_drift_summary.csv",
+        "feature_drift_forensics.md",
+        "feature_drift_forensics.json",
         "threshold_forensics.csv",
         "threshold_forensics.md",
         "threshold_forensics.json",
@@ -7567,6 +7938,8 @@ def run_experiment_matrix(
     fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, config)
     score_separation_forensics = _score_separation_forensics_frame(all_results, config)
     bad_fold_signature = _bad_fold_signature_frame(score_separation_forensics, config)
+    feature_drift_forensics = _feature_drift_forensics_frame(all_results, score_separation_forensics, config)
+    feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
     threshold_forensics = _threshold_forensics_frame(all_results, config)
     threshold_policy_review = _threshold_policy_review_frame(all_results, config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(all_results, config)
@@ -7605,6 +7978,7 @@ def run_experiment_matrix(
         threshold_forensics=threshold_forensics,
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
+    _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
@@ -7651,6 +8025,7 @@ def run_experiment_matrix(
         "fold_stability_summary": fold_stability_summary.to_dict(orient="records"),
         "score_separation_forensics": score_separation_forensics.to_dict(orient="records"),
         "bad_fold_signature": bad_fold_signature.to_dict(orient="records"),
+        "feature_family_drift_summary": feature_family_drift_summary.to_dict(orient="records"),
         "threshold_forensics_summary": (
             threshold_forensics["primary_issue"].value_counts().to_dict()
             if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
@@ -7680,6 +8055,8 @@ def run_experiment_matrix(
         "fold_stability_summary": fold_stability_summary,
         "score_separation_forensics": score_separation_forensics,
         "bad_fold_signature": bad_fold_signature,
+        "feature_drift_forensics": feature_drift_forensics,
+        "feature_family_drift_summary": feature_family_drift_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
@@ -7925,6 +8302,8 @@ def write_experiment_diagnostics(
     fold_stability_summary = _fold_stability_summary_frame(fold_stability_forensics, diagnostic_config)
     score_separation_forensics = _score_separation_forensics_frame(entries, diagnostic_config)
     bad_fold_signature = _bad_fold_signature_frame(score_separation_forensics, diagnostic_config)
+    feature_drift_forensics = _feature_drift_forensics_frame(entries, score_separation_forensics, diagnostic_config)
+    feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
     threshold_forensics = _threshold_forensics_frame(entries, diagnostic_config)
     threshold_policy_review = _threshold_policy_review_frame(entries, diagnostic_config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(entries, diagnostic_config)
@@ -7941,6 +8320,7 @@ def write_experiment_diagnostics(
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     decision["fold_stability_summary"] = fold_stability_summary.to_dict(orient="records")
     decision["bad_fold_signature"] = bad_fold_signature.to_dict(orient="records")
+    decision["feature_family_drift_summary"] = feature_family_drift_summary.to_dict(orient="records")
     decision["threshold_forensics_summary"] = (
         threshold_forensics["primary_issue"].value_counts().to_dict()
         if not threshold_forensics.empty and "primary_issue" in threshold_forensics.columns
@@ -7973,6 +8353,7 @@ def write_experiment_diagnostics(
         threshold_forensics=threshold_forensics,
     )
     _write_score_separation_forensics(report_dir, score_separation_forensics, bad_fold_signature)
+    _write_feature_drift_forensics(report_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_threshold_policy_review(report_dir, threshold_policy_review)
     _write_threshold_transfer_review(report_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
@@ -8041,6 +8422,7 @@ def write_experiment_diagnostics(
         threshold_forensics=threshold_forensics,
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
+    _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
@@ -8092,6 +8474,8 @@ def write_experiment_diagnostics(
         "fold_stability_summary": fold_stability_summary,
         "score_separation_forensics": score_separation_forensics,
         "bad_fold_signature": bad_fold_signature,
+        "feature_drift_forensics": feature_drift_forensics,
+        "feature_family_drift_summary": feature_family_drift_summary,
         "threshold_forensics": threshold_forensics,
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
