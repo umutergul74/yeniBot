@@ -1715,6 +1715,16 @@ validation:
         min_val_rank_ic: 0.00
         min_val_score_gap: 0.00
         min_val_score_ks: 0.08
+  regime_threshold_policy:
+    enabled: true
+    min_regime_val_rows: 80
+    min_regime_test_rows: 40
+    min_regime_val_longs: 5
+    max_pred_long_rate: 0.70
+    min_precision: 0.30
+    min_f1_delta_vs_official: 0.01
+    min_policy_pass_fold_rate: 0.55
+    min_positive_forward_return_fold_rate: 0.55
   score_lift_bins: 10
   score_bands:
     - {name: top_10, min_bin: 9, max_bin: 9}

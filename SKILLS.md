@@ -146,6 +146,8 @@ Required diagnostic artifacts include:
 - `fold_stability_summary.csv`
 - `fold_reliability_gate.csv`
 - `fold_reliability_gate_summary.csv`
+- `regime_threshold_policy_summary.csv`
+- `regime_stability_summary.csv`
 - `threshold_forensics.csv`
 - `holdout_evaluation.csv`
 - `holdout_policy_decision.csv`
@@ -166,9 +168,10 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
 
 1. Fold stability: identify the folds contributing most to Rank IC std using `fold_stability_forensics.csv`.
 2. Fold reliability: use `fold_reliability_gate_summary.csv` to test validation-only gates that may reduce bad-fold exposure; treat them as future-OOS hypotheses, not immediate promotions.
-3. Threshold quality: separate selected-threshold F1, constrained-threshold F1, and pred-long-rate guardrails using `threshold_forensics.csv`.
-4. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
-5. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
+3. Regime stability: use `regime_stability_summary.csv` to determine whether HMM regimes explain bad-fold concentration before adding new feature families.
+4. Threshold quality: separate selected-threshold F1, constrained-threshold F1, regime-threshold F1, and pred-long-rate guardrails using `threshold_forensics.csv` and `regime_threshold_policy_summary.csv`.
+5. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
+6. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
 
 Do not chase every holdout-best row. A holdout-best row seen after the fact is a hypothesis generator only.
 

@@ -36,6 +36,8 @@ from yenibot.experiments import (
     _profile_blend_review_frame,
     _probability_quality_forensics_frame,
     _probability_quality_summary_frame,
+    _regime_stability_frames,
+    _regime_threshold_policy_frames,
     _score_distribution_shift_frame,
     _score_distribution_shift_summary_frame,
     _bad_fold_signature_frame,
@@ -1058,6 +1060,93 @@ def test_fold_reliability_gate_uses_validation_only_to_mark_accepted_folds() -> 
     assert row["next_action"] == "pre_register_reliability_gate_for_future_oos_review"
 
 
+def test_regime_threshold_policy_uses_validation_regime_thresholds() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "bad_fold_ic_threshold": -0.08,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+            "regime_threshold_policy": {
+                "enabled": True,
+                "min_regime_val_rows": 1,
+                "min_regime_test_rows": 1,
+                "min_regime_val_longs": 1,
+                "max_pred_long_rate": 0.70,
+                "min_precision": 0.30,
+                "min_f1_delta_vs_official": 0.01,
+                "min_policy_pass_fold_rate": 0.50,
+                "min_positive_forward_return_fold_rate": 0.50,
+            },
+        }
+    }
+
+    def rows(split: str) -> list[dict[str, object]]:
+        base = pd.Timestamp("2024-05-01", tz="UTC")
+        values = [
+            (0, 0, 0.10, -0.02),
+            (0, 0, 0.20, -0.01),
+            (0, 1, 0.35, 0.01),
+            (0, 1, 0.40, 0.02),
+            (1, 0, 0.55, -0.02),
+            (1, 0, 0.58, -0.01),
+            (1, 1, 0.85, 0.01),
+            (1, 1, 0.90, 0.02),
+        ]
+        out = []
+        for idx, (regime, label, prob, forward_return) in enumerate(values):
+            out.append(
+                {
+                    "fold": 0,
+                    "split": split,
+                    "timestamp": base + pd.Timedelta(hours=idx + (0 if split == "val" else 12)),
+                    "label": label,
+                    "prob_long": prob,
+                    "forward_return": forward_return,
+                    "tb_return": max(forward_return, 0.0),
+                    "regime_prob_0": 1.0 if regime == 0 else 0.0,
+                    "regime_prob_1": 1.0 if regime == 1 else 0.0,
+                }
+            )
+        return out
+
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows("val") + rows("test")),
+        "diagnostics": {
+            "fold_metrics": pd.DataFrame([{"fold": 0, "rank_ic": 0.20}]),
+            "threshold_metrics": pd.DataFrame(
+                [
+                        {
+                            "fold": 0,
+                            "official_threshold": 0.50,
+                            "constrained_threshold": 0.50,
+                            "test_f1_at_constrained_threshold": 0.50,
+                            "test_precision_at_constrained_threshold": 0.50,
+                            "test_recall_at_constrained_threshold": 0.50,
+                            "test_pred_long_rate_at_constrained_threshold": 0.50,
+                            "test_f1_at_official_threshold": 0.50,
+                            "test_precision_at_official_threshold": 0.50,
+                            "test_recall_at_official_threshold": 0.50,
+                        "test_pred_long_rate_at_official_threshold": 0.50,
+                    }
+                ]
+            ),
+        },
+    }
+
+    by_fold, summary = _regime_threshold_policy_frames([entry], config)
+    regime_forensics, regime_summary = _regime_stability_frames([entry], config)
+
+    assert by_fold.iloc[0]["regime_threshold_count"] == 2
+    assert by_fold.iloc[0]["test_f1"] == 1.0
+    assert by_fold.iloc[0]["f1_delta_vs_official"] == 0.5
+    assert bool(summary.iloc[0]["reviewable"]) is True
+    assert summary.iloc[0]["next_action"] == "pre_register_regime_threshold_policy_for_future_oos_review"
+    assert not regime_forensics.empty
+    assert set(regime_summary["regime"]) == {0, 1}
+
+
 def test_experiment_selection_flags_selected_full_profile_without_output() -> None:
     settings = {
         "control_profile": "control",
@@ -1477,6 +1566,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "val_rank_ic_and_score_gap_positive",
         "val_rank_ic_score_gap_and_ks",
     }
+    regime_threshold = config["validation"]["regime_threshold_policy"]
+    assert regime_threshold["enabled"] is True
+    assert regime_threshold["min_regime_val_rows"] == 80
+    assert regime_threshold["max_pred_long_rate"] == 0.70
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -2556,6 +2649,17 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "min_official_f1_delta": -1.0,
         "gates": [{"name": "val_rank_ic_positive", "min_val_rank_ic": -1.0}],
     }
+    config["validation"]["regime_threshold_policy"] = {
+        "enabled": True,
+        "min_regime_val_rows": 1,
+        "min_regime_test_rows": 1,
+        "min_regime_val_longs": 1,
+        "max_pred_long_rate": 0.90,
+        "min_precision": 0.0,
+        "min_f1_delta_vs_official": -1.0,
+        "min_policy_pass_fold_rate": 0.0,
+        "min_positive_forward_return_fold_rate": 0.0,
+    }
     frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
 
     result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="matrix", device="cpu")
@@ -2573,6 +2677,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not result["profile_delta"].empty
     assert not result["fold_reliability_gate"].empty
     assert not result["fold_reliability_gate_summary"].empty
+    assert not result["regime_threshold_policy_by_fold"].empty
+    assert not result["regime_threshold_policy_summary"].empty
+    assert not result["regime_stability_forensics"].empty
+    assert not result["regime_stability_summary"].empty
     assert {"rank_ic_delta", "top_10_lift_delta", "threshold_f1_delta"}.issubset(result["profile_delta"].columns)
     assert (tmp_path / "experiments" / "matrix" / "profile_comparison.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "profile_delta_vs_control.csv").exists()
@@ -2591,6 +2699,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "score_distribution_shift_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_reliability_gate.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_reliability_gate_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "regime_threshold_policy_by_fold.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "regime_threshold_policy_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "regime_stability_forensics.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "regime_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2620,6 +2732,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "score_distribution_shift_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_reliability_gate.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_reliability_gate_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "regime_threshold_policy_by_fold.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "regime_threshold_policy_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "regime_stability_forensics.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "regime_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
@@ -2666,6 +2782,18 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert {"accepted_rank_ic_std_delta", "next_action"}.issubset(
         diagnostics["fold_reliability_gate_summary"].columns
     )
+    assert not diagnostics["regime_threshold_policy_by_fold"].empty
+    assert not diagnostics["regime_threshold_policy_summary"].empty
+    assert {"f1_delta_vs_official", "selection_guard"}.issubset(
+        diagnostics["regime_threshold_policy_by_fold"].columns
+    )
+    assert {"reviewable", "next_action"}.issubset(
+        diagnostics["regime_threshold_policy_summary"].columns
+    )
+    assert not diagnostics["regime_stability_forensics"].empty
+    assert not diagnostics["regime_stability_summary"].empty
+    assert "regime" in diagnostics["regime_stability_forensics"].columns
+    assert {"suspect_score", "likely_issue"}.issubset(diagnostics["regime_stability_summary"].columns)
     assert not diagnostics["threshold_forensics"].empty
     assert not diagnostics["threshold_policy_review"].empty
     assert not diagnostics["threshold_transfer_review"].empty
@@ -2700,6 +2828,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "probability_quality_summary" in diagnostics["decision"]
     assert "score_distribution_shift_summary" in diagnostics["decision"]
     assert "fold_reliability_gate_summary" in diagnostics["decision"]
+    assert "regime_threshold_policy_summary" in diagnostics["decision"]
+    assert "regime_stability_summary" in diagnostics["decision"]
     assert "test_f1_at_official_threshold" in diagnostics["threshold_forensics"].columns
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
@@ -2792,6 +2922,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/score_distribution_shift_summary.csv" in archive.namelist()
         assert "matrix/fold_reliability_gate.csv" in archive.namelist()
         assert "matrix/fold_reliability_gate_summary.csv" in archive.namelist()
+        assert "matrix/regime_threshold_policy_by_fold.csv" in archive.namelist()
+        assert "matrix/regime_threshold_policy_summary.csv" in archive.namelist()
+        assert "matrix/regime_stability_forensics.csv" in archive.namelist()
+        assert "matrix/regime_stability_summary.csv" in archive.namelist()
         assert "matrix/threshold_forensics.csv" in archive.namelist()
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_review.csv" in archive.namelist()
@@ -2832,6 +2966,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/score_distribution_shift_summary.csv" in names
     assert "matrix/fold_reliability_gate.csv" in names
     assert "matrix/fold_reliability_gate_summary.csv" in names
+    assert "matrix/regime_threshold_policy_by_fold.csv" in names
+    assert "matrix/regime_threshold_policy_summary.csv" in names
+    assert "matrix/regime_stability_forensics.csv" in names
+    assert "matrix/regime_stability_summary.csv" in names
     assert "matrix/threshold_forensics.csv" in names
     assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/threshold_transfer_review.csv" in names
