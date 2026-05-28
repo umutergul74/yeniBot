@@ -82,6 +82,26 @@ def test_train_one_fold_supports_val_loss_early_stopping_as_explicit_experiment(
     assert history["val_loss"].notna().all()
 
 
+def test_train_one_fold_supports_pairwise_label_margin_loss(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["training"]["loss"]["label_margin_weight"] = 0.05
+    config["training"]["loss"]["label_margin"] = 0.25
+    config["training"]["epochs"] = 2
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    result = train_one_fold(frame, fold, features.feature_columns, config, device="cpu")
+
+    assert not result["predictions"].empty
+    assert result["history"]["train_loss"].notna().all()
+
+
 def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["training"]["early_stop_metric"] = "not_a_real_metric"

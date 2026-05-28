@@ -35,3 +35,32 @@ class RankICLoss(nn.Module):
         denom = torch.sqrt((x.square().sum() + 1e-8) * (y.square().sum() + 1e-8))
         corr = (x * y).sum() / denom
         return -corr
+
+
+class PairwiseLabelMarginLoss(nn.Module):
+    """Push labeled-long logits above not-long logits inside each batch.
+
+    Focal loss optimizes pointwise classification and RankICLoss aligns scores
+    with forward returns. This auxiliary term directly targets the failure mode
+    seen in bad folds: positive and negative score distributions compressing or
+    reversing. It is intentionally batch-local and disabled unless configured.
+    """
+
+    def __init__(self, *, margin: float = 0.25) -> None:
+        super().__init__()
+        self.margin = float(margin)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        logits = logits.float().flatten()
+        targets = targets.float().flatten()
+        valid = torch.isfinite(logits) & torch.isfinite(targets)
+        if valid.sum() < 3:
+            return logits.new_tensor(0.0)
+        logits = logits[valid]
+        targets = targets[valid]
+        positive = logits[targets > 0.5]
+        negative = logits[targets <= 0.5]
+        if positive.numel() == 0 or negative.numel() == 0:
+            return logits.new_tensor(0.0)
+        pairwise_margin = positive[:, None] - negative[None, :]
+        return F.softplus(self.margin - pairwise_margin).mean()

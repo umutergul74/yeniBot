@@ -148,7 +148,42 @@ def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:
     updated = copy.deepcopy(config)
     _set_cfg(updated, ["features", "active_profile"], profile)
     resolve_feature_profile(updated)
+    overrides = _profile_config_overrides(updated, profile)
+    if overrides:
+        _deep_update(updated, overrides)
     return updated
+
+
+def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+    return base
+
+
+def _profile_config_overrides(config: dict[str, Any], profile: str) -> dict[str, Any]:
+    profiles = _cfg(config, ["features", "profiles"], {}) or {}
+    if not isinstance(profiles, dict):
+        return {}
+
+    def load(name: str, seen: set[str] | None = None) -> dict[str, Any]:
+        seen = set() if seen is None else seen
+        if name in seen:
+            raise ValueError(f"Cyclic feature profile inheritance detected at {name}")
+        seen.add(name)
+        current = profiles.get(name)
+        if not isinstance(current, dict):
+            return {}
+        parent_name = current.get("inherit")
+        overrides = load(str(parent_name), seen) if parent_name else {}
+        current_overrides = current.get("config_overrides", current.get("training_overrides", {})) or {}
+        if not isinstance(current_overrides, dict):
+            raise ValueError(f"Feature profile config_overrides must be a mapping: {name}")
+        return _deep_update(overrides, current_overrides)
+
+    return load(str(profile))
 
 
 def _profile_rejection_reason(profile: str, experiments: dict[str, Any]) -> str:
@@ -449,7 +484,8 @@ def _preflight_experiment_profiles(
             )
             continue
         duplicate_of = seen_signatures.get(feature_columns)
-        if profile != control and duplicate_of:
+        has_config_overrides = bool(_profile_config_overrides(config, profile))
+        if profile != control and duplicate_of and not has_config_overrides:
             skipped_profiles.append(
                 {
                     "profile": profile,

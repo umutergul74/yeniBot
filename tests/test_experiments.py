@@ -81,6 +81,26 @@ def test_profile_config_overrides_active_profile_without_mutating_source(tiny_co
     assert updated["features"]["active_profile"] == "candidate"
 
 
+def test_profile_config_applies_nested_config_overrides_without_mutating_source(tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["active_profile"] = "base"
+    config["training"]["loss"]["label_margin_weight"] = 0.0
+    config["features"]["profiles"] = {
+        "base": {"include_patterns": ["*"], "exclude_patterns": []},
+        "margin_candidate": {
+            "inherit": "base",
+            "config_overrides": {"training": {"loss": {"label_margin_weight": 0.05, "label_margin": 0.25}}},
+        },
+    }
+
+    updated = profile_config(config, "margin_candidate")
+
+    assert config["training"]["loss"]["label_margin_weight"] == 0.0
+    assert updated["features"]["active_profile"] == "margin_candidate"
+    assert updated["training"]["loss"]["label_margin_weight"] == 0.05
+    assert updated["training"]["loss"]["label_margin"] == 0.25
+
+
 def test_experiment_settings_resolves_control_and_candidates() -> None:
     config = {
         "features": {"active_profile": "fallback"},
@@ -95,6 +115,31 @@ def test_experiment_settings_resolves_control_and_candidates() -> None:
     assert settings["control_profile"] == "control"
     assert settings["profiles"] == ["control", "candidate_a", "candidate_b"]
     assert settings["candidate_profiles"] == ["candidate_a", "candidate_b"]
+
+
+def test_preflight_keeps_duplicate_feature_candidate_when_config_override_differs(synthetic_klines, tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": []},
+        "margin_candidate": {
+            "inherit": "control",
+            "config_overrides": {"training": {"loss": {"label_margin_weight": 0.05}}},
+        },
+    }
+    settings = {
+        "control_profile": "control",
+        "profiles": ["control", "margin_candidate"],
+        "candidate_profiles": ["margin_candidate"],
+        "always_full_profiles": ["control", "margin_candidate"],
+        "skipped_profiles": [],
+    }
+    frame, _ = _labeled_frame(synthetic_klines, config, periods=190)
+
+    updated = _preflight_experiment_profiles(settings, frame, config)
+
+    assert updated["profiles"] == ["control", "margin_candidate"]
+    assert updated["candidate_profiles"] == ["margin_candidate"]
+    assert not updated["skipped_profiles"]
 
 
 def test_experiment_settings_skips_historically_rejected_candidates() -> None:
@@ -1508,6 +1553,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+        "baseline_stable_score_margin_loss",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
@@ -1526,6 +1572,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
+        "baseline_stable_score_margin_loss",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1552,7 +1599,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
+    assert "pairwise label-margin loss" in notes["baseline_stable_score_margin_loss"]
     assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
+    assert config["features"]["profiles"]["baseline_stable_score_margin_loss"]["config_overrides"]["training"]["loss"] == {
+        "label_margin_weight": 0.05,
+        "label_margin": 0.25,
+    }
     assert "failed CV stability" in notes["baseline_control_plus_futures_oi_change_context"]
     assert "failed CV stability" in notes["baseline_control_plus_futures_positioning_context"]
     assert "did not clear" in notes["baseline_control_plus_futures_funding_context"]

@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
 from yenibot.features.builder import filter_feature_columns, select_feature_columns
-from yenibot.losses import FocalLossWithLogits, RankICLoss
+from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, RankICLoss
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
 from yenibot.training.dataset import SequenceDataset
@@ -198,7 +198,9 @@ def _evaluate(
     *,
     focal: FocalLossWithLogits | None = None,
     rank_loss: RankICLoss | None = None,
+    margin_loss: PairwiseLabelMarginLoss | None = None,
     rank_weight: float = 0.2,
+    margin_weight: float = 0.0,
 ) -> dict[str, float]:
     batch_size = int(_cfg(config, ["training", "batch_size"], 256))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -214,6 +216,8 @@ def _evaluate(
             probs = torch.sigmoid(logits)
             if focal is not None and rank_loss is not None:
                 loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
+                if margin_loss is not None and margin_weight > 0.0:
+                    loss = loss + margin_weight * margin_loss(logits, y)
                 batch_n = int(y.shape[0])
                 val_loss_sum += float(loss.detach().cpu()) * batch_n
                 val_loss_count += batch_n
@@ -266,6 +270,10 @@ def train_one_fold(
     )
     rank_loss = RankICLoss()
     rank_weight = float(_cfg(loss_cfg, ["rank_ic_weight"], 0.2))
+    margin_weight = float(_cfg(loss_cfg, ["label_margin_weight"], 0.0))
+    margin_loss = PairwiseLabelMarginLoss(
+        margin=float(_cfg(loss_cfg, ["label_margin"], 0.25)),
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(_cfg(train_cfg, ["optimizer", "lr"], 1e-3)),
@@ -308,6 +316,8 @@ def train_one_fold(
             logits = model(x, return_logits=True)
             probs = torch.sigmoid(logits)
             loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
+            if margin_weight > 0.0:
+                loss = loss + margin_weight * margin_loss(logits, y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
@@ -322,7 +332,9 @@ def train_one_fold(
             torch_device,
             focal=focal,
             rank_loss=rank_loss,
+            margin_loss=margin_loss,
             rank_weight=rank_weight,
+            margin_weight=margin_weight,
         )
 
         smoothing_epochs = max(1, int(_cfg(train_cfg, ["rank_ic_smoothing_epochs"], 5)))
