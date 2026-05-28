@@ -463,6 +463,7 @@ def _add_stationary_features(df: pd.DataFrame, config: object, window: int) -> p
 
     df = _add_structure_stability_features(df, config, window)
     df = _add_order_flow_v2_features(df, config, window)
+    df = _add_bad_fold_context_features(df, config, window)
     return _add_order_flow_volatility_interaction_features(df, config)
 
 
@@ -626,9 +627,16 @@ def _feature_alias(column: str) -> str:
         "realized_vol_14_stable_rank": "rv14_rank",
         "gk_vol_14_stable_rank": "gk14_rank",
         "atr_14_pct_stable_rank": "atr14_rank",
+        "large_trade_ratio": "ltr",
+        "large_trade_ratio_stable_rank": "ltr_rank",
+        "large_trade_ratio_stable_tanh": "ltr_tanh",
     }
     if column in aliases:
         return aliases[column]
+    match = re.fullmatch(r"taker_imbalance_mean_(\d+)(?:_stable_(rank|zscore|tanh))?", column)
+    if match:
+        suffix = f"_{match.group(2)}" if match.group(2) else ""
+        return f"taker_mean{match.group(1)}{suffix}"
     match = re.fullmatch(r"large_trade_pressure_(\d+)_stable_(rank|zscore|tanh)", column)
     if match:
         return f"ltp{match.group(1)}_{match.group(2)}"
@@ -637,6 +645,84 @@ def _feature_alias(column: str) -> str:
 
 def _bounded_interaction_source(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], np.nan).clip(-1.0, 1.0)
+
+
+def _stable_transform_column(column: str, transform: str) -> str:
+    normalized = transform.strip().lower()
+    if normalized in {"rank", "zscore", "tanh"}:
+        return f"{column}_stable_{normalized}"
+    if normalized in {"stable_rank", "stable_zscore", "stable_tanh"}:
+        return f"{column}_{normalized}"
+    raise ValueError(f"Unsupported bad-fold context transform: {transform}")
+
+
+def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_window: int) -> pd.DataFrame:
+    """Add narrow conditional context features for bad-fold suspects.
+
+    These are deliberately separate from the broad flow-volatility interaction
+    family. They target the observed May 2026 failure mode where an otherwise
+    useful 4H taker-flow feature reverses when large-trade context shifts.
+    """
+
+    cfg = _config_get(config, ["features", "bad_fold_context"], {})
+    if not bool(_config_get(cfg, ["enabled"], False)):
+        return df
+
+    stable_sources = [str(column) for column in (_config_get(cfg, ["stable_source_columns"], []) or [])]
+    interaction_pairs = list(_config_get(cfg, ["interaction_pairs"], []) or [])
+    if not stable_sources and not interaction_pairs:
+        return df
+
+    stable_window = int(_config_get(cfg, ["stable_window"], default_window))
+    stable_clip_abs = float(_config_get(cfg, ["stable_clip_abs"], 5.0))
+    stable_transforms = set(_config_get(cfg, ["stable_transforms"], ["rank", "tanh"]) or [])
+    stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
+
+    stable_scores = _stable_rolling_score_frame(
+        df,
+        stable_sources,
+        stable_window,
+        stable_clip_abs,
+        stable_transforms,
+        error_context="features.bad_fold_context.stable_window",
+        missing_ok=True,
+        tanh_scale=stable_tanh_scale,
+    )
+    if not stable_scores.empty:
+        df = pd.concat([df, stable_scores], axis=1)
+
+    additions: dict[str, pd.Series] = {}
+    for item in interaction_pairs:
+        if not isinstance(item, dict):
+            raise ValueError("features.bad_fold_context.interaction_pairs entries must be mappings")
+        source_column = str(item.get("source", ""))
+        context_column = str(item.get("context", ""))
+        if not source_column or not context_column:
+            raise ValueError("features.bad_fold_context interaction pairs require source and context")
+        if source_column not in df.columns:
+            continue
+
+        transforms = [str(transform) for transform in (item.get("context_transforms") or ["stable_rank"])]
+        modes = {str(mode) for mode in (item.get("modes") or ["signed", "high", "low"])}
+        source = _bounded_interaction_source(df[source_column])
+        source_name = _feature_alias(source_column)
+        for transform in transforms:
+            transformed_context = _stable_transform_column(context_column, transform)
+            if transformed_context not in df.columns:
+                continue
+            context = _bounded_interaction_source(df[transformed_context])
+            context_name = _feature_alias(transformed_context)
+            base_name = f"{source_name}_x_{context_name}"
+            if "signed" in modes:
+                additions[f"{base_name}_signed"] = source * context
+            if "high" in modes:
+                additions[f"{base_name}_high"] = source * context.clip(lower=0.0)
+            if "low" in modes:
+                additions[f"{base_name}_low"] = source * (-context.clip(upper=0.0))
+
+    if not additions:
+        return df
+    return pd.concat([df, pd.DataFrame(additions, index=df.index)], axis=1)
 
 
 def _add_order_flow_volatility_interaction_features(df: pd.DataFrame, config: object) -> pd.DataFrame:

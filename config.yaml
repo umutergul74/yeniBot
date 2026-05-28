@@ -477,6 +477,26 @@ features:
       inherit: baseline_stable_no_4h_taker_mean12
       append_exclude_patterns:
         - "4h_large_trade_ratio"
+    baseline_stable_plus_4h_taker_mean12_ltr_context:
+      description: "Targeted conditional context profile from run 20260526_185416: keep the control backbone and add only stable 4H taker-mean12 / large-trade-ratio context plus their narrow conditional interactions."
+      inherit: baseline_stable_allow_intrahour_stable
+      include_patterns:
+        - "4h_taker_imbalance_mean_12_stable_rank"
+        - "4h_large_trade_ratio_stable_rank"
+        - "4h_taker_mean12_x_ltr_rank_signed"
+        - "4h_taker_mean12_x_ltr_rank_high"
+        - "4h_taker_mean12_x_ltr_rank_low"
+    baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr:
+      description: "Conditional context profile that removes raw 4H large_trade_ratio while preserving stable large-trade context and conditional taker-flow interactions."
+      inherit: baseline_stable_plus_4h_taker_mean12_ltr_context
+      append_exclude_patterns:
+        - "4h_large_trade_ratio"
+    baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only:
+      description: "Most conservative conditional context profile: replace raw 4H taker_mean12 and raw 4H large_trade_ratio with stable context and narrow conditional interactions."
+      inherit: baseline_stable_plus_4h_taker_mean12_ltr_context
+      append_exclude_patterns:
+        - "4h_taker_imbalance_mean_12"
+        - "4h_large_trade_ratio"
     baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate:
       description: "Stability control with the two most plausible bad-fold stabilizers combined: no slow 4H flow means and no local CVD rate."
       inherit: baseline_stable_no_slow_4h_bounded_flow
@@ -1484,6 +1504,20 @@ features:
     stable_clip_abs: 5.0
     stable_tanh_scale: 2.0
     stable_transforms: [zscore, rank, tanh]
+  bad_fold_context:
+    enabled: true
+    stable_window: 100
+    stable_clip_abs: 5.0
+    stable_tanh_scale: 2.0
+    stable_transforms: [rank]
+    stable_source_columns:
+      - taker_imbalance_mean_12
+      - large_trade_ratio
+    interaction_pairs:
+      - source: taker_imbalance_mean_12
+        context: large_trade_ratio
+        context_transforms: [stable_rank]
+        modes: [signed, high, low]
   order_flow_volatility_interactions:
     enabled: true
     flow_columns:
@@ -1682,13 +1716,10 @@ experiments:
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-    - baseline_stable_no_4h_taker_mean12
-    - baseline_stable_no_4h_large_trade_ratio
-    - baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio
+    - baseline_stable_plus_4h_taker_mean12_ltr_context
+    - baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr
+    - baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only
     - baseline_no_4h_tier1_4h_large_trade_pressure_long
-    - baseline_control_plus_futures_oi_change_context
-    - baseline_control_plus_futures_positioning_context
-    - baseline_control_plus_futures_funding_context
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
@@ -1717,13 +1748,10 @@ experiments:
     threshold_deployment_allowed: false
     note: "Clean holdout run 20260522_135424 invalidated this frozen top_10 score-band as an active review candidate: forward return was negative. Keep it as a benchmark only; do not deploy or promote from the same holdout."
     future_oos_candidates:
-      - baseline_stable_no_4h_taker_mean12
-      - baseline_stable_no_4h_large_trade_ratio
-      - baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio
+      - baseline_stable_plus_4h_taker_mean12_ltr_context
+      - baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr
+      - baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only
       - blend_control_long_pressure_65_35
-      - baseline_control_plus_futures_oi_change_context
-      - baseline_control_plus_futures_positioning_context
-      - baseline_control_plus_futures_funding_context
     future_oos_monitor:
       enabled: true
       anchor_run_id: "20260522_135424"
@@ -1752,14 +1780,17 @@ experiments:
     reference_notes:
       baseline_plus_4h_bounded_whale_no_4h_tier1: "Legacy baseline kept for continuity; latest full run mean IC 0.0575, std 0.1012, positive folds 78.6%."
       baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest clean holdout run 20260522_135424 was weak as a standalone profile: IC 0.0143, top-10 lift 0.9485, and negative top-10 forward return. Keep as a comparison source only."
-      baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; latest full run mean IC 0.0596, std 0.0738, positive folds 85.7%."
+      baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; run 20260526_185416 mean IC 0.0734, std 0.0708, positive folds 86.1%, official F1 0.4313. Main blockers remain fold std, official F1, and future unseen OOS."
       baseline_control_plus_futures_context: "Broad futures-context profile from run 20260524_072602: holdout top-10 improved, but CV stability deteriorated. Split into narrower OI, positioning, and funding tracks instead of rerunning broad by default."
-      baseline_control_plus_futures_oi_change_context: "Pre-registered narrow futures track: Binance Vision open-interest change context only."
-      baseline_control_plus_futures_positioning_context: "Pre-registered narrow futures track: Binance Vision top-trader/global/taker long-short ratio context only."
-      baseline_control_plus_futures_funding_context: "Pre-registered narrow futures track: Binance funding-rate context only; skipped automatically if funding REST data is unavailable."
-      baseline_stable_no_4h_taker_mean12: "Pre-registered after 2026-05-26 feature-drift forensics: isolate only 4h_taker_imbalance_mean_12 bad-fold signal reversal while keeping the previously useful 24-bar slow-flow context."
-      baseline_stable_no_4h_large_trade_ratio: "Pre-registered after 2026-05-26 feature-drift forensics: isolate raw 4H large_trade_ratio distribution drift while preserving other 4H whale context."
-      baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio: "Pre-registered combined forensic candidate; not a promotion until future unseen OOS validates it."
+      baseline_control_plus_futures_oi_change_context: "Run 20260526_185416: narrow OI context failed CV stability versus control; keep inactive unless future research has a new explicit reason."
+      baseline_control_plus_futures_positioning_context: "Run 20260526_185416: narrow positioning context failed CV stability versus control; keep inactive unless future research has a new explicit reason."
+      baseline_control_plus_futures_funding_context: "Run 20260526_185416: funding context did not clear positive-fold or stability gates; keep inactive unless future research has a new explicit reason."
+      baseline_stable_no_4h_taker_mean12: "Run 20260526_185416: removing only 4h_taker_imbalance_mean_12 reduced mean IC, worsened std, and cut top-10 lift; direct deletion is not the answer."
+      baseline_stable_no_4h_large_trade_ratio: "Run 20260526_185416: removing raw 4H large_trade_ratio improved official F1/top-10 lift but damaged mean IC, std, and worst folds; use only as a lesson for conditional context."
+      baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio: "Run 20260526_185416: combined deletion nearly reached F1 but collapsed positive-fold coverage; direct ablation is rejected."
+      baseline_stable_plus_4h_taker_mean12_ltr_context: "Pre-registered after 20260526_185416: keep the control backbone and add only stable/conditional 4H taker_mean12 x large_trade_ratio context so the model can learn when the suspect signal reverses."
+      baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr: "Pre-registered conditional variant: remove raw 4H large_trade_ratio but keep stable large-trade context and conditional taker-flow interactions."
+      baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only: "Pre-registered conditional variant: replace both raw 4H taker_mean12 and raw 4H large_trade_ratio with stable context plus conditional interactions."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
@@ -1767,6 +1798,18 @@ experiments:
     rejected_profiles:
       baseline_control_plus_futures_context:
         reason: "Run 20260524_072602 broad futures-context profile improved frozen holdout top-10 but failed CV stability; use narrower futures OI/positioning/funding tracks instead."
+      baseline_control_plus_futures_oi_change_context:
+        reason: "Run 20260526_185416: narrow OI context mean IC 0.0400, std 0.1195, positive folds 66.7%; too unstable versus the control."
+      baseline_control_plus_futures_positioning_context:
+        reason: "Run 20260526_185416: positioning context mean IC 0.0396, std 0.0888, positive folds 69.4%; did not improve the control."
+      baseline_control_plus_futures_funding_context:
+        reason: "Run 20260526_185416: funding context mean IC 0.0613, std 0.0868, positive folds 69.4%; weak stability despite some recent-fold strength."
+      baseline_stable_no_4h_taker_mean12:
+        reason: "Run 20260526_185416: removing only 4h_taker_imbalance_mean_12 lowered mean IC and worsened std/top-10 lift; direct deletion rejected."
+      baseline_stable_no_4h_large_trade_ratio:
+        reason: "Run 20260526_185416: raw 4H large_trade_ratio deletion improved F1/top-10 but damaged mean IC, std, and worst folds; use conditional context instead."
+      baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio:
+        reason: "Run 20260526_185416: combined deletion improved F1 toward target but collapsed positive-fold coverage and increased negative-fold fraction."
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."
       baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay:

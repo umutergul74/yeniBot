@@ -1337,13 +1337,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_stable_no_4h_taker_mean12",
-        "baseline_stable_no_4h_large_trade_ratio",
-        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
-        "baseline_control_plus_futures_oi_change_context",
-        "baseline_control_plus_futures_positioning_context",
-        "baseline_control_plus_futures_funding_context",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -1360,13 +1357,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["status"] == "failed_clean_holdout_review"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
-        "baseline_stable_no_4h_taker_mean12",
-        "baseline_stable_no_4h_large_trade_ratio",
-        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr",
+        "baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only",
         "blend_control_long_pressure_65_35",
-        "baseline_control_plus_futures_oi_change_context",
-        "baseline_control_plus_futures_positioning_context",
-        "baseline_control_plus_futures_funding_context",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1394,9 +1388,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
     assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
-    assert "open-interest change" in notes["baseline_control_plus_futures_oi_change_context"]
-    assert "long-short ratio" in notes["baseline_control_plus_futures_positioning_context"]
-    assert "funding-rate context" in notes["baseline_control_plus_futures_funding_context"]
+    assert "failed CV stability" in notes["baseline_control_plus_futures_oi_change_context"]
+    assert "failed CV stability" in notes["baseline_control_plus_futures_positioning_context"]
+    assert "did not clear" in notes["baseline_control_plus_futures_funding_context"]
+    assert "conditional" in notes["baseline_stable_plus_4h_taker_mean12_ltr_context"]
     assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
     columns = [
         "4h_large_trade_ratio",
@@ -1444,7 +1439,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_buy_ratio_delta",
         "4h_taker_imbalance_slope",
         "4h_taker_imbalance_mean_12",
+        "4h_taker_imbalance_mean_12_stable_rank",
         "4h_taker_imbalance_mean_24",
+        "4h_large_trade_ratio_stable_rank",
+        "4h_taker_mean12_x_ltr_rank_signed",
+        "4h_taker_mean12_x_ltr_rank_high",
+        "4h_taker_mean12_x_ltr_rank_low",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
         "4h_taker_imbalance_x_rv14_rank_signed",
@@ -1682,6 +1682,29 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_taker_imbalance_mean_24" in stable_no_mean12_no_ratio_columns
     assert "4h_large_trade_ratio" not in stable_no_mean12_no_ratio_columns
 
+    conditional_context = profile_config(config, "baseline_stable_plus_4h_taker_mean12_ltr_context")
+    conditional_context_columns = filter_feature_columns(columns, conditional_context)
+    assert "4h_taker_imbalance_mean_12" in conditional_context_columns
+    assert "4h_large_trade_ratio" in conditional_context_columns
+    assert "4h_taker_imbalance_mean_12_stable_rank" in conditional_context_columns
+    assert "4h_large_trade_ratio_stable_rank" in conditional_context_columns
+    assert "4h_taker_mean12_x_ltr_rank_signed" in conditional_context_columns
+    assert "4h_taker_mean12_x_ltr_rank_low" in conditional_context_columns
+    assert "4h_gk_vol_14" not in conditional_context_columns
+    assert "4h_large_trade_pressure_12_stable_rank" not in conditional_context_columns
+
+    conditional_no_raw_ltr = profile_config(config, "baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr")
+    conditional_no_raw_ltr_columns = filter_feature_columns(columns, conditional_no_raw_ltr)
+    assert "4h_large_trade_ratio" not in conditional_no_raw_ltr_columns
+    assert "4h_large_trade_ratio_stable_rank" in conditional_no_raw_ltr_columns
+    assert "4h_taker_imbalance_mean_12" in conditional_no_raw_ltr_columns
+
+    conditional_stable_only = profile_config(config, "baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only")
+    conditional_stable_only_columns = filter_feature_columns(columns, conditional_stable_only)
+    assert "4h_taker_imbalance_mean_12" not in conditional_stable_only_columns
+    assert "4h_large_trade_ratio" not in conditional_stable_only_columns
+    assert "4h_taker_mean12_x_ltr_rank_high" in conditional_stable_only_columns
+
     stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
     stable_combined_columns = filter_feature_columns(columns, stable_combined)
     assert "cvd_cumulative_rate_norm" not in stable_combined_columns
@@ -1709,6 +1732,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_no_4h_whale_zscores",
         "baseline_stable_no_4h_volume_context",
         "baseline_stable_no_1h_large_trade_ratio",
+        "baseline_stable_no_4h_taker_mean12",
+        "baseline_stable_no_4h_large_trade_ratio",
+        "baseline_stable_no_4h_taker_mean12_no_4h_large_trade_ratio",
+        "baseline_control_plus_futures_oi_change_context",
+        "baseline_control_plus_futures_positioning_context",
+        "baseline_control_plus_futures_funding_context",
         "baseline_stable_plus_15m_late_order_flow",
         "baseline_stable_plus_15m_intrahour_pressure",
         "baseline_stable_plus_15m_whale_burst",

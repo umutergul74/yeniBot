@@ -175,14 +175,30 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "volatility_columns": ["realized_vol_14_stable_rank", "gk_vol_14_stable_rank"],
         "modes": ["signed", "high", "low"],
     }
-    primary = synthetic_klines(96, "1h")
-    htf = synthetic_klines(30, "4h")
-    extended_primary = synthetic_klines(112, "1h")
-    extended_htf = synthetic_klines(34, "4h")
+    config["features"]["bad_fold_context"] = {
+        "enabled": True,
+        "stable_window": 4,
+        "stable_clip_abs": 3.0,
+        "stable_tanh_scale": 2.0,
+        "stable_transforms": ["rank"],
+        "stable_source_columns": ["taker_imbalance_mean_4", "large_trade_ratio"],
+        "interaction_pairs": [
+            {
+                "source": "taker_imbalance_mean_4",
+                "context": "large_trade_ratio",
+                "context_transforms": ["stable_rank"],
+                "modes": ["signed", "high", "low"],
+            }
+        ],
+    }
+    primary = synthetic_klines(160, "1h")
+    htf = synthetic_klines(50, "4h")
+    extended_primary = synthetic_klines(180, "1h")
+    extended_htf = synthetic_klines(55, "4h")
 
     base = build_feature_matrix(primary, htf, config).frame
     extended = build_feature_matrix(extended_primary, extended_htf, config).frame
-    timestamp = pd.Timestamp("2022-01-03 12:00", tz="UTC")
+    timestamp = pd.Timestamp("2022-01-05 12:00", tz="UTC")
     columns = [
         "taker_imbalance",
         "taker_buy_ratio_zscore",
@@ -194,6 +210,8 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "large_trade_pressure_4_minus_3",
         "large_trade_pressure_4_minus_3_stable_rank",
         "large_trade_pressure_4_minus_3_stable_tanh",
+        "taker_imbalance_mean_4_stable_rank",
+        "taker_mean4_x_ltr_rank_signed",
         "taker_imbalance_x_rv14_rank_signed",
         "signed_ltp_x_rv14_rank_high",
         "ltp4_rank_x_gk14_rank_low",
@@ -206,6 +224,8 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "4h_cvd_pressure_3",
         "4h_cvd_pressure_3_stable_rank",
         "4h_taker_imbalance_x_rv14_rank_signed",
+        "4h_taker_imbalance_mean_4_stable_rank",
+        "4h_taker_mean4_x_ltr_rank_high",
         "4h_ltp4_rank_x_gk14_rank_high",
         "4h_large_trade_pressure_4_minus_3_stable_tanh",
     ]
