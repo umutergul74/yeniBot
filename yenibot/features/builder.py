@@ -862,6 +862,7 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
     exclude_patterns = list(_config_get(config, ["features", "exclude_patterns"], []) or [])
     profile = resolve_feature_profile(config)
     include_patterns = list(profile.get("include_patterns", []) or [])
+    required_columns = list(profile.get("required_columns", []) or [])
     profile_exclude_patterns = list(profile.get("exclude_patterns", []) or [])
     stationarity_cfg = _config_get(config, ["features", "stationarity"], {})
     if bool(_config_get(stationarity_cfg, ["exclude_nonstationary"], False)):
@@ -881,6 +882,19 @@ def filter_feature_columns(feature_columns: list[str], config: object) -> list[s
         filtered.append(column)
     if not filtered:
         raise ValueError("Feature filtering removed every feature column")
+    missing_required = [column for column in required_columns if column not in feature_columns]
+    if missing_required:
+        raise ValueError(
+            "Feature profile requires columns that are missing from the feature matrix. "
+            "Re-run 02_feature_engineering.ipynb and 03_labeling.ipynb before training this profile: "
+            f"{missing_required}"
+        )
+    excluded_required = [column for column in required_columns if column not in filtered]
+    if excluded_required:
+        raise ValueError(
+            "Feature profile required columns were removed by feature filtering: "
+            f"{excluded_required}"
+        )
     return filtered
 
 
@@ -925,9 +939,16 @@ def resolve_feature_profile(config: object) -> dict[str, object]:
         if not isinstance(current, dict):
             raise ValueError(f"Feature profile must be a mapping: {name}")
         parent_name = current.get("inherit")
-        parent = load_profile(str(parent_name), seen) if parent_name else {"include_patterns": [], "exclude_patterns": []}
+        parent = (
+            load_profile(str(parent_name), seen)
+            if parent_name
+            else {"include_patterns": [], "exclude_patterns": [], "required_columns": []}
+        )
         include_patterns = _dedupe_patterns(
             list(parent.get("include_patterns", []) or []) + list(current.get("include_patterns", []) or [])
+        )
+        required_columns = _dedupe_patterns(
+            list(parent.get("required_columns", []) or []) + list(current.get("required_columns", []) or [])
         )
         if "exclude_patterns" in current:
             exclude_patterns = list(current.get("exclude_patterns", []) or [])
@@ -939,6 +960,7 @@ def resolve_feature_profile(config: object) -> dict[str, object]:
             "description": current.get("description", ""),
             "include_patterns": include_patterns,
             "exclude_patterns": _dedupe_patterns(exclude_patterns),
+            "required_columns": required_columns,
         }
 
     return load_profile(str(active))

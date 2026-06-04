@@ -23,6 +23,23 @@ def test_filter_feature_columns_rejects_empty_result() -> None:
         filter_feature_columns(["a"], {"features": {"exclude_patterns": ["*"]}})
 
 
+def test_filter_feature_columns_rejects_missing_required_profile_columns() -> None:
+    config = {
+        "features": {
+            "profiles": {
+                "guarded": {
+                    "include_patterns": ["*"],
+                    "required_columns": ["guarded_signal"],
+                }
+            },
+            "active_profile": "guarded",
+        }
+    }
+
+    with pytest.raises(ValueError, match="Re-run 02_feature_engineering"):
+        filter_feature_columns(["baseline_signal"], config)
+
+
 def test_filter_feature_columns_applies_stationarity_policy() -> None:
     columns = [
         "close_denoised",

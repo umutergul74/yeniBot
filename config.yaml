@@ -525,6 +525,13 @@ features:
         - "4h_taker_mean12_tanh_guard_ltr_rank_neutral"
         - "4h_taker_mean12_tanh_guard_ltr_rank_low_pass"
         - "4h_taker_mean12_tanh_guard_ltr_rank_high_damped"
+      required_columns:
+        - "4h_taker_imbalance_mean_12_stable_tanh"
+        - "4h_large_trade_ratio_stable_rank"
+        - "4h_taker_mean12_tanh_guard_ltr_rank_not_high"
+        - "4h_taker_mean12_tanh_guard_ltr_rank_neutral"
+        - "4h_taker_mean12_tanh_guard_ltr_rank_low_pass"
+        - "4h_taker_mean12_tanh_guard_ltr_rank_high_damped"
       exclude_patterns:
         - "4h_taker_buy_ratio"
         - "4h_taker_sell_ratio"

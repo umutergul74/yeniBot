@@ -60,7 +60,7 @@ from yenibot.experiments import (
     run_profile_experiment,
     write_experiment_diagnostics,
 )
-from yenibot.features import build_feature_matrix, filter_feature_columns, select_feature_columns
+from yenibot.features import build_feature_matrix, filter_feature_columns, resolve_feature_profile, select_feature_columns
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -2231,6 +2231,14 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_taker_mean12_tanh_guard_ltr_rank_not_high" in guarded_tanh_columns
     assert "4h_taker_mean12_tanh_guard_ltr_rank_high_damped" in guarded_tanh_columns
     assert "4h_taker_mean12_x_ltr_rank_high" not in guarded_tanh_columns
+    assert resolve_feature_profile(guarded_tanh)["required_columns"] == [
+        "4h_taker_imbalance_mean_12_stable_tanh",
+        "4h_large_trade_ratio_stable_rank",
+        "4h_taker_mean12_tanh_guard_ltr_rank_not_high",
+        "4h_taker_mean12_tanh_guard_ltr_rank_neutral",
+        "4h_taker_mean12_tanh_guard_ltr_rank_low_pass",
+        "4h_taker_mean12_tanh_guard_ltr_rank_high_damped",
+    ]
 
     stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
     stable_combined_columns = filter_feature_columns(columns, stable_combined)
