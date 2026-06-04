@@ -180,6 +180,12 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "experiment_selection.csv",
         "missing_selected_profiles.csv",
         "training_execution_summary.json",
+        "phase1_blocker_root_cause.csv",
+        "threshold_oracle_gap.csv",
+        "bad_fold_mechanism_summary.csv",
+        "prediction_error_audit.csv",
+        "historical_experiment_memory_audit.csv",
+        "phase1_decision_ladder.json",
     ]
     return [name for name in required if not (report_dir / name).exists()]
 

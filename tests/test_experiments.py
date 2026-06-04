@@ -24,13 +24,18 @@ from yenibot.experiments import (
     _future_oos_candidate_plan_frame,
     _feature_drift_forensics_frame,
     _feature_family_drift_summary_frame,
+    _bad_fold_mechanism_summary_frame,
+    _historical_experiment_memory_audit_frame,
     _holdout_boundary_audit_frame,
     _holdout_reservation_frame,
     _performance_gap_reasons,
+    _phase1_blocker_root_cause_frame,
+    _phase1_decision_ladder_payload,
     _missing_selected_profiles,
     _preflight_experiment_profiles,
     _passes_full,
     _passes_triage,
+    _prediction_error_audit_frame,
     _profile_blend_leaders,
     _profile_blend_predictions,
     _profile_blend_review_frame,
@@ -42,6 +47,7 @@ from yenibot.experiments import (
     _score_distribution_shift_summary_frame,
     _bad_fold_signature_frame,
     _score_separation_forensics_frame,
+    _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
     _threshold_transfer_review_frames,
@@ -882,6 +888,191 @@ def test_score_separation_forensics_flags_bad_fold_signature() -> None:
     assert "top_score_payoff_reverses" in signature_row["likely_signature"]
 
 
+def test_root_cause_reports_classify_threshold_and_memory_reuse() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+        },
+        "experiments": {
+            "control_profile": "control",
+            "experiment_memory": {
+                "enabled": True,
+                "reject_retests": True,
+                "rejected_profiles": {
+                    "baseline_stable_no_4h_large_trade_ratio": {
+                        "reason": "Direct 4H large_trade_ratio ablation damaged mean IC and worst folds."
+                    }
+                },
+            },
+        },
+    }
+    threshold = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "fold": 0,
+                "test_oracle_best_f1": 0.60,
+                "test_f1_at_official_threshold": 0.40,
+                "test_f1_at_selected_threshold": 0.50,
+                "test_f1_at_constrained_threshold": 0.42,
+                "test_pred_long_rate_at_official_threshold": 0.65,
+                "test_pred_long_rate_at_selected_threshold": 0.90,
+                "test_pred_long_rate_at_constrained_threshold": 0.66,
+                "primary_issue": "official_f1",
+            },
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "fold": 1,
+                "test_oracle_best_f1": 0.58,
+                "test_f1_at_official_threshold": 0.41,
+                "test_f1_at_selected_threshold": 0.51,
+                "test_f1_at_constrained_threshold": 0.43,
+                "test_pred_long_rate_at_official_threshold": 0.62,
+                "test_pred_long_rate_at_selected_threshold": 0.88,
+                "test_pred_long_rate_at_constrained_threshold": 0.64,
+                "primary_issue": "official_f1",
+            },
+        ]
+    )
+    drift = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "feature_family": "4h_whale_ticket_size",
+                "top_suspect_feature": "4h_large_trade_ratio",
+                "top_likely_issue": "bad_fold_distribution_drift",
+            }
+        ]
+    )
+    signature = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "bad_fold_count": 4,
+                "bad_rank_ic_mean": -0.04,
+                "bad_score_gap_mean": -0.01,
+                "good_score_gap_mean": 0.02,
+                "bad_label_long_rate_mean": 0.31,
+                "good_label_long_rate_mean": 0.32,
+                "bad_top_10_lift_mean": 0.8,
+                "bad_top_10_forward_return_mean": -0.001,
+                "likely_signature": "score_separation_compresses_or_reverses;top_score_payoff_reverses",
+            }
+        ]
+    )
+
+    oracle_gap = _threshold_oracle_gap_frame(threshold, config)
+    memory = _historical_experiment_memory_audit_frame(drift, config)
+    mechanism = _bad_fold_mechanism_summary_frame(
+        bad_fold_signature=signature,
+        feature_family_drift_summary=drift,
+        score_distribution_shift_summary=pd.DataFrame(),
+        probability_quality_summary=pd.DataFrame(),
+        historical_memory_audit=memory,
+        config=config,
+    )
+    root = _phase1_blocker_root_cause_frame(
+        phase1_blocker_action_plan=pd.DataFrame(
+            [
+                {
+                    "blocker": "official_threshold_f1",
+                    "promotion_allowed_now": False,
+                    "source_files": "threshold_forensics.csv",
+                }
+            ]
+        ),
+        threshold_oracle_gap=oracle_gap,
+        bad_fold_mechanism_summary=mechanism,
+        historical_experiment_memory_audit=memory,
+        phase2_readiness={"blockers": ["rank_ic_std_above_phase1_target", "long_f1_below_phase1_target"]},
+        settings={"control_profile": "control"},
+        config=config,
+    )
+    ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=root,
+        threshold_oracle_gap=oracle_gap,
+        bad_fold_mechanism_summary=mechanism,
+        phase2_readiness={"blockers": ["rank_ic_std_above_phase1_target"]},
+        settings={"control_profile": "control"},
+    )
+
+    assert oracle_gap.iloc[0]["root_cause_hint"] == "threshold_transfer_gap_after_oracle_succeeds"
+    assert memory.iloc[0]["historical_status"] == "related_rejections_found"
+    assert mechanism.iloc[0]["dominant_mechanism"] == "score_ranking_reversal_not_label_balance"
+    assert {"fold_stability", "official_threshold_f1", "historical_experiment_memory"}.issubset(
+        set(root["blocker"])
+    )
+    assert ladder["run_04_required_now"] is False
+    assert ladder["full_zip_required_now"] is False
+
+
+def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:
+    config = {"experiments": {"diagnostics": {"prediction_error_audit_rows_per_case": 2}}}
+    rows = []
+    for fold, scores in {
+        0: [0.90, 0.82, 0.20, 0.10],
+        1: [0.10, 0.20, 0.82, 0.90],
+    }.items():
+        labels = [0, 0, 1, 1] if fold == 0 else [0, 0, 1, 1]
+        for idx, (score, label) in enumerate(zip(scores, labels)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-04-01") + pd.Timedelta(hours=fold * 10 + idx),
+                    "label": label,
+                    "prob_long": score,
+                    "forward_return": 0.002 if label else -0.001,
+                    "tb_return": 0.002 if label else 0.0,
+                }
+            )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {},
+    }
+    score = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "fold": 0,
+                "rank_ic": -0.20,
+                "score_gap_pos_minus_neg": -0.40,
+                "official_threshold": 0.50,
+            },
+            {
+                "candidate": "control",
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "fold": 1,
+                "rank_ic": 0.20,
+                "score_gap_pos_minus_neg": 0.40,
+                "official_threshold": 0.50,
+            },
+        ]
+    )
+
+    audit = _prediction_error_audit_frame([entry], score, config)
+
+    assert not audit.empty
+    assert "worst_fold_top_score_false_positive" in set(audit["case_type"])
+    assert "worst_fold_low_score_false_negative" in set(audit["case_type"])
+    assert "good_fold_reference_true_positive" in set(audit["case_type"])
+    assert audit["is_top_decile"].any()
+
+
 def test_feature_drift_forensics_flags_bad_fold_signal_reversal() -> None:
     config = {
         "validation": {
@@ -1553,8 +1744,6 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_stable_return_pairwise_loss_light",
-        "baseline_no_4h_tier1_4h_large_trade_pressure_long",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -1572,7 +1761,6 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
-        "baseline_stable_return_pairwise_loss_light",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1600,7 +1788,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
     assert "worsened mean IC" in notes["baseline_stable_score_margin_loss"]
-    assert "forward-return ordering loss" in notes["baseline_stable_return_pairwise_loss_light"]
+    assert "failed versus control" in notes["baseline_stable_return_pairwise_loss_light"]
     assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
     assert config["features"]["profiles"]["baseline_stable_return_pairwise_loss_light"]["config_overrides"]["training"][
         "loss"
@@ -1612,6 +1800,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     }
     assert (
         "baseline_stable_score_margin_loss"
+        in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    )
+    assert (
+        "baseline_stable_return_pairwise_loss_light"
         in config["experiments"]["experiment_memory"]["rejected_profiles"]
     )
     assert "failed CV stability" in notes["baseline_control_plus_futures_oi_change_context"]
@@ -2748,6 +2940,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "phase1_blocker_root_cause.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_oracle_gap.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "bad_fold_mechanism_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "prediction_error_audit.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "historical_experiment_memory_audit.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "phase1_decision_ladder.json").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
@@ -2781,6 +2979,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "profile_blend.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "performance_gap_analysis.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_blocker_action_plan.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_blocker_root_cause.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_oracle_gap.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "bad_fold_mechanism_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "prediction_error_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "historical_experiment_memory_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_decision_ladder.json").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "fold_stability_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "score_separation_forensics.csv").exists()
@@ -2814,6 +3018,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["profile_blend"].empty
     assert not diagnostics["performance_gap_analysis"].empty
     assert not diagnostics["phase1_blocker_action_plan"].empty
+    assert not diagnostics["phase1_blocker_root_cause"].empty
+    assert not diagnostics["threshold_oracle_gap"].empty
+    assert not diagnostics["prediction_error_audit"].empty
+    assert diagnostics["phase1_decision_ladder"]["run_05_first"] is True
     assert not diagnostics["fold_stability_forensics"].empty
     assert not diagnostics["fold_stability_summary"].empty
     assert not diagnostics["score_separation_forensics"].empty
@@ -2878,6 +3086,36 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "promotion_allowed_now",
         "source_files",
     }.issubset(diagnostics["phase1_blocker_action_plan"].columns)
+    assert {
+        "blocker",
+        "root_cause",
+        "recommended_action",
+        "full_zip_required",
+    }.issubset(diagnostics["phase1_blocker_root_cause"].columns)
+    assert {
+        "candidate",
+        "oracle_f1_mean",
+        "official_f1_mean",
+        "official_gap_to_oracle_mean",
+        "root_cause_hint",
+    }.issubset(diagnostics["threshold_oracle_gap"].columns)
+    assert {
+        "dominant_mechanism",
+        "historical_status",
+        "recommended_action",
+    }.issubset(diagnostics["bad_fold_mechanism_summary"].columns)
+    assert {
+        "case_type",
+        "prob_long",
+        "label",
+        "forward_return",
+        "note",
+    }.issubset(diagnostics["prediction_error_audit"].columns)
+    assert {
+        "feature_family",
+        "related_rejected_profile_count",
+        "historical_status",
+    }.issubset(diagnostics["historical_experiment_memory_audit"].columns)
     assert {"fold_stability", "official_threshold_f1", "future_unseen_oos"}.issubset(
         set(diagnostics["phase1_blocker_action_plan"]["blocker"])
     )
@@ -2886,6 +3124,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "likely_signature" in diagnostics["bad_fold_signature"].columns
     assert "bad_fold_signature" in diagnostics["decision"]
     assert "feature_family_drift_summary" in diagnostics["decision"]
+    assert "phase1_blocker_root_cause" in diagnostics["decision"]
+    assert "threshold_oracle_gap" in diagnostics["decision"]
+    assert "bad_fold_mechanism_summary" in diagnostics["decision"]
+    assert "prediction_error_audit" in diagnostics["decision"]
+    assert "historical_experiment_memory_audit" in diagnostics["decision"]
+    assert "phase1_decision_ladder" in diagnostics["decision"]
     assert "probability_quality_summary" in diagnostics["decision"]
     assert "score_distribution_shift_summary" in diagnostics["decision"]
     assert "fold_reliability_gate_summary" in diagnostics["decision"]
@@ -2970,6 +3214,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/profile_blend.csv" in archive.namelist()
         assert "matrix/performance_gap_analysis.csv" in archive.namelist()
         assert "matrix/phase1_blocker_action_plan.csv" in archive.namelist()
+        assert "matrix/phase1_blocker_root_cause.csv" in archive.namelist()
+        assert "matrix/threshold_oracle_gap.csv" in archive.namelist()
+        assert "matrix/bad_fold_mechanism_summary.csv" in archive.namelist()
+        assert "matrix/prediction_error_audit.csv" in archive.namelist()
+        assert "matrix/historical_experiment_memory_audit.csv" in archive.namelist()
+        assert "matrix/phase1_decision_ladder.json" in archive.namelist()
         assert "matrix/profile_calibrated_threshold_summary.csv" in archive.namelist()
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()
@@ -3014,6 +3264,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/profile_comparison.csv" in names
     assert "matrix/performance_gap_analysis.csv" in names
     assert "matrix/phase1_blocker_action_plan.csv" in names
+    assert "matrix/phase1_blocker_root_cause.csv" in names
+    assert "matrix/threshold_oracle_gap.csv" in names
+    assert "matrix/bad_fold_mechanism_summary.csv" in names
+    assert "matrix/prediction_error_audit.csv" in names
+    assert "matrix/historical_experiment_memory_audit.csv" in names
+    assert "matrix/phase1_decision_ladder.json" in names
     assert "matrix/profile_calibrated_threshold_summary.csv" in names
     assert "matrix/fold_stability_forensics.csv" in names
     assert "matrix/fold_stability_summary.csv" in names

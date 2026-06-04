@@ -71,7 +71,7 @@ Forbidden feature behavior:
 - HMM validation, test, holdout, and live-style inference must be forward-only.
 - Do not add an XGBoost, random forest, or other meta-learner on top of TCN+GRU outputs.
 - Do not blindly retry old training-stability experiments. The May 21 branch already tested val-loss/rolling-IC style training changes, stronger regularization, and longer validation windows, then restored baseline defaults. New training experiments must isolate one change at a time and be pre-registered.
-- The current score-separation training candidate is `baseline_stable_return_pairwise_loss_light`: it keeps the control feature set and adds only a small pairwise forward-return ordering loss. Treat it as an experiment until CV and future-OOS evidence clears the official gates.
+- The latest score-separation loss candidates are retired. `baseline_stable_score_margin_loss` and `baseline_stable_return_pairwise_loss_light` both failed versus the control on core CV gates. Do not retry loss-only score-separation tweaks unless a new diagnostic report identifies a distinct mechanism.
 
 ## Experiment Memory Discipline
 
@@ -92,6 +92,7 @@ Known lessons:
 - Run `20260528_193824` showed that regime-specific validation thresholds did not improve official F1; use `regime_threshold_policy_*` as diagnostics, not as a promotion mechanism.
 - Run `20260528_193824` also identified bad-fold score separation compression/reversal as the main actionable failure mode; prioritize narrow score-separation training or feature hypotheses over broad profile search.
 - Run `20260528_214759` showed that pairwise label-margin loss weight `0.05` improved top-10 lift but worsened mean IC, Rank IC std, positive-fold coverage, worst folds, and official F1. Do not repeat that exact label-margin objective; the next score-separation experiment should target forward-return ordering instead of class-only separation.
+- Run `20260604_141520` showed that the forward-return pairwise loss candidate also failed: it lowered mean IC, worsened std, reduced positive-fold coverage, lowered official F1, and weakened top-10 lift versus the control. The next step is root-cause diagnostics, not another loss-only candidate.
 
 ## Holdout And Future-OOS Policy
 
@@ -159,6 +160,12 @@ Required diagnostic artifacts include:
 - `phase2_readiness.json`
 - `phase1_transition_plan.json`
 - `auto_review.json`
+- `phase1_blocker_root_cause.csv`
+- `threshold_oracle_gap.csv`
+- `bad_fold_mechanism_summary.csv`
+- `prediction_error_audit.csv`
+- `historical_experiment_memory_audit.csv`
+- `phase1_decision_ladder.json`
 
 The auto-review command for a report directory is:
 

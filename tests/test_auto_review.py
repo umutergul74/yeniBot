@@ -135,6 +135,70 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         ),
         encoding="utf-8",
     )
+    pd.DataFrame(
+        [
+            {
+                "blocker": "rank_ic_std_above_phase1_target",
+                "root_cause": "fold_score_reversal_or_compression",
+                "evidence": "synthetic fixture",
+                "decision": "diagnostic_only",
+            }
+        ]
+    ).to_csv(path / "phase1_blocker_root_cause.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "fold_scope": "full",
+                "selected_f1_mean": 0.47,
+                "constrained_f1_mean": 0.46,
+                "official_f1_mean": 0.46,
+                "oracle_f1_mean": 0.48,
+                "oracle_minus_official_f1": 0.02,
+            }
+        ]
+    ).to_csv(path / "threshold_oracle_gap.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "mechanism": "score_separation_instability",
+                "fold_count": 1,
+                "recommendation": "diagnose_before_retrain",
+            }
+        ]
+    ).to_csv(path / "bad_fold_mechanism_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "fold_id": 0,
+                "sample_type": "bad_fold_top_score_false_positive",
+                "prob_long": 0.8,
+                "label": 0,
+            }
+        ]
+    ).to_csv(path / "prediction_error_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "feature_family": "4h_large_trade_ratio",
+                "memory_status": "previously_rejected",
+                "recommendation": "do_not_repeat_same_ablation",
+            }
+        ]
+    ).to_csv(path / "historical_experiment_memory_audit.csv", index=False)
+    (path / "phase1_decision_ladder.json").write_text(
+        json.dumps(
+            {
+                "run_05_first": True,
+                "run_04_required_now": False,
+                "full_zip_required_now": False,
+                "decision": "diagnostic_only",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None:

@@ -3830,6 +3830,644 @@ def _write_phase1_blocker_action_plan(path: Path, frame: pd.DataFrame) -> None:
     _write_json(path / "phase1_blocker_action_plan.json", {"rows": frame.to_dict(orient="records")})
 
 
+def _threshold_oracle_gap_frame(threshold_forensics: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "oracle_f1_mean",
+        "official_f1_mean",
+        "selected_f1_mean",
+        "constrained_f1_mean",
+        "official_gap_to_oracle_mean",
+        "selected_gap_to_oracle_mean",
+        "constrained_gap_to_oracle_mean",
+        "oracle_pass_fold_rate",
+        "official_pass_fold_rate",
+        "selected_pass_fold_rate",
+        "constrained_pass_fold_rate",
+        "official_pred_long_rate_mean",
+        "selected_pred_long_rate_mean",
+        "constrained_pred_long_rate_mean",
+        "official_pred_rate_guardrail_fail_rate",
+        "selected_pred_rate_guardrail_fail_rate",
+        "dominant_threshold_issue",
+        "root_cause_hint",
+        "recommended_action",
+    ]
+    if threshold_forensics.empty:
+        return pd.DataFrame(columns=columns)
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    max_pred_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+    rows: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope), part in threshold_forensics.groupby(
+        ["candidate", "candidate_type", "fold_scope"],
+        dropna=False,
+    ):
+        oracle = pd.to_numeric(part.get("test_oracle_best_f1"), errors="coerce")
+        official = pd.to_numeric(part.get("test_f1_at_official_threshold"), errors="coerce")
+        selected = pd.to_numeric(part.get("test_f1_at_selected_threshold"), errors="coerce")
+        constrained = pd.to_numeric(part.get("test_f1_at_constrained_threshold"), errors="coerce")
+        official_rate = pd.to_numeric(part.get("test_pred_long_rate_at_official_threshold"), errors="coerce")
+        selected_rate = pd.to_numeric(part.get("test_pred_long_rate_at_selected_threshold"), errors="coerce")
+        constrained_rate = pd.to_numeric(part.get("test_pred_long_rate_at_constrained_threshold"), errors="coerce")
+        oracle_pass = oracle >= min_long_f1
+        official_pass = (official >= min_long_f1) & (official_rate <= max_pred_rate)
+        selected_pass = (selected >= min_long_f1) & (selected_rate <= max_pred_rate)
+        constrained_pass = (constrained >= min_long_f1) & (constrained_rate <= max_pred_rate)
+        issue_counts = (
+            part["primary_issue"].astype(str).value_counts().to_dict()
+            if "primary_issue" in part.columns
+            else {}
+        )
+        if oracle.notna().any() and float(oracle_pass.mean()) < 0.50:
+            hint = "score_not_separable_enough_even_with_oracle_threshold"
+            action = "do_not_tune_threshold_first; inspect score ranking and feature drift"
+        elif float(official_pass.mean()) < float(oracle_pass.mean()) - 0.20:
+            hint = "threshold_transfer_gap_after_oracle_succeeds"
+            action = "diagnose threshold transfer and calibration before new features"
+        elif float(selected_rate.gt(max_pred_rate).mean()) > 0.25:
+            hint = "selected_threshold_too_broad_for_deployment_guardrail"
+            action = "use guarded official threshold only; do not count broad selected F1 as Phase 1 pass"
+        else:
+            hint = "threshold_gap_secondary_to_fold_stability"
+            action = "monitor threshold diagnostics while prioritizing fold stability"
+        rows.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "fold_scope": str(fold_scope),
+                "fold_count": int(part["fold"].nunique()) if "fold" in part.columns else int(len(part)),
+                "oracle_f1_mean": float(oracle.mean()) if oracle.notna().any() else np.nan,
+                "official_f1_mean": float(official.mean()) if official.notna().any() else np.nan,
+                "selected_f1_mean": float(selected.mean()) if selected.notna().any() else np.nan,
+                "constrained_f1_mean": float(constrained.mean()) if constrained.notna().any() else np.nan,
+                "official_gap_to_oracle_mean": float((oracle - official).mean()) if oracle.notna().any() else np.nan,
+                "selected_gap_to_oracle_mean": float((oracle - selected).mean()) if oracle.notna().any() else np.nan,
+                "constrained_gap_to_oracle_mean": float((oracle - constrained).mean()) if oracle.notna().any() else np.nan,
+                "oracle_pass_fold_rate": float(oracle_pass.mean()) if oracle.notna().any() else np.nan,
+                "official_pass_fold_rate": float(official_pass.mean()) if official.notna().any() else np.nan,
+                "selected_pass_fold_rate": float(selected_pass.mean()) if selected.notna().any() else np.nan,
+                "constrained_pass_fold_rate": float(constrained_pass.mean()) if constrained.notna().any() else np.nan,
+                "official_pred_long_rate_mean": float(official_rate.mean()) if official_rate.notna().any() else np.nan,
+                "selected_pred_long_rate_mean": float(selected_rate.mean()) if selected_rate.notna().any() else np.nan,
+                "constrained_pred_long_rate_mean": float(constrained_rate.mean()) if constrained_rate.notna().any() else np.nan,
+                "official_pred_rate_guardrail_fail_rate": float(official_rate.gt(max_pred_rate).mean())
+                if official_rate.notna().any()
+                else np.nan,
+                "selected_pred_rate_guardrail_fail_rate": float(selected_rate.gt(max_pred_rate).mean())
+                if selected_rate.notna().any()
+                else np.nan,
+                "dominant_threshold_issue": json.dumps(issue_counts, sort_keys=True),
+                "root_cause_hint": hint,
+                "recommended_action": action,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["candidate_type", "candidate", "fold_scope"],
+    ).reset_index(drop=True)
+
+
+def _memory_text_matches_family(text: str, family: str, feature: str) -> bool:
+    haystack = str(text).lower().replace("-", "_")
+    family_text = str(family).lower()
+    feature_text = str(feature).lower()
+    tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", f"{family_text} {feature_text}")
+        if len(token) >= 4 and token not in {"stable", "rank", "zscore", "feature", "profile"}
+    }
+    if not tokens:
+        return False
+    return any(token in haystack for token in tokens)
+
+
+def _historical_experiment_memory_audit_frame(
+    feature_family_drift_summary: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "fold_scope",
+        "feature_family",
+        "top_suspect_feature",
+        "top_likely_issue",
+        "related_rejected_profile_count",
+        "related_rejected_profiles",
+        "related_rejected_reasons",
+        "historical_status",
+        "recommended_action",
+    ]
+    if feature_family_drift_summary.empty:
+        return pd.DataFrame(columns=columns)
+    memory = _cfg(config, ["experiments", "experiment_memory"], {}) or {}
+    rejected = memory.get("rejected_profiles", {}) or {}
+    rejected_items: list[tuple[str, str]] = []
+    if isinstance(rejected, dict):
+        for profile, value in rejected.items():
+            reason = value.get("reason", "") if isinstance(value, dict) else str(value)
+            rejected_items.append((str(profile), str(reason)))
+    rows: list[dict[str, Any]] = []
+    for _, row in feature_family_drift_summary.iterrows():
+        family = str(row.get("feature_family", ""))
+        feature = str(row.get("top_suspect_feature", ""))
+        related = [
+            (profile, reason)
+            for profile, reason in rejected_items
+            if _memory_text_matches_family(f"{profile} {reason}", family, feature)
+        ]
+        if related:
+            status = "related_rejections_found"
+            action = "do_not_repeat_direct_ablation; use as diagnostic context only unless a new mechanism is explicit"
+        else:
+            status = "no_direct_rejection_match"
+            action = "eligible_for_hypothesis_design_only_after_root_cause_report_requests_new_features"
+        rows.append(
+            {
+                "candidate": str(row.get("candidate", "")),
+                "fold_scope": str(row.get("fold_scope", "")),
+                "feature_family": family,
+                "top_suspect_feature": feature,
+                "top_likely_issue": str(row.get("top_likely_issue", "")),
+                "related_rejected_profile_count": len(related),
+                "related_rejected_profiles": ",".join(profile for profile, _ in related[:8]),
+                "related_rejected_reasons": " | ".join(reason for _, reason in related[:3]),
+                "historical_status": status,
+                "recommended_action": action,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["candidate", "related_rejected_profile_count"],
+        ascending=[True, False],
+    ).reset_index(drop=True)
+
+
+def _bad_fold_mechanism_summary_frame(
+    *,
+    bad_fold_signature: pd.DataFrame,
+    feature_family_drift_summary: pd.DataFrame,
+    score_distribution_shift_summary: pd.DataFrame,
+    probability_quality_summary: pd.DataFrame,
+    historical_memory_audit: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "bad_fold_count",
+        "bad_rank_ic_mean",
+        "bad_score_gap_mean",
+        "good_score_gap_mean",
+        "bad_label_long_rate_mean",
+        "good_label_long_rate_mean",
+        "bad_top_10_lift_mean",
+        "bad_top_10_forward_return_mean",
+        "likely_signature",
+        "top_drift_family",
+        "top_suspect_feature",
+        "historical_status",
+        "score_shift_issue",
+        "probability_quality_issue",
+        "dominant_mechanism",
+        "requires_04",
+        "recommended_action",
+    ]
+    if bad_fold_signature.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, Any]] = []
+    for _, sig in bad_fold_signature.iterrows():
+        candidate = str(sig.get("candidate", ""))
+        fold_scope = str(sig.get("fold_scope", ""))
+        drift = _first_frame_row(
+            feature_family_drift_summary,
+            (feature_family_drift_summary["candidate"].astype(str) == candidate)
+            & (feature_family_drift_summary["fold_scope"].astype(str) == fold_scope)
+            if not feature_family_drift_summary.empty
+            else None,
+        )
+        shift = _first_frame_row(
+            score_distribution_shift_summary,
+            (score_distribution_shift_summary["candidate"].astype(str) == candidate)
+            & (score_distribution_shift_summary["fold_scope"].astype(str) == fold_scope)
+            if not score_distribution_shift_summary.empty
+            else None,
+        )
+        prob = _first_frame_row(
+            probability_quality_summary,
+            (probability_quality_summary["candidate"].astype(str) == candidate)
+            & (probability_quality_summary["fold_scope"].astype(str) == fold_scope)
+            if not probability_quality_summary.empty
+            else None,
+        )
+        memory = _first_frame_row(
+            historical_memory_audit,
+            (historical_memory_audit["candidate"].astype(str) == candidate)
+            & (historical_memory_audit["fold_scope"].astype(str) == fold_scope)
+            if not historical_memory_audit.empty
+            else None,
+        )
+        likely = str(sig.get("likely_signature", ""))
+        if "score_separation_compresses_or_reverses" in likely:
+            mechanism = "score_ranking_reversal_not_label_balance"
+            action = "inspect compact prediction_error_audit; do not solve with threshold smoothing alone"
+        elif "label_distribution_shift" in likely:
+            mechanism = "label_distribution_shift"
+            action = "review label quality by regime before changing features"
+        elif str(drift.get("top_likely_issue", "")).startswith("feature"):
+            mechanism = "feature_family_signal_reversal"
+            action = "design only a new transform/gating hypothesis; do not repeat rejected direct ablations"
+        else:
+            mechanism = "mixed_or_unresolved_fold_instability"
+            action = "keep 04 paused and use diagnostics to narrow a pre-registered hypothesis"
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": str(sig.get("candidate_type", "")),
+                "fold_scope": fold_scope,
+                "bad_fold_count": _float(sig, "bad_fold_count"),
+                "bad_rank_ic_mean": _float(sig, "bad_rank_ic_mean"),
+                "bad_score_gap_mean": _float(sig, "bad_score_gap_mean"),
+                "good_score_gap_mean": _float(sig, "good_score_gap_mean"),
+                "bad_label_long_rate_mean": _float(sig, "bad_label_long_rate_mean"),
+                "good_label_long_rate_mean": _float(sig, "good_label_long_rate_mean"),
+                "bad_top_10_lift_mean": _float(sig, "bad_top_10_lift_mean"),
+                "bad_top_10_forward_return_mean": _float(sig, "bad_top_10_forward_return_mean"),
+                "likely_signature": likely,
+                "top_drift_family": str(drift.get("feature_family", "")),
+                "top_suspect_feature": str(drift.get("top_suspect_feature", "")),
+                "historical_status": str(memory.get("historical_status", "")),
+                "score_shift_issue": str(shift.get("score_shift_issue", "")),
+                "probability_quality_issue": str(prob.get("probability_quality_issue", "")),
+                "dominant_mechanism": mechanism,
+                "requires_04": False,
+                "recommended_action": action,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["candidate_type", "candidate", "bad_fold_count"],
+        ascending=[True, True, False],
+    ).reset_index(drop=True)
+
+
+def _entry_forward_column(frame: pd.DataFrame) -> str:
+    if "forward_return" in frame.columns:
+        return "forward_return"
+    for column in frame.columns:
+        if str(column).startswith("fwd_return_"):
+            return str(column)
+    return ""
+
+
+def _prediction_error_audit_frame(
+    entries: list[dict[str, Any]],
+    score_separation_forensics: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "case_type",
+        "fold",
+        "timestamp",
+        "prob_long",
+        "label",
+        "forward_return",
+        "tb_return",
+        "score_rank_pct",
+        "rank_ic",
+        "score_gap_pos_minus_neg",
+        "official_threshold",
+        "is_top_decile",
+        "note",
+    ]
+    rows: list[dict[str, Any]] = []
+    max_rows_per_case = int(_cfg(config, ["experiments", "diagnostics", "prediction_error_audit_rows_per_case"], 5))
+    if score_separation_forensics.empty:
+        return pd.DataFrame(columns=columns)
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        candidate = str(entry.get("profile", ""))
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        test = _test_predictions(predictions).copy()
+        if not {"fold", "label", "prob_long"}.issubset(test.columns):
+            continue
+        forward_col = _entry_forward_column(test)
+        if not forward_col:
+            test["forward_return"] = np.nan
+            forward_col = "forward_return"
+        sf = score_separation_forensics.loc[
+            (score_separation_forensics["candidate"].astype(str) == candidate)
+            & (score_separation_forensics["fold_scope"].astype(str) == fold_scope)
+        ].copy()
+        if sf.empty:
+            continue
+        worst_folds = list(
+            pd.to_numeric(sf.sort_values("rank_ic", ascending=True)["fold"], errors="coerce").dropna().astype(int).head(3)
+        )
+        good_folds = list(
+            pd.to_numeric(sf.sort_values("rank_ic", ascending=False)["fold"], errors="coerce").dropna().astype(int).head(2)
+        )
+        score_by_fold = {int(row["fold"]): row.to_dict() for _, row in sf.dropna(subset=["fold"]).iterrows()}
+
+        def add_case(case_type: str, part: pd.DataFrame, note: str) -> None:
+            for _, item in part.head(max_rows_per_case).iterrows():
+                fold_id = int(item.get("fold"))
+                sf_row = score_by_fold.get(fold_id, {})
+                rows.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_type": _diagnostic_candidate_type(fold_scope),
+                        "fold_scope": fold_scope,
+                        "case_type": case_type,
+                        "fold": fold_id,
+                        "timestamp": str(item.get("timestamp", "")),
+                        "prob_long": _float(item, "prob_long"),
+                        "label": int(item.get("label")) if pd.notna(item.get("label")) else np.nan,
+                        "forward_return": _float(item, forward_col),
+                        "tb_return": _float(item, "tb_return"),
+                        "score_rank_pct": _float(item, "_score_rank_pct"),
+                        "rank_ic": _float(sf_row, "rank_ic"),
+                        "score_gap_pos_minus_neg": _float(sf_row, "score_gap_pos_minus_neg"),
+                        "official_threshold": _float(sf_row, "official_threshold"),
+                        "is_top_decile": bool(_float(item, "_score_rank_pct") >= 0.90),
+                        "note": note,
+                    }
+                )
+
+        clean = test.replace([np.inf, -np.inf], np.nan).dropna(subset=["fold", "label", "prob_long"]).copy()
+        clean["prob_long"] = pd.to_numeric(clean["prob_long"], errors="coerce")
+        clean[forward_col] = pd.to_numeric(clean[forward_col], errors="coerce")
+        clean["_score_rank_pct"] = clean.groupby("fold")["prob_long"].rank(pct=True, method="average")
+        for fold_id in worst_folds:
+            part = clean.loc[clean["fold"].astype(int) == fold_id].copy()
+            if part.empty:
+                continue
+            false_pos = part.loc[(part["label"].astype(int) == 0) & (part["_score_rank_pct"] >= 0.90)].sort_values(
+                ["prob_long", forward_col],
+                ascending=[False, True],
+            )
+            add_case("worst_fold_top_score_false_positive", false_pos, "Top-score not-long rows in a bad fold.")
+            false_neg = part.loc[part["label"].astype(int) == 1].sort_values(
+                ["prob_long", forward_col],
+                ascending=[True, False],
+            )
+            add_case("worst_fold_low_score_false_negative", false_neg, "Long-label rows ranked too low in a bad fold.")
+        for fold_id in good_folds:
+            part = clean.loc[clean["fold"].astype(int) == fold_id].copy()
+            if part.empty:
+                continue
+            true_pos = part.loc[(part["label"].astype(int) == 1) & (part["_score_rank_pct"] >= 0.80)].sort_values(
+                ["prob_long", forward_col],
+                ascending=[False, False],
+            )
+            add_case("good_fold_reference_true_positive", true_pos, "High-score long rows in a good fold.")
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["candidate_type", "candidate", "fold_scope", "case_type", "fold"],
+    ).reset_index(drop=True)
+
+
+def _phase1_blocker_root_cause_frame(
+    *,
+    phase1_blocker_action_plan: pd.DataFrame,
+    threshold_oracle_gap: pd.DataFrame,
+    bad_fold_mechanism_summary: pd.DataFrame,
+    historical_experiment_memory_audit: pd.DataFrame,
+    phase2_readiness: dict[str, Any] | None,
+    settings: dict[str, Any],
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "priority",
+        "blocker",
+        "root_cause",
+        "evidence",
+        "recommended_action",
+        "requires_02_03",
+        "requires_04",
+        "run_04_now",
+        "full_zip_required",
+        "promotion_allowed_now",
+        "source_files",
+    ]
+    control = str(settings.get("control_profile") or _cfg(config, ["experiments", "control_profile"], ""))
+    rows: list[dict[str, Any]] = []
+    readiness = phase2_readiness or {}
+    blockers = {str(item) for item in readiness.get("blockers", []) or []}
+    action_by_blocker = {
+        str(row.get("blocker")): row.to_dict()
+        for _, row in phase1_blocker_action_plan.iterrows()
+    } if not phase1_blocker_action_plan.empty else {}
+    control_oracle = _first_frame_row(
+        threshold_oracle_gap,
+        (threshold_oracle_gap["candidate"].astype(str) == control)
+        & (threshold_oracle_gap["fold_scope"].astype(str) == "full")
+        if not threshold_oracle_gap.empty
+        else None,
+    )
+    control_mechanism = _first_frame_row(
+        bad_fold_mechanism_summary,
+        (bad_fold_mechanism_summary["candidate"].astype(str) == control)
+        & (bad_fold_mechanism_summary["fold_scope"].astype(str) == "full")
+        if not bad_fold_mechanism_summary.empty
+        else None,
+    )
+    repeated_count = (
+        int((pd.to_numeric(historical_experiment_memory_audit["related_rejected_profile_count"], errors="coerce") > 0).sum())
+        if not historical_experiment_memory_audit.empty
+        and "related_rejected_profile_count" in historical_experiment_memory_audit.columns
+        else 0
+    )
+
+    def add(priority: int, blocker: str, root_cause: str, evidence: str, action: str, *, requires_04: bool = False) -> None:
+        action_row = action_by_blocker.get(blocker, {})
+        rows.append(
+            {
+                "priority": priority,
+                "blocker": blocker,
+                "root_cause": root_cause,
+                "evidence": evidence,
+                "recommended_action": action,
+                "requires_02_03": False,
+                "requires_04": bool(requires_04),
+                "run_04_now": bool(requires_04 and "future_unseen_oos_not_ready" not in blockers),
+                "full_zip_required": False,
+                "promotion_allowed_now": bool(action_row.get("promotion_allowed_now", False)) and not blockers,
+                "source_files": str(action_row.get("source_files", "")),
+            }
+        )
+
+    add(
+        1,
+        "fold_stability",
+        str(control_mechanism.get("dominant_mechanism") or "score_ranking_reversal_not_label_balance"),
+        (
+            f"Control bad-fold signature={control_mechanism.get('likely_signature', '')}; "
+            f"top suspect={control_mechanism.get('top_drift_family', '')}/"
+            f"{control_mechanism.get('top_suspect_feature', '')}; "
+            f"related rejected feature hypotheses={repeated_count}."
+        ),
+        "Pause broad profile search. Use bad-fold mechanism and prediction_error_audit before designing a new pre-registered hypothesis.",
+    )
+    add(
+        2,
+        "official_threshold_f1",
+        str(control_oracle.get("root_cause_hint") or "threshold_gap_secondary_to_score_separation"),
+        (
+            f"Oracle F1 mean={_fmt_metric(control_oracle.get('oracle_f1_mean'))}; "
+            f"official F1 mean={_fmt_metric(control_oracle.get('official_f1_mean'))}; "
+            f"official pass fold rate={_fmt_metric(control_oracle.get('official_pass_fold_rate'))}; "
+            f"selected pred-long guardrail fail rate={_fmt_metric(control_oracle.get('selected_pred_rate_guardrail_fail_rate'))}."
+        ),
+        "Separate threshold-transfer work from score-separation work; do not count broad selected F1 as a Phase 1 pass.",
+    )
+    add(
+        3,
+        "historical_experiment_memory",
+        "repeated_direct_ablation_risk",
+        f"{repeated_count} current drift rows match already rejected profile families or direct ablations.",
+        "Before proposing a new profile, require historical_experiment_memory_audit to show the idea is not a repeated rejected method.",
+    )
+    add(
+        4,
+        "future_unseen_oos",
+        "governance_gate_not_model_tuning",
+        f"Phase2 blockers={sorted(blockers)}; future OOS ready={not ('future_unseen_oos_not_ready' in blockers)}.",
+        "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
+    )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _phase1_decision_ladder_payload(
+    *,
+    phase1_blocker_root_cause: pd.DataFrame,
+    threshold_oracle_gap: pd.DataFrame,
+    bad_fold_mechanism_summary: pd.DataFrame,
+    phase2_readiness: dict[str, Any] | None,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    readiness = phase2_readiness or {}
+    blockers = [str(item) for item in readiness.get("blockers", []) or []]
+    run_04_now = bool(
+        not phase1_blocker_root_cause.empty
+        and phase1_blocker_root_cause.get("run_04_now", pd.Series(dtype=bool)).astype(bool).any()
+    )
+    control = str(settings.get("control_profile", ""))
+    control_root = _first_frame_row(
+        phase1_blocker_root_cause,
+        phase1_blocker_root_cause["blocker"].astype(str) == "fold_stability"
+        if not phase1_blocker_root_cause.empty
+        else None,
+    )
+    control_oracle = _first_frame_row(
+        threshold_oracle_gap,
+        (threshold_oracle_gap["candidate"].astype(str) == control)
+        & (threshold_oracle_gap["fold_scope"].astype(str) == "full")
+        if not threshold_oracle_gap.empty
+        else None,
+    )
+    mechanism = _first_frame_row(
+        bad_fold_mechanism_summary,
+        (bad_fold_mechanism_summary["candidate"].astype(str) == control)
+        & (bad_fold_mechanism_summary["fold_scope"].astype(str) == "full")
+        if not bad_fold_mechanism_summary.empty
+        else None,
+    )
+    return {
+        "phase2_allowed": bool(readiness.get("ready_for_phase2", False) or readiness.get("passed", False)),
+        "blockers": blockers,
+        "control_profile": control,
+        "run_05_first": True,
+        "run_04_required_now": run_04_now,
+        "run_02_03_required_now": False,
+        "full_zip_required_now": False,
+        "next_notebook": "04" if run_04_now else "05",
+        "root_cause": str(control_root.get("root_cause") or mechanism.get("dominant_mechanism") or ""),
+        "threshold_oracle_hint": str(control_oracle.get("root_cause_hint") or ""),
+        "bad_fold_mechanism": str(mechanism.get("dominant_mechanism") or ""),
+        "decision": (
+            "do_not_proceed_to_phase2"
+            if blockers
+            else "phase2_review_possible"
+        ),
+        "recommended_next_action": (
+            "run_05_only_and_review_root_cause_reports"
+            if not run_04_now
+            else "run_04_only_after_pre_registered_hypothesis"
+        ),
+    }
+
+
+def _phase1_blocker_root_cause_markdown(
+    root_cause: pd.DataFrame,
+    decision_ladder: dict[str, Any],
+) -> str:
+    lines = ["# Phase 1 Root-Cause Review", ""]
+    lines.append(f"Decision: `{decision_ladder.get('decision')}`")
+    lines.append(f"Next action: `{decision_ladder.get('recommended_next_action')}`")
+    lines.append(f"Run 04 required now: `{decision_ladder.get('run_04_required_now')}`")
+    lines.append(f"Full zip required now: `{decision_ladder.get('full_zip_required_now')}`")
+    lines.append("")
+    if root_cause.empty:
+        lines.append("No root-cause rows were produced.")
+        return "\n".join(lines)
+    display_cols = [
+        "priority",
+        "blocker",
+        "root_cause",
+        "evidence",
+        "recommended_action",
+        "requires_04",
+        "promotion_allowed_now",
+    ]
+    visible = root_cause[[column for column in display_cols if column in root_cause.columns]].copy()
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_root_cause_reports(
+    path: Path,
+    *,
+    phase1_blocker_root_cause: pd.DataFrame,
+    threshold_oracle_gap: pd.DataFrame,
+    bad_fold_mechanism_summary: pd.DataFrame,
+    prediction_error_audit: pd.DataFrame,
+    historical_experiment_memory_audit: pd.DataFrame,
+    decision_ladder: dict[str, Any],
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    phase1_blocker_root_cause.to_csv(path / "phase1_blocker_root_cause.csv", index=False)
+    (path / "phase1_blocker_root_cause.md").write_text(
+        _phase1_blocker_root_cause_markdown(phase1_blocker_root_cause, decision_ladder),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "phase1_blocker_root_cause.json",
+        {
+            "decision_ladder": decision_ladder,
+            "rows": phase1_blocker_root_cause.to_dict(orient="records"),
+        },
+    )
+    threshold_oracle_gap.to_csv(path / "threshold_oracle_gap.csv", index=False)
+    bad_fold_mechanism_summary.to_csv(path / "bad_fold_mechanism_summary.csv", index=False)
+    prediction_error_audit.to_csv(path / "prediction_error_audit.csv", index=False)
+    historical_experiment_memory_audit.to_csv(path / "historical_experiment_memory_audit.csv", index=False)
+    _write_json(path / "phase1_decision_ladder.json", decision_ladder)
+
+
 def _diagnostic_candidate_type(fold_scope: str) -> str:
     return "blend" if str(fold_scope).startswith("blend_") else "profile"
 
@@ -9433,6 +10071,14 @@ def _write_experiment_bundle(
         "phase1_blocker_action_plan.csv",
         "phase1_blocker_action_plan.md",
         "phase1_blocker_action_plan.json",
+        "phase1_blocker_root_cause.csv",
+        "phase1_blocker_root_cause.md",
+        "phase1_blocker_root_cause.json",
+        "threshold_oracle_gap.csv",
+        "bad_fold_mechanism_summary.csv",
+        "prediction_error_audit.csv",
+        "historical_experiment_memory_audit.csv",
+        "phase1_decision_ladder.json",
         "performance_gap_analysis.csv",
         "performance_gap_analysis.md",
         "performance_gap_analysis.json",
@@ -9688,12 +10334,55 @@ def run_experiment_matrix(
         config=config,
         settings=settings,
     )
+    threshold_oracle_gap = _threshold_oracle_gap_frame(threshold_forensics, config)
+    historical_experiment_memory_audit = _historical_experiment_memory_audit_frame(
+        feature_family_drift_summary,
+        config,
+    )
+    bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
+        bad_fold_signature=bad_fold_signature,
+        feature_family_drift_summary=feature_family_drift_summary,
+        score_distribution_shift_summary=score_distribution_shift_summary,
+        probability_quality_summary=probability_quality_summary,
+        historical_memory_audit=historical_experiment_memory_audit,
+        config=config,
+    )
+    prediction_error_audit = _prediction_error_audit_frame(
+        all_results,
+        score_separation_forensics,
+        config,
+    )
+    phase1_blocker_root_cause = _phase1_blocker_root_cause_frame(
+        phase1_blocker_action_plan=phase1_blocker_action_plan,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        historical_experiment_memory_audit=historical_experiment_memory_audit,
+        phase2_readiness={},
+        settings=settings,
+        config=config,
+    )
+    phase1_decision_ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=phase1_blocker_root_cause,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        phase2_readiness={},
+        settings=settings,
+    )
     _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
+    _write_root_cause_reports(
+        run_dir,
+        phase1_blocker_root_cause=phase1_blocker_root_cause,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        prediction_error_audit=prediction_error_audit,
+        historical_experiment_memory_audit=historical_experiment_memory_audit,
+        decision_ladder=phase1_decision_ladder,
+    )
     _write_forensics_reports(
         run_dir,
         fold_stability_forensics=fold_stability_forensics,
@@ -9750,6 +10439,12 @@ def run_experiment_matrix(
         "future_oos_candidate_plan": future_oos_candidate_plan.to_dict(orient="records"),
         "performance_gap_analysis": performance_gap_analysis.to_dict(orient="records"),
         "phase1_blocker_action_plan": phase1_blocker_action_plan.to_dict(orient="records"),
+        "phase1_blocker_root_cause": phase1_blocker_root_cause.to_dict(orient="records"),
+        "threshold_oracle_gap": threshold_oracle_gap.to_dict(orient="records"),
+        "bad_fold_mechanism_summary": bad_fold_mechanism_summary.to_dict(orient="records"),
+        "prediction_error_audit": prediction_error_audit.to_dict(orient="records"),
+        "historical_experiment_memory_audit": historical_experiment_memory_audit.to_dict(orient="records"),
+        "phase1_decision_ladder": phase1_decision_ladder,
         "fold_stability_summary": fold_stability_summary.to_dict(orient="records"),
         "score_separation_forensics": score_separation_forensics.to_dict(orient="records"),
         "bad_fold_signature": bad_fold_signature.to_dict(orient="records"),
@@ -9784,6 +10479,12 @@ def run_experiment_matrix(
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
         "phase1_blocker_action_plan": phase1_blocker_action_plan,
+        "phase1_blocker_root_cause": phase1_blocker_root_cause,
+        "threshold_oracle_gap": threshold_oracle_gap,
+        "bad_fold_mechanism_summary": bad_fold_mechanism_summary,
+        "prediction_error_audit": prediction_error_audit,
+        "historical_experiment_memory_audit": historical_experiment_memory_audit,
+        "phase1_decision_ladder": phase1_decision_ladder,
         "fold_stability_forensics": fold_stability_forensics,
         "fold_stability_summary": fold_stability_summary,
         "score_separation_forensics": score_separation_forensics,
@@ -10136,6 +10837,65 @@ def write_experiment_diagnostics(
         holdout_decision=holdout_decision,
         config=diagnostic_config,
     )
+    # Prewrite root-cause diagnostics so the auto-review completeness audit can
+    # require them. They are overwritten below after auto-review adds Phase 2 blockers.
+    pre_phase1_blocker_action_plan = _phase1_blocker_action_plan_frame(
+        comparison=comparison,
+        profile_blend=profile_blend,
+        performance_gap_analysis=performance_gap_analysis,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        threshold_forensics=threshold_forensics,
+        payoff_policy_robustness_summary=payoff_policy_robustness_summary,
+        future_oos_candidate_plan=future_oos_candidate_plan,
+        phase2_readiness={},
+        config=diagnostic_config,
+        settings=settings,
+    )
+    pre_threshold_oracle_gap = _threshold_oracle_gap_frame(threshold_forensics, diagnostic_config)
+    pre_historical_experiment_memory_audit = _historical_experiment_memory_audit_frame(
+        feature_family_drift_summary,
+        diagnostic_config,
+    )
+    pre_bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
+        bad_fold_signature=bad_fold_signature,
+        feature_family_drift_summary=feature_family_drift_summary,
+        score_distribution_shift_summary=score_distribution_shift_summary,
+        probability_quality_summary=probability_quality_summary,
+        historical_memory_audit=pre_historical_experiment_memory_audit,
+        config=diagnostic_config,
+    )
+    pre_prediction_error_audit = _prediction_error_audit_frame(
+        entries,
+        score_separation_forensics,
+        diagnostic_config,
+    )
+    pre_phase1_blocker_root_cause = _phase1_blocker_root_cause_frame(
+        phase1_blocker_action_plan=pre_phase1_blocker_action_plan,
+        threshold_oracle_gap=pre_threshold_oracle_gap,
+        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
+        historical_experiment_memory_audit=pre_historical_experiment_memory_audit,
+        phase2_readiness={},
+        settings=settings,
+        config=diagnostic_config,
+    )
+    pre_phase1_decision_ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=pre_phase1_blocker_root_cause,
+        threshold_oracle_gap=pre_threshold_oracle_gap,
+        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
+        phase2_readiness={},
+        settings=settings,
+    )
+    _write_phase1_blocker_action_plan(report_dir, pre_phase1_blocker_action_plan)
+    _write_root_cause_reports(
+        report_dir,
+        phase1_blocker_root_cause=pre_phase1_blocker_root_cause,
+        threshold_oracle_gap=pre_threshold_oracle_gap,
+        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
+        prediction_error_audit=pre_prediction_error_audit,
+        historical_experiment_memory_audit=pre_historical_experiment_memory_audit,
+        decision_ladder=pre_phase1_decision_ladder,
+    )
     from yenibot.automation import write_auto_review
 
     auto_review = write_auto_review(report_dir)
@@ -10168,8 +10928,57 @@ def write_experiment_diagnostics(
         config=diagnostic_config,
         settings=settings,
     )
+    threshold_oracle_gap = _threshold_oracle_gap_frame(threshold_forensics, diagnostic_config)
+    historical_experiment_memory_audit = _historical_experiment_memory_audit_frame(
+        feature_family_drift_summary,
+        diagnostic_config,
+    )
+    bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
+        bad_fold_signature=bad_fold_signature,
+        feature_family_drift_summary=feature_family_drift_summary,
+        score_distribution_shift_summary=score_distribution_shift_summary,
+        probability_quality_summary=probability_quality_summary,
+        historical_memory_audit=historical_experiment_memory_audit,
+        config=diagnostic_config,
+    )
+    prediction_error_audit = _prediction_error_audit_frame(
+        entries,
+        score_separation_forensics,
+        diagnostic_config,
+    )
+    phase1_blocker_root_cause = _phase1_blocker_root_cause_frame(
+        phase1_blocker_action_plan=phase1_blocker_action_plan,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        historical_experiment_memory_audit=historical_experiment_memory_audit,
+        phase2_readiness=decision["phase2_readiness"],
+        settings=settings,
+        config=diagnostic_config,
+    )
+    phase1_decision_ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=phase1_blocker_root_cause,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        phase2_readiness=decision["phase2_readiness"],
+        settings=settings,
+    )
     decision["phase1_blocker_action_plan"] = phase1_blocker_action_plan.to_dict(orient="records")
+    decision["phase1_blocker_root_cause"] = phase1_blocker_root_cause.to_dict(orient="records")
+    decision["threshold_oracle_gap"] = threshold_oracle_gap.to_dict(orient="records")
+    decision["bad_fold_mechanism_summary"] = bad_fold_mechanism_summary.to_dict(orient="records")
+    decision["prediction_error_audit"] = prediction_error_audit.to_dict(orient="records")
+    decision["historical_experiment_memory_audit"] = historical_experiment_memory_audit.to_dict(orient="records")
+    decision["phase1_decision_ladder"] = phase1_decision_ladder
     _write_phase1_blocker_action_plan(report_dir, phase1_blocker_action_plan)
+    _write_root_cause_reports(
+        report_dir,
+        phase1_blocker_root_cause=phase1_blocker_root_cause,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        prediction_error_audit=prediction_error_audit,
+        historical_experiment_memory_audit=historical_experiment_memory_audit,
+        decision_ladder=phase1_decision_ladder,
+    )
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
@@ -10179,6 +10988,15 @@ def write_experiment_diagnostics(
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
+    _write_root_cause_reports(
+        run_dir,
+        phase1_blocker_root_cause=phase1_blocker_root_cause,
+        threshold_oracle_gap=threshold_oracle_gap,
+        bad_fold_mechanism_summary=bad_fold_mechanism_summary,
+        prediction_error_audit=prediction_error_audit,
+        historical_experiment_memory_audit=historical_experiment_memory_audit,
+        decision_ladder=phase1_decision_ladder,
+    )
     _write_forensics_reports(
         run_dir,
         fold_stability_forensics=fold_stability_forensics,
@@ -10239,6 +11057,12 @@ def write_experiment_diagnostics(
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
         "phase1_blocker_action_plan": phase1_blocker_action_plan,
+        "phase1_blocker_root_cause": phase1_blocker_root_cause,
+        "threshold_oracle_gap": threshold_oracle_gap,
+        "bad_fold_mechanism_summary": bad_fold_mechanism_summary,
+        "prediction_error_audit": prediction_error_audit,
+        "historical_experiment_memory_audit": historical_experiment_memory_audit,
+        "phase1_decision_ladder": phase1_decision_ladder,
         "fold_stability_forensics": fold_stability_forensics,
         "fold_stability_summary": fold_stability_summary,
         "score_separation_forensics": score_separation_forensics,

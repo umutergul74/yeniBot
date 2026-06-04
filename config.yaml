@@ -1769,8 +1769,6 @@ experiments:
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-    - baseline_stable_return_pairwise_loss_light
-    - baseline_no_4h_tier1_4h_large_trade_pressure_long
   max_auto_full_candidates: 2
   resume_existing: true
   force_retrain: false
@@ -1800,7 +1798,6 @@ experiments:
     note: "Clean holdout run 20260522_135424 invalidated this frozen top_10 score-band as an active review candidate: forward return was negative. Keep it as a benchmark only; do not deploy or promote from the same holdout."
     future_oos_candidates:
       - blend_control_long_pressure_65_35
-      - baseline_stable_return_pairwise_loss_light
     future_oos_monitor:
       enabled: true
       anchor_run_id: "20260522_135424"
@@ -1831,7 +1828,7 @@ experiments:
       baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest clean holdout run 20260522_135424 was weak as a standalone profile: IC 0.0143, top-10 lift 0.9485, and negative top-10 forward return. Keep as a comparison source only."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; run 20260526_185416 mean IC 0.0734, std 0.0708, positive folds 86.1%, official F1 0.4313. Main blockers remain fold std, official F1, and future unseen OOS."
       baseline_stable_score_margin_loss: "Run 20260528_214759: pairwise label-margin weight 0.05 improved top-10 lift/calibration but worsened mean IC, std, positive folds, worst folds, and official F1. Do not rerun this exact objective without a new reason."
-      baseline_stable_return_pairwise_loss_light: "Pre-registered after run 20260528_214759 showed label-margin loss was too class-separation oriented. Same feature set as control; adds a small pairwise forward-return ordering loss to target Rank IC and bad-fold score separation."
+      baseline_stable_return_pairwise_loss_light: "Run 20260604_141520: forward-return pairwise loss was less destructive than label-margin loss, but still failed versus control on mean IC, std, positive-fold coverage, official F1, top-10 lift, and worst folds. Keep only as a rejected score-separation-loss lesson."
       baseline_control_plus_futures_context: "Broad futures-context profile from run 20260524_072602: holdout top-10 improved, but CV stability deteriorated. Split into narrower OI, positioning, and funding tracks instead of rerunning broad by default."
       baseline_control_plus_futures_oi_change_context: "Run 20260526_185416: narrow OI context failed CV stability versus control; keep inactive unless future research has a new explicit reason."
       baseline_control_plus_futures_positioning_context: "Run 20260526_185416: narrow positioning context failed CV stability versus control; keep inactive unless future research has a new explicit reason."
@@ -1869,6 +1866,8 @@ experiments:
         reason: "Run 20260528_162902: stable-only context did not recover fold stability or official F1 versus the control."
       baseline_stable_score_margin_loss:
         reason: "Run 20260528_214759: label-margin loss 0.05 lowered mean IC to 0.0695, increased std to 0.0803, reduced positive folds to 80.6%, and lowered official F1 to 0.4234 despite better top-10 lift."
+      baseline_stable_return_pairwise_loss_light:
+        reason: "Run 20260604_141520: forward-return pairwise loss lowered mean IC from 0.0734 to 0.0706, increased std to 0.0728, reduced positive folds to 83.3%, lowered official F1 to 0.4289, and weakened top-10 lift versus control."
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."
       baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay:
