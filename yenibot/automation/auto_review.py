@@ -186,6 +186,7 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
+        "score_reversal_context_audit.csv",
         "phase1_decision_ladder.json",
     ]
     return [name for name in required if not (report_dir / name).exists()]
@@ -634,6 +635,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     fold_stability_forensics = _read_csv(report_path / "fold_stability_forensics.csv")
     threshold_forensics = _read_csv(report_path / "threshold_forensics.csv")
     threshold_score_quantile = _read_csv(report_path / "threshold_score_quantile_review.csv")
+    score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
     missing_profiles = _selected_missing_profiles(report_path)
@@ -701,6 +703,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "best_test_f1_policy": _best_row(threshold_score_quantile, "test_f1_mean"),
             "best_f1_delta_policy": _best_row(threshold_score_quantile, "f1_delta_vs_official"),
             "policy_count": int(len(threshold_score_quantile)) if not threshold_score_quantile.empty else 0,
+        },
+        "score_reversal_context": {
+            "hypothesis_count": int(len(score_reversal_context)) if not score_reversal_context.empty else 0,
+            "top_hypothesis": _best_row(score_reversal_context, "suspect_score"),
         },
         "next_action": {
             "action": action,
@@ -810,6 +816,8 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Best score-quantile policy by F1: `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('policy_name', '')}` "
         f"with F1 `{_fmt(review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('test_f1_mean'))}` "
         f"and outcome `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('diagnostic_outcome', '')}`",
+        f"- Score-reversal context hypotheses: `{review.get('score_reversal_context', {}).get('hypothesis_count', 0)}`",
+        f"- Top context hypothesis: `{review.get('score_reversal_context', {}).get('top_hypothesis', {}).get('profile', '')}`",
         "",
         "## Interpretation",
         "- Treat current holdout results as diagnostics unless `future_oos_ready` is true.",

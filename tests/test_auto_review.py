@@ -202,6 +202,20 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
             }
         ]
     ).to_csv(path / "historical_experiment_memory_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "profile": "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh",
+                "suspect_feature": "4h_taker_imbalance_mean_12",
+                "context_feature": "4h_large_trade_ratio",
+                "mechanism": "stable_tanh_source_guarded_by_stable_large_trade_context",
+                "suspect_score": 2.0,
+                "requires_02_03": True,
+                "requires_04": True,
+                "promotion_allowed_now": False,
+            }
+        ]
+    ).to_csv(path / "score_reversal_context_audit.csv", index=False)
     (path / "phase1_decision_ladder.json").write_text(
         json.dumps(
             {
@@ -227,6 +241,7 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
     assert review["threshold_score_quantile"]["policy_count"] == 1
     assert review["threshold_score_quantile"]["best_test_f1_policy"]["policy_name"] == "fixed_top_50"
+    assert review["score_reversal_context"]["hypothesis_count"] == 1
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]

@@ -166,6 +166,7 @@ Required diagnostic artifacts include:
 - `bad_fold_mechanism_summary.csv`
 - `prediction_error_audit.csv`
 - `historical_experiment_memory_audit.csv`
+- `score_reversal_context_audit.csv`
 - `phase1_decision_ladder.json`
 
 The auto-review command for a report directory is:

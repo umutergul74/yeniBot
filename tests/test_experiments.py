@@ -1822,6 +1822,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+        "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -1839,6 +1840,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
+        "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1888,6 +1890,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "failed CV stability" in notes["baseline_control_plus_futures_positioning_context"]
     assert "did not clear" in notes["baseline_control_plus_futures_funding_context"]
     assert "failed to improve control" in notes["baseline_stable_plus_4h_taker_mean12_ltr_context"]
+    assert "stable-tanh" in notes["baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"]
     reliability = config["validation"]["fold_reliability_gates"]
     assert reliability["enabled"] is True
     assert reliability["min_accepted_folds"] == 12
@@ -1949,11 +1952,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_imbalance_slope",
         "4h_taker_imbalance_mean_12",
         "4h_taker_imbalance_mean_12_stable_rank",
+        "4h_taker_imbalance_mean_12_stable_tanh",
         "4h_taker_imbalance_mean_24",
         "4h_large_trade_ratio_stable_rank",
         "4h_taker_mean12_x_ltr_rank_signed",
         "4h_taker_mean12_x_ltr_rank_high",
         "4h_taker_mean12_x_ltr_rank_low",
+        "4h_taker_mean12_tanh_guard_ltr_rank_not_high",
+        "4h_taker_mean12_tanh_guard_ltr_rank_neutral",
+        "4h_taker_mean12_tanh_guard_ltr_rank_low_pass",
+        "4h_taker_mean12_tanh_guard_ltr_rank_high_damped",
         "4h_whale_buy_flag",
         "4h_whale_sell_flag",
         "4h_taker_imbalance_x_rv14_rank_signed",
@@ -2214,6 +2222,16 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_large_trade_ratio" not in conditional_stable_only_columns
     assert "4h_taker_mean12_x_ltr_rank_high" in conditional_stable_only_columns
 
+    guarded_tanh = profile_config(config, "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh")
+    guarded_tanh_columns = filter_feature_columns(columns, guarded_tanh)
+    assert "4h_taker_imbalance_mean_12" not in guarded_tanh_columns
+    assert "4h_large_trade_ratio" not in guarded_tanh_columns
+    assert "4h_taker_imbalance_mean_12_stable_tanh" in guarded_tanh_columns
+    assert "4h_large_trade_ratio_stable_rank" in guarded_tanh_columns
+    assert "4h_taker_mean12_tanh_guard_ltr_rank_not_high" in guarded_tanh_columns
+    assert "4h_taker_mean12_tanh_guard_ltr_rank_high_damped" in guarded_tanh_columns
+    assert "4h_taker_mean12_x_ltr_rank_high" not in guarded_tanh_columns
+
     stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
     stable_combined_columns = filter_feature_columns(columns, stable_combined)
     assert "cvd_cumulative_rate_norm" not in stable_combined_columns
@@ -2259,6 +2277,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_plus_15m_absorption_efficiency_combo",
     ]:
         assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" not in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" in config["experiments"]["always_full_profiles"]
+    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" in config["experiments"]["policy_review"]["future_oos_candidates"]
 
     intrahour_late = profile_config(config, "baseline_stable_plus_15m_late_order_flow")
     intrahour_late_columns = filter_feature_columns(columns, intrahour_late)
@@ -2971,6 +2992,19 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "force_retrain": False,
     }
     config["validation"]["calibration"] = {"enabled": True, "method": "isotonic"}
+    config["validation"]["score_reversal_context"] = {
+        "enabled": True,
+        "proposed_profiles": [
+            {
+                "profile": "candidate",
+                "suspect_feature": "log_return",
+                "context_feature": "large_trade_ratio",
+                "mechanism": "synthetic_guarded_context",
+                "prior_failed_profiles": [],
+                "why_not_repeat": "synthetic integration check",
+            }
+        ],
+    }
     config["validation"]["fold_reliability_gates"] = {
         "enabled": True,
         "min_accepted_fraction": 0.10,
@@ -3030,6 +3064,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "score_reversal_context_audit.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "probability_quality_forensics.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "probability_quality_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "score_distribution_shift.csv").exists()
@@ -3071,6 +3106,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "bad_fold_signature.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_drift_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "feature_family_drift_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "score_reversal_context_audit.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "probability_quality_forensics.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "probability_quality_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "score_distribution_shift.csv").exists()
@@ -3112,6 +3148,10 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     )
     assert {"feature_family", "top_suspect_feature", "recommended_next_action"}.issubset(
         diagnostics["feature_family_drift_summary"].columns
+    )
+    assert not diagnostics["score_reversal_context_audit"].empty
+    assert {"profile", "suspect_feature", "context_feature", "why_not_repeat"}.issubset(
+        diagnostics["score_reversal_context_audit"].columns
     )
     assert {"brier_score", "log_loss", "average_precision", "ece_equal_count"}.issubset(
         diagnostics["probability_quality_forensics"].columns
@@ -3313,6 +3353,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/bad_fold_signature.csv" in archive.namelist()
         assert "matrix/feature_drift_forensics.csv" in archive.namelist()
         assert "matrix/feature_family_drift_summary.csv" in archive.namelist()
+        assert "matrix/score_reversal_context_audit.csv" in archive.namelist()
         assert "matrix/probability_quality_forensics.csv" in archive.namelist()
         assert "matrix/probability_quality_summary.csv" in archive.namelist()
         assert "matrix/score_distribution_shift.csv" in archive.namelist()
@@ -3365,6 +3406,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/bad_fold_signature.csv" in names
     assert "matrix/feature_drift_forensics.csv" in names
     assert "matrix/feature_family_drift_summary.csv" in names
+    assert "matrix/score_reversal_context_audit.csv" in names
     assert "matrix/probability_quality_forensics.csv" in names
     assert "matrix/probability_quality_summary.csv" in names
     assert "matrix/score_distribution_shift.csv" in names

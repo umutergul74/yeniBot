@@ -656,6 +656,13 @@ def _stable_transform_column(column: str, transform: str) -> str:
     raise ValueError(f"Unsupported bad-fold context transform: {transform}")
 
 
+def _resolve_context_source_column(df: pd.DataFrame, column: str, transform: str | None) -> str | None:
+    if not transform:
+        return column if column in df.columns else None
+    transformed = _stable_transform_column(column, transform)
+    return transformed if transformed in df.columns else None
+
+
 def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_window: int) -> pd.DataFrame:
     """Add narrow conditional context features for bad-fold suspects.
 
@@ -670,7 +677,8 @@ def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_win
 
     stable_sources = [str(column) for column in (_config_get(cfg, ["stable_source_columns"], []) or [])]
     interaction_pairs = list(_config_get(cfg, ["interaction_pairs"], []) or [])
-    if not stable_sources and not interaction_pairs:
+    gated_pairs = list(_config_get(cfg, ["gated_pairs"], []) or [])
+    if not stable_sources and not interaction_pairs and not gated_pairs:
         return df
 
     stable_window = int(_config_get(cfg, ["stable_window"], default_window))
@@ -719,6 +727,45 @@ def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_win
                 additions[f"{base_name}_high"] = source * context.clip(lower=0.0)
             if "low" in modes:
                 additions[f"{base_name}_low"] = source * (-context.clip(upper=0.0))
+
+    for item in gated_pairs:
+        if not isinstance(item, dict):
+            raise ValueError("features.bad_fold_context.gated_pairs entries must be mappings")
+        source_column = str(item.get("source", ""))
+        context_column = str(item.get("context", ""))
+        if not source_column or not context_column:
+            raise ValueError("features.bad_fold_context gated pairs require source and context")
+        source_transform = item.get("source_transform")
+        context_transform = item.get("context_transform", "stable_rank")
+        resolved_source = _resolve_context_source_column(
+            df,
+            source_column,
+            str(source_transform) if source_transform else None,
+        )
+        resolved_context = _resolve_context_source_column(
+            df,
+            context_column,
+            str(context_transform) if context_transform else None,
+        )
+        if resolved_source is None or resolved_context is None:
+            continue
+        modes = {str(mode) for mode in (item.get("modes") or ["not_high", "neutral", "low_pass"])}
+        source = _bounded_interaction_source(df[resolved_source])
+        context = _bounded_interaction_source(df[resolved_context])
+        high = context.clip(lower=0.0)
+        low = -context.clip(upper=0.0)
+        neutral = (1.0 - context.abs()).clip(lower=0.0, upper=1.0)
+        source_name = _feature_alias(resolved_source)
+        context_name = _feature_alias(resolved_context)
+        base_name = f"{source_name}_guard_{context_name}"
+        if "not_high" in modes:
+            additions[f"{base_name}_not_high"] = source * (1.0 - high).clip(lower=0.0, upper=1.0)
+        if "neutral" in modes:
+            additions[f"{base_name}_neutral"] = source * neutral
+        if "low_pass" in modes:
+            additions[f"{base_name}_low_pass"] = source * low
+        if "high_damped" in modes:
+            additions[f"{base_name}_high_damped"] = source * (1.0 - 0.75 * high).clip(lower=0.25, upper=1.0)
 
     if not additions:
         return df
@@ -790,7 +837,9 @@ def _stable_rolling_score_frame(
         if "rank" in transforms:
             additions[f"{column}_stable_rank"] = _rolling_rank_score(series, window)
         if "tanh" in transforms:
-            additions[f"{column}_stable_tanh"] = np.tanh(zscore / tanh_scale)
+            tanh = np.tanh(zscore / tanh_scale)
+            valid_window = series.rolling(window, min_periods=window).count() >= window
+            additions[f"{column}_stable_tanh"] = tanh.mask(valid_window & tanh.isna(), 0.0)
     return pd.DataFrame(additions, index=df.index)
 
 

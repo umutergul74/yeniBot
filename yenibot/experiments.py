@@ -7435,6 +7435,122 @@ def _write_feature_drift_forensics(path: Path, detail: pd.DataFrame, summary: pd
     )
 
 
+def _score_reversal_context_audit_frame(
+    feature_drift: pd.DataFrame,
+    historical_memory_audit: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "profile",
+        "suspect_feature",
+        "context_feature",
+        "mechanism",
+        "suspect_score",
+        "suspect_issue",
+        "historical_status",
+        "related_rejected_profile_count",
+        "prior_failed_profiles",
+        "why_not_repeat",
+        "requires_02_03",
+        "requires_04",
+        "promotion_allowed_now",
+        "recommended_action",
+    ]
+    cfg = _cfg(config, ["validation", "score_reversal_context"], {}) or {}
+    if not bool(cfg.get("enabled", False)):
+        return pd.DataFrame(columns=columns)
+    proposals = cfg.get("proposed_profiles", []) or []
+    if not proposals:
+        return pd.DataFrame(columns=columns)
+
+    drift_by_feature = {}
+    if not feature_drift.empty and "feature" in feature_drift.columns:
+        for _, row in feature_drift.sort_values("suspect_score", ascending=False).iterrows():
+            feature = str(row.get("feature", ""))
+            if feature and feature not in drift_by_feature:
+                drift_by_feature[feature] = row.to_dict()
+
+    memory_by_feature = {}
+    if not historical_memory_audit.empty and "suspect_feature" in historical_memory_audit.columns:
+        for _, row in historical_memory_audit.iterrows():
+            feature = str(row.get("suspect_feature", ""))
+            if feature and feature not in memory_by_feature:
+                memory_by_feature[feature] = row.to_dict()
+
+    rows: list[dict[str, Any]] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        profile = str(proposal.get("profile", ""))
+        suspect = str(proposal.get("suspect_feature", ""))
+        context = str(proposal.get("context_feature", ""))
+        drift = drift_by_feature.get(suspect, {})
+        memory = memory_by_feature.get(suspect, {})
+        related_count = _float(memory, "related_rejected_profile_count")
+        rows.append(
+            {
+                "profile": profile,
+                "suspect_feature": suspect,
+                "context_feature": context,
+                "mechanism": str(proposal.get("mechanism", "")),
+                "suspect_score": _float(drift, "suspect_score"),
+                "suspect_issue": str(drift.get("likely_issue", "")),
+                "historical_status": str(memory.get("historical_status", memory.get("memory_status", ""))),
+                "related_rejected_profile_count": int(related_count) if np.isfinite(related_count) else 0,
+                "prior_failed_profiles": ",".join(str(item) for item in proposal.get("prior_failed_profiles", []) or []),
+                "why_not_repeat": str(proposal.get("why_not_repeat", "")),
+                "requires_02_03": True,
+                "requires_04": True,
+                "promotion_allowed_now": False,
+                "recommended_action": (
+                    "pre_registered_future_oos_candidate; run 02/03/04 only to create CV predictions, "
+                    "then wait for future unseen OOS before any promotion"
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _score_reversal_context_audit_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Score-Reversal Context Audit", ""]
+    lines.append(
+        "This report records pre-registered feature hypotheses for the current score-reversal blocker. "
+        "It is not a promotion report and it must not be tuned against the frozen holdout."
+    )
+    if frame.empty:
+        lines.extend(["", "No score-reversal context hypotheses are configured."])
+        return "\n".join(lines)
+    display_cols = [
+        "profile",
+        "suspect_feature",
+        "context_feature",
+        "mechanism",
+        "suspect_score",
+        "historical_status",
+        "why_not_repeat",
+        "requires_02_03",
+        "requires_04",
+        "recommended_action",
+    ]
+    visible = frame[[column for column in display_cols if column in frame.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_score_reversal_context_audit(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "score_reversal_context_audit.csv", index=False)
+    (path / "score_reversal_context_audit.md").write_text(
+        _score_reversal_context_audit_markdown(frame),
+        encoding="utf-8",
+    )
+    _write_json(path / "score_reversal_context_audit.json", {"rows": frame.to_dict(orient="records")})
+
+
 def _clean_probability_inputs(labels: pd.Series, scores: pd.Series) -> pd.DataFrame:
     frame = pd.DataFrame(
         {
@@ -10537,6 +10653,9 @@ def _write_experiment_bundle(
         "feature_family_drift_summary.csv",
         "feature_drift_forensics.md",
         "feature_drift_forensics.json",
+        "score_reversal_context_audit.csv",
+        "score_reversal_context_audit.md",
+        "score_reversal_context_audit.json",
         "probability_quality_forensics.csv",
         "probability_quality_summary.csv",
         "probability_quality_forensics.md",
@@ -10788,6 +10907,11 @@ def run_experiment_matrix(
         feature_family_drift_summary,
         config,
     )
+    score_reversal_context_audit = _score_reversal_context_audit_frame(
+        feature_drift_forensics,
+        historical_experiment_memory_audit,
+        config,
+    )
     bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
         bad_fold_signature=bad_fold_signature,
         feature_family_drift_summary=feature_family_drift_summary,
@@ -10840,6 +10964,7 @@ def run_experiment_matrix(
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
+    _write_score_reversal_context_audit(run_dir, score_reversal_context_audit)
     _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
     _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_fold_reliability_gate(run_dir, fold_reliability_gate, fold_reliability_gate_summary)
@@ -10894,6 +11019,7 @@ def run_experiment_matrix(
         "bad_fold_mechanism_summary": bad_fold_mechanism_summary.to_dict(orient="records"),
         "prediction_error_audit": prediction_error_audit.to_dict(orient="records"),
         "historical_experiment_memory_audit": historical_experiment_memory_audit.to_dict(orient="records"),
+        "score_reversal_context_audit": score_reversal_context_audit.to_dict(orient="records"),
         "phase1_decision_ladder": phase1_decision_ladder,
         "fold_stability_summary": fold_stability_summary.to_dict(orient="records"),
         "score_separation_forensics": score_separation_forensics.to_dict(orient="records"),
@@ -10942,6 +11068,7 @@ def run_experiment_matrix(
         "bad_fold_signature": bad_fold_signature,
         "feature_drift_forensics": feature_drift_forensics,
         "feature_family_drift_summary": feature_family_drift_summary,
+        "score_reversal_context_audit": score_reversal_context_audit,
         "probability_quality_forensics": probability_quality_forensics,
         "probability_quality_summary": probability_quality_summary,
         "score_distribution_shift": score_distribution_shift,
@@ -11320,6 +11447,13 @@ def write_experiment_diagnostics(
         feature_family_drift_summary,
         diagnostic_config,
     )
+    score_reversal_context_audit = _score_reversal_context_audit_frame(
+        feature_drift_forensics,
+        pre_historical_experiment_memory_audit,
+        diagnostic_config,
+    )
+    decision["score_reversal_context_audit"] = score_reversal_context_audit.to_dict(orient="records")
+    _write_score_reversal_context_audit(report_dir, score_reversal_context_audit)
     pre_bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
         bad_fold_signature=bad_fold_signature,
         feature_family_drift_summary=feature_family_drift_summary,
@@ -11468,6 +11602,7 @@ def write_experiment_diagnostics(
     )
     _write_score_separation_forensics(run_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
+    _write_score_reversal_context_audit(run_dir, score_reversal_context_audit)
     _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
     _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_fold_reliability_gate(run_dir, fold_reliability_gate, fold_reliability_gate_summary)
@@ -11533,6 +11668,7 @@ def write_experiment_diagnostics(
         "bad_fold_signature": bad_fold_signature,
         "feature_drift_forensics": feature_drift_forensics,
         "feature_family_drift_summary": feature_family_drift_summary,
+        "score_reversal_context_audit": score_reversal_context_audit,
         "probability_quality_forensics": probability_quality_forensics,
         "probability_quality_summary": probability_quality_summary,
         "score_distribution_shift": score_distribution_shift,
