@@ -1006,13 +1006,25 @@ def test_root_cause_reports_classify_threshold_and_memory_reuse() -> None:
     )
 
     assert oracle_gap.iloc[0]["root_cause_hint"] == "threshold_transfer_gap_after_oracle_succeeds"
+    assert bool(oracle_gap.iloc[0]["threshold_transfer_blocker"]) is True
+    assert oracle_gap.iloc[0]["oracle_minus_official_f1"] > 0.15
+    assert oracle_gap.iloc[0]["official_reaches_target_rate"] == 0.0
+    assert oracle_gap.iloc[0]["oracle_reaches_target_rate"] == 1.0
+    assert oracle_gap.iloc[0]["primary_threshold_issue"] == "official_f1"
     assert memory.iloc[0]["historical_status"] == "related_rejections_found"
+    assert memory.iloc[0]["memory_status"] == "related_rejections_found"
+    assert memory.iloc[0]["matched_rejected_profile"] == "baseline_stable_no_4h_large_trade_ratio"
+    assert memory.iloc[0]["recommendation"].startswith("do_not_repeat_direct_ablation")
     assert mechanism.iloc[0]["dominant_mechanism"] == "score_ranking_reversal_not_label_balance"
     assert {"fold_stability", "official_threshold_f1", "historical_experiment_memory"}.issubset(
         set(root["blocker"])
     )
     assert ladder["run_04_required_now"] is False
     assert ladder["full_zip_required_now"] is False
+    assert ladder["threshold_transfer_blocker"] is True
+    assert ladder["threshold_work_required"] is True
+    assert ladder["score_reversal_work_required"] is True
+    assert ladder["recommended_next_action"] == "run_05_threshold_transfer_diagnostics_only"
 
 
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:

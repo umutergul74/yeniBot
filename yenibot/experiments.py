@@ -3841,18 +3841,25 @@ def _threshold_oracle_gap_frame(threshold_forensics: pd.DataFrame, config: dict[
         "selected_f1_mean",
         "constrained_f1_mean",
         "official_gap_to_oracle_mean",
+        "oracle_minus_official_f1",
         "selected_gap_to_oracle_mean",
         "constrained_gap_to_oracle_mean",
         "oracle_pass_fold_rate",
+        "oracle_reaches_target_rate",
         "official_pass_fold_rate",
+        "official_reaches_target_rate",
         "selected_pass_fold_rate",
+        "selected_reaches_target_rate",
         "constrained_pass_fold_rate",
+        "constrained_reaches_target_rate",
         "official_pred_long_rate_mean",
         "selected_pred_long_rate_mean",
         "constrained_pred_long_rate_mean",
         "official_pred_rate_guardrail_fail_rate",
         "selected_pred_rate_guardrail_fail_rate",
         "dominant_threshold_issue",
+        "primary_threshold_issue",
+        "threshold_transfer_blocker",
         "root_cause_hint",
         "recommended_action",
     ]
@@ -3881,6 +3888,7 @@ def _threshold_oracle_gap_frame(threshold_forensics: pd.DataFrame, config: dict[
             if "primary_issue" in part.columns
             else {}
         )
+        primary_issue = max(issue_counts, key=issue_counts.get) if issue_counts else ""
         if oracle.notna().any() and float(oracle_pass.mean()) < 0.50:
             hint = "score_not_separable_enough_even_with_oracle_threshold"
             action = "do_not_tune_threshold_first; inspect score ranking and feature drift"
@@ -3904,12 +3912,17 @@ def _threshold_oracle_gap_frame(threshold_forensics: pd.DataFrame, config: dict[
                 "selected_f1_mean": float(selected.mean()) if selected.notna().any() else np.nan,
                 "constrained_f1_mean": float(constrained.mean()) if constrained.notna().any() else np.nan,
                 "official_gap_to_oracle_mean": float((oracle - official).mean()) if oracle.notna().any() else np.nan,
+                "oracle_minus_official_f1": float((oracle - official).mean()) if oracle.notna().any() else np.nan,
                 "selected_gap_to_oracle_mean": float((oracle - selected).mean()) if oracle.notna().any() else np.nan,
                 "constrained_gap_to_oracle_mean": float((oracle - constrained).mean()) if oracle.notna().any() else np.nan,
                 "oracle_pass_fold_rate": float(oracle_pass.mean()) if oracle.notna().any() else np.nan,
+                "oracle_reaches_target_rate": float(oracle_pass.mean()) if oracle.notna().any() else np.nan,
                 "official_pass_fold_rate": float(official_pass.mean()) if official.notna().any() else np.nan,
+                "official_reaches_target_rate": float(official_pass.mean()) if official.notna().any() else np.nan,
                 "selected_pass_fold_rate": float(selected_pass.mean()) if selected.notna().any() else np.nan,
+                "selected_reaches_target_rate": float(selected_pass.mean()) if selected.notna().any() else np.nan,
                 "constrained_pass_fold_rate": float(constrained_pass.mean()) if constrained.notna().any() else np.nan,
+                "constrained_reaches_target_rate": float(constrained_pass.mean()) if constrained.notna().any() else np.nan,
                 "official_pred_long_rate_mean": float(official_rate.mean()) if official_rate.notna().any() else np.nan,
                 "selected_pred_long_rate_mean": float(selected_rate.mean()) if selected_rate.notna().any() else np.nan,
                 "constrained_pred_long_rate_mean": float(constrained_rate.mean()) if constrained_rate.notna().any() else np.nan,
@@ -3920,6 +3933,8 @@ def _threshold_oracle_gap_frame(threshold_forensics: pd.DataFrame, config: dict[
                 if selected_rate.notna().any()
                 else np.nan,
                 "dominant_threshold_issue": json.dumps(issue_counts, sort_keys=True),
+                "primary_threshold_issue": primary_issue,
+                "threshold_transfer_blocker": bool(hint == "threshold_transfer_gap_after_oracle_succeeds"),
                 "root_cause_hint": hint,
                 "recommended_action": action,
             }
@@ -3954,12 +3969,16 @@ def _historical_experiment_memory_audit_frame(
         "fold_scope",
         "feature_family",
         "top_suspect_feature",
+        "suspect_feature",
         "top_likely_issue",
         "related_rejected_profile_count",
         "related_rejected_profiles",
+        "matched_rejected_profile",
         "related_rejected_reasons",
         "historical_status",
+        "memory_status",
         "recommended_action",
+        "recommendation",
     ]
     if feature_family_drift_summary.empty:
         return pd.DataFrame(columns=columns)
@@ -3985,18 +4004,23 @@ def _historical_experiment_memory_audit_frame(
         else:
             status = "no_direct_rejection_match"
             action = "eligible_for_hypothesis_design_only_after_root_cause_report_requests_new_features"
+        first_profile = related[0][0] if related else ""
         rows.append(
             {
                 "candidate": str(row.get("candidate", "")),
                 "fold_scope": str(row.get("fold_scope", "")),
                 "feature_family": family,
                 "top_suspect_feature": feature,
+                "suspect_feature": feature,
                 "top_likely_issue": str(row.get("top_likely_issue", "")),
                 "related_rejected_profile_count": len(related),
                 "related_rejected_profiles": ",".join(profile for profile, _ in related[:8]),
+                "matched_rejected_profile": first_profile,
                 "related_rejected_reasons": " | ".join(reason for _, reason in related[:3]),
                 "historical_status": status,
+                "memory_status": status,
                 "recommended_action": action,
+                "recommendation": action,
             }
         )
     return pd.DataFrame(rows, columns=columns).sort_values(
@@ -4383,6 +4407,16 @@ def _phase1_decision_ladder_payload(
         if not bad_fold_mechanism_summary.empty
         else None,
     )
+    threshold_transfer_blocker = bool(control_oracle.get("threshold_transfer_blocker", False))
+    score_reversal_blocker = str(mechanism.get("dominant_mechanism", "")).startswith("score_ranking_reversal")
+    if run_04_now:
+        recommended_next_action = "run_04_only_after_pre_registered_hypothesis"
+    elif threshold_transfer_blocker:
+        recommended_next_action = "run_05_threshold_transfer_diagnostics_only"
+    elif score_reversal_blocker:
+        recommended_next_action = "run_05_score_reversal_diagnostics_only"
+    else:
+        recommended_next_action = "run_05_only_and_review_root_cause_reports"
     return {
         "phase2_allowed": bool(readiness.get("ready_for_phase2", False) or readiness.get("passed", False)),
         "blockers": blockers,
@@ -4394,17 +4428,22 @@ def _phase1_decision_ladder_payload(
         "next_notebook": "04" if run_04_now else "05",
         "root_cause": str(control_root.get("root_cause") or mechanism.get("dominant_mechanism") or ""),
         "threshold_oracle_hint": str(control_oracle.get("root_cause_hint") or ""),
+        "threshold_transfer_blocker": threshold_transfer_blocker,
+        "threshold_work_required": threshold_transfer_blocker,
         "bad_fold_mechanism": str(mechanism.get("dominant_mechanism") or ""),
+        "score_reversal_work_required": score_reversal_blocker,
+        "candidate_generation_allowed": bool(run_04_now and "future_unseen_oos_not_ready" not in blockers),
+        "why_no_04": (
+            ""
+            if run_04_now
+            else "no pre-registered feature or training hypothesis cleared the root-cause and memory audits"
+        ),
         "decision": (
             "do_not_proceed_to_phase2"
             if blockers
             else "phase2_review_possible"
         ),
-        "recommended_next_action": (
-            "run_05_only_and_review_root_cause_reports"
-            if not run_04_now
-            else "run_04_only_after_pre_registered_hypothesis"
-        ),
+        "recommended_next_action": recommended_next_action,
     }
 
 
@@ -4417,6 +4456,10 @@ def _phase1_blocker_root_cause_markdown(
     lines.append(f"Next action: `{decision_ladder.get('recommended_next_action')}`")
     lines.append(f"Run 04 required now: `{decision_ladder.get('run_04_required_now')}`")
     lines.append(f"Full zip required now: `{decision_ladder.get('full_zip_required_now')}`")
+    lines.append(f"Threshold transfer work required: `{decision_ladder.get('threshold_work_required')}`")
+    lines.append(f"Score reversal work required: `{decision_ladder.get('score_reversal_work_required')}`")
+    if decision_ladder.get("why_no_04"):
+        lines.append(f"Why no 04 now: `{decision_ladder.get('why_no_04')}`")
     lines.append("")
     if root_cause.empty:
         lines.append("No root-cause rows were produced.")
