@@ -64,3 +64,41 @@ class PairwiseLabelMarginLoss(nn.Module):
             return logits.new_tensor(0.0)
         pairwise_margin = positive[:, None] - negative[None, :]
         return F.softplus(self.margin - pairwise_margin).mean()
+
+
+class PairwiseReturnOrderLoss(nn.Module):
+    """Encourage logit ordering to match forward-return ordering.
+
+    This is a local pairwise ranking term. Unlike label-margin loss, it does
+    not force every long-label row above every not-long row; it only asks the
+    model to preserve the ordering implied by realized forward returns inside
+    the batch. That makes it a narrower candidate for Rank IC and bad-fold
+    score-separation stability.
+    """
+
+    def __init__(self, *, margin: float = 0.05, min_return_diff: float = 0.0005, return_scale: float = 0.005) -> None:
+        super().__init__()
+        self.margin = float(margin)
+        self.min_return_diff = float(min_return_diff)
+        self.return_scale = max(float(return_scale), 1e-8)
+
+    def forward(self, logits: torch.Tensor, forward_returns: torch.Tensor) -> torch.Tensor:
+        logits = logits.float().flatten()
+        returns = forward_returns.float().flatten()
+        valid = torch.isfinite(logits) & torch.isfinite(returns)
+        if valid.sum() < 3:
+            return logits.new_tensor(0.0)
+        logits = logits[valid]
+        returns = returns[valid]
+
+        return_delta = returns[:, None] - returns[None, :]
+        upper = torch.triu(torch.ones_like(return_delta, dtype=torch.bool), diagonal=1)
+        meaningful = upper & (return_delta.abs() >= self.min_return_diff)
+        if meaningful.sum() == 0:
+            return logits.new_tensor(0.0)
+
+        logit_delta = logits[:, None] - logits[None, :]
+        direction = torch.sign(return_delta[meaningful])
+        ordered_logit_delta = direction * logit_delta[meaningful]
+        weights = torch.tanh(return_delta[meaningful].abs() / self.return_scale).detach()
+        return (weights * F.softplus(self.margin - ordered_logit_delta)).sum() / (weights.sum() + 1e-8)

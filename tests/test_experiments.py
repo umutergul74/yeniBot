@@ -1553,7 +1553,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_stable_score_margin_loss",
+        "baseline_stable_return_pairwise_loss_light",
         "baseline_no_4h_tier1_4h_large_trade_pressure_long",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
@@ -1572,7 +1572,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
-        "baseline_stable_score_margin_loss",
+        "baseline_stable_return_pairwise_loss_light",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1599,12 +1599,21 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
-    assert "pairwise label-margin loss" in notes["baseline_stable_score_margin_loss"]
+    assert "worsened mean IC" in notes["baseline_stable_score_margin_loss"]
+    assert "forward-return ordering loss" in notes["baseline_stable_return_pairwise_loss_light"]
     assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
-    assert config["features"]["profiles"]["baseline_stable_score_margin_loss"]["config_overrides"]["training"]["loss"] == {
-        "label_margin_weight": 0.05,
-        "label_margin": 0.25,
+    assert config["features"]["profiles"]["baseline_stable_return_pairwise_loss_light"]["config_overrides"]["training"][
+        "loss"
+    ] == {
+        "return_pairwise_weight": 0.03,
+        "return_pairwise_margin": 0.05,
+        "return_pairwise_min_return_diff": 0.0005,
+        "return_pairwise_return_scale": 0.005,
     }
+    assert (
+        "baseline_stable_score_margin_loss"
+        in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    )
     assert "failed CV stability" in notes["baseline_control_plus_futures_oi_change_context"]
     assert "failed CV stability" in notes["baseline_control_plus_futures_positioning_context"]
     assert "did not clear" in notes["baseline_control_plus_futures_funding_context"]

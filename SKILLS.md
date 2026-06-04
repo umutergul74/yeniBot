@@ -71,7 +71,7 @@ Forbidden feature behavior:
 - HMM validation, test, holdout, and live-style inference must be forward-only.
 - Do not add an XGBoost, random forest, or other meta-learner on top of TCN+GRU outputs.
 - Do not blindly retry old training-stability experiments. The May 21 branch already tested val-loss/rolling-IC style training changes, stronger regularization, and longer validation windows, then restored baseline defaults. New training experiments must isolate one change at a time and be pre-registered.
-- The current score-separation training candidate is `baseline_stable_score_margin_loss`: it keeps the control feature set and adds only a small pairwise label-margin auxiliary loss. Treat it as an experiment until CV and future-OOS evidence clears the official gates.
+- The current score-separation training candidate is `baseline_stable_return_pairwise_loss_light`: it keeps the control feature set and adds only a small pairwise forward-return ordering loss. Treat it as an experiment until CV and future-OOS evidence clears the official gates.
 
 ## Experiment Memory Discipline
 
@@ -91,6 +91,7 @@ Known lessons:
 - The clean holdout invalidated the frozen top-10 `control + long_pressure` policy for active promotion; keep it as historical benchmark only.
 - Run `20260528_193824` showed that regime-specific validation thresholds did not improve official F1; use `regime_threshold_policy_*` as diagnostics, not as a promotion mechanism.
 - Run `20260528_193824` also identified bad-fold score separation compression/reversal as the main actionable failure mode; prioritize narrow score-separation training or feature hypotheses over broad profile search.
+- Run `20260528_214759` showed that pairwise label-margin loss weight `0.05` improved top-10 lift but worsened mean IC, Rank IC std, positive-fold coverage, worst folds, and official F1. Do not repeat that exact label-margin objective; the next score-separation experiment should target forward-return ordering instead of class-only separation.
 
 ## Holdout And Future-OOS Policy
 

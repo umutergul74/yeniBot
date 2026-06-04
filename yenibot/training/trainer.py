@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
 from yenibot.features.builder import filter_feature_columns, select_feature_columns
-from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, RankICLoss
+from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, PairwiseReturnOrderLoss, RankICLoss
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
 from yenibot.training.dataset import SequenceDataset
@@ -199,8 +199,10 @@ def _evaluate(
     focal: FocalLossWithLogits | None = None,
     rank_loss: RankICLoss | None = None,
     margin_loss: PairwiseLabelMarginLoss | None = None,
+    return_order_loss: PairwiseReturnOrderLoss | None = None,
     rank_weight: float = 0.2,
     margin_weight: float = 0.0,
+    return_order_weight: float = 0.0,
 ) -> dict[str, float]:
     batch_size = int(_cfg(config, ["training", "batch_size"], 256))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -218,6 +220,8 @@ def _evaluate(
                 loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
                 if margin_loss is not None and margin_weight > 0.0:
                     loss = loss + margin_weight * margin_loss(logits, y)
+                if return_order_loss is not None and return_order_weight > 0.0:
+                    loss = loss + return_order_weight * return_order_loss(logits, fwd)
                 batch_n = int(y.shape[0])
                 val_loss_sum += float(loss.detach().cpu()) * batch_n
                 val_loss_count += batch_n
@@ -274,6 +278,12 @@ def train_one_fold(
     margin_loss = PairwiseLabelMarginLoss(
         margin=float(_cfg(loss_cfg, ["label_margin"], 0.25)),
     )
+    return_order_weight = float(_cfg(loss_cfg, ["return_pairwise_weight"], 0.0))
+    return_order_loss = PairwiseReturnOrderLoss(
+        margin=float(_cfg(loss_cfg, ["return_pairwise_margin"], 0.05)),
+        min_return_diff=float(_cfg(loss_cfg, ["return_pairwise_min_return_diff"], 0.0005)),
+        return_scale=float(_cfg(loss_cfg, ["return_pairwise_return_scale"], 0.005)),
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(_cfg(train_cfg, ["optimizer", "lr"], 1e-3)),
@@ -318,6 +328,8 @@ def train_one_fold(
             loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
             if margin_weight > 0.0:
                 loss = loss + margin_weight * margin_loss(logits, y)
+            if return_order_weight > 0.0:
+                loss = loss + return_order_weight * return_order_loss(logits, fwd)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
@@ -333,8 +345,10 @@ def train_one_fold(
             focal=focal,
             rank_loss=rank_loss,
             margin_loss=margin_loss,
+            return_order_loss=return_order_loss,
             rank_weight=rank_weight,
             margin_weight=margin_weight,
+            return_order_weight=return_order_weight,
         )
 
         smoothing_epochs = max(1, int(_cfg(train_cfg, ["rank_ic_smoothing_epochs"], 5)))
