@@ -182,6 +182,7 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "training_execution_summary.json",
         "phase1_blocker_root_cause.csv",
         "threshold_oracle_gap.csv",
+        "threshold_score_quantile_review.csv",
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
@@ -632,6 +633,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     fold_stability_summary = _read_csv(report_path / "fold_stability_summary.csv")
     fold_stability_forensics = _read_csv(report_path / "fold_stability_forensics.csv")
     threshold_forensics = _read_csv(report_path / "threshold_forensics.csv")
+    threshold_score_quantile = _read_csv(report_path / "threshold_score_quantile_review.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
     missing_profiles = _selected_missing_profiles(report_path)
@@ -695,6 +697,11 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             threshold_forensics=threshold_forensics,
             control_profile=control_profile,
         ),
+        "threshold_score_quantile": {
+            "best_test_f1_policy": _best_row(threshold_score_quantile, "test_f1_mean"),
+            "best_f1_delta_policy": _best_row(threshold_score_quantile, "f1_delta_vs_official"),
+            "policy_count": int(len(threshold_score_quantile)) if not threshold_score_quantile.empty else 0,
+        },
         "next_action": {
             "action": action,
             "reasons": reasons,
@@ -799,6 +806,10 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Top std-driver fold: `{std_driver.get('fold', '')}` with rank IC `{_fmt(std_driver.get('rank_ic'))}`",
         f"- Top std-driver issue: `{std_driver.get('primary_issue', '')}`",
         f"- Threshold issue counts: `{forensics.get('threshold_issue_counts', {})}`",
+        f"- Score-quantile diagnostic policies: `{review.get('threshold_score_quantile', {}).get('policy_count', 0)}`",
+        f"- Best score-quantile policy by F1: `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('policy_name', '')}` "
+        f"with F1 `{_fmt(review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('test_f1_mean'))}` "
+        f"and outcome `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('diagnostic_outcome', '')}`",
         "",
         "## Interpretation",
         "- Treat current holdout results as diagnostics unless `future_oos_ready` is true.",

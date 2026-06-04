@@ -4586,13 +4586,28 @@ def _entry_threshold_policy_frame(entry: dict[str, Any]) -> pd.DataFrame:
             return pd.Series(np.nan, index=frame.index)
         return pd.to_numeric(frame[column], errors="coerce")
 
+    def official_metric_series(mapped_column: str, fallback_column: str) -> pd.Series:
+        mapped = metric_series(mapped_column)
+        if fallback_column in frame.columns:
+            fallback = pd.to_numeric(frame[fallback_column], errors="coerce")
+            mapped = mapped.where(mapped.notna(), fallback)
+        return mapped
+
     frame["official_threshold_source"] = source
     frame["official_threshold_uses_calibration"] = bool(use_calibrated)
-    frame["official_threshold"] = metric_series(metric_map["threshold"])
-    frame["test_f1_at_official_threshold"] = metric_series(metric_map["f1"])
-    frame["test_precision_at_official_threshold"] = metric_series(metric_map["precision"])
-    frame["test_recall_at_official_threshold"] = metric_series(metric_map["recall"])
-    frame["test_pred_long_rate_at_official_threshold"] = metric_series(metric_map["pred_rate"])
+    frame["official_threshold"] = official_metric_series(metric_map["threshold"], "official_threshold")
+    frame["test_f1_at_official_threshold"] = official_metric_series(
+        metric_map["f1"], "test_f1_at_official_threshold"
+    )
+    frame["test_precision_at_official_threshold"] = official_metric_series(
+        metric_map["precision"], "test_precision_at_official_threshold"
+    )
+    frame["test_recall_at_official_threshold"] = official_metric_series(
+        metric_map["recall"], "test_recall_at_official_threshold"
+    )
+    frame["test_pred_long_rate_at_official_threshold"] = official_metric_series(
+        metric_map["pred_rate"], "test_pred_long_rate_at_official_threshold"
+    )
     return frame
 
 
@@ -6285,6 +6300,389 @@ def _write_threshold_transfer_review(path: Path, summary: pd.DataFrame, by_fold:
     )
     _write_json(
         path / "threshold_transfer_review.json",
+        {
+            "summary": summary.to_dict(orient="records"),
+            "by_fold": by_fold.to_dict(orient="records"),
+        },
+    )
+
+
+def _score_quantile_threshold(frame: pd.DataFrame, selection_rate: float) -> float:
+    if frame.empty or "prob_long" not in frame.columns:
+        return np.nan
+    rate = float(selection_rate)
+    if not np.isfinite(rate) or rate <= 0.0:
+        return np.inf
+    if rate >= 1.0:
+        return -np.inf
+    scores = pd.to_numeric(frame["prob_long"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if scores.empty:
+        return np.nan
+    return float(scores.quantile(max(0.0, min(1.0, 1.0 - rate))))
+
+
+def _selection_stats_for_mask(frame: pd.DataFrame, selected_mask: pd.Series) -> dict[str, float]:
+    if frame.empty or "label" not in frame.columns:
+        return {
+            "actual_long_rate": np.nan,
+            "label_lift_vs_base": np.nan,
+            "mean_forward_return": np.nan,
+            "mean_tb_return": np.nan,
+        }
+    labels = pd.to_numeric(frame["label"], errors="coerce")
+    base_rate = float(labels.mean()) if labels.notna().any() else np.nan
+    selected = frame.loc[selected_mask.fillna(False)].copy()
+    if selected.empty:
+        return {
+            "actual_long_rate": 0.0,
+            "label_lift_vs_base": 0.0 if np.isfinite(base_rate) and base_rate > 0 else np.nan,
+            "mean_forward_return": np.nan,
+            "mean_tb_return": np.nan,
+        }
+    actual_rate = float(pd.to_numeric(selected["label"], errors="coerce").mean())
+    return {
+        "actual_long_rate": actual_rate,
+        "label_lift_vs_base": float(actual_rate / base_rate) if np.isfinite(base_rate) and base_rate > 0 else np.nan,
+        "mean_forward_return": (
+            float(pd.to_numeric(selected["forward_return"], errors="coerce").mean())
+            if "forward_return" in selected.columns
+            else np.nan
+        ),
+        "mean_tb_return": (
+            float(pd.to_numeric(selected["tb_return"], errors="coerce").mean())
+            if "tb_return" in selected.columns
+            else np.nan
+        ),
+    }
+
+
+def _classification_metrics_for_mask(labels: pd.Series, selected_mask: pd.Series) -> dict[str, float]:
+    y_true = labels.astype(int)
+    y_pred = selected_mask.fillna(False).astype(bool)
+    tp = int(((y_true == 1) & y_pred).sum())
+    fp = int(((y_true == 0) & y_pred).sum())
+    fn = int(((y_true == 1) & ~y_pred).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "pred_long_rate": float(y_pred.mean()) if len(y_pred) else 0.0,
+    }
+
+
+def _threshold_score_quantile_review_frames(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    by_fold_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold",
+        "selection_rate_source",
+        "target_selection_rate",
+        "realized_selection_rate",
+        "score_quantile_threshold",
+        "official_f1",
+        "official_pred_long_rate",
+        "test_f1",
+        "test_precision",
+        "test_recall",
+        "test_pred_long_rate",
+        "test_actual_long_rate",
+        "test_label_lift_vs_base",
+        "test_mean_forward_return",
+        "test_mean_tb_return",
+        "selection_guard",
+    ]
+    summary_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold_count",
+        "target_selection_rate_mean",
+        "realized_selection_rate_mean",
+        "score_quantile_threshold_mean",
+        "test_f1_mean",
+        "test_precision_mean",
+        "test_recall_mean",
+        "test_pred_long_rate_mean",
+        "test_label_lift_vs_base_mean",
+        "test_mean_forward_return_mean",
+        "test_mean_tb_return_mean",
+        "official_f1_mean",
+        "f1_delta_vs_official",
+        "official_pred_long_rate_mean",
+        "pred_long_rate_delta_vs_official",
+        "f1_pass_fold_rate",
+        "precision_pass_fold_rate",
+        "pred_rate_pass_fold_rate",
+        "positive_lift_fold_rate",
+        "positive_forward_return_fold_rate",
+        "policy_passed_diagnostic",
+        "diagnostic_outcome",
+        "recommended_action",
+        "selection_guard",
+    ]
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    min_precision = float(threshold_cfg.get("min_precision", 0.30))
+    rates = _cfg(config, ["validation", "score_quantile_review", "selection_rates"], [0.30, 0.40, 0.50, 0.60, 0.70])
+    fixed_rates: list[float] = []
+    for value in rates:
+        try:
+            rate_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(rate_value):
+            fixed_rates.append(rate_value)
+    rows: list[dict[str, Any]] = []
+
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        if not {"fold", "label", "prob_long"}.issubset(predictions.columns):
+            continue
+        threshold_metrics = _entry_threshold_policy_frame(entry)
+        metric_by_fold = (
+            {int(row["fold"]): row.to_dict() for _, row in threshold_metrics.dropna(subset=["fold"]).iterrows()}
+            if threshold_metrics is not None and not threshold_metrics.empty and "fold" in threshold_metrics.columns
+            else {}
+        )
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for fold_raw, fold_part in predictions.groupby("fold"):
+            fold = int(fold_raw)
+            if "split" in fold_part.columns:
+                validation = fold_part.loc[fold_part["split"].astype(str) == "val"].copy()
+                test = fold_part.loc[fold_part["split"].astype(str) == "test"].copy()
+            else:
+                validation = pd.DataFrame()
+                test = fold_part.copy()
+            test = test.replace([np.inf, -np.inf], np.nan).dropna(subset=["label", "prob_long"]).copy()
+            if test.empty:
+                continue
+            metrics_row = metric_by_fold.get(fold, {})
+            official_f1 = _float(metrics_row, "test_f1_at_official_threshold")
+            official_rate = _float(metrics_row, "test_pred_long_rate_at_official_threshold")
+            policies: list[dict[str, Any]] = []
+            for rate in fixed_rates:
+                policies.append(
+                    {
+                        "policy_name": f"fixed_top_{int(round(rate * 100)):02d}",
+                        "policy_type": "score_quantile_fixed_rate",
+                        "target_selection_rate": rate,
+                        "selection_rate_source": "configured_fixed_rate",
+                    }
+                )
+            if not validation.empty:
+                for source_name, threshold_column in [
+                    ("validation_selected_rate", "selected_threshold"),
+                    ("validation_constrained_rate", "constrained_threshold"),
+                    ("validation_official_rate", "official_threshold"),
+                ]:
+                    threshold = _float(metrics_row, threshold_column)
+                    if np.isfinite(threshold):
+                        val_rate = float((pd.to_numeric(validation["prob_long"], errors="coerce") >= threshold).mean())
+                        policies.append(
+                            {
+                                "policy_name": f"{source_name}_quantile",
+                                "policy_type": "score_quantile_validation_rate",
+                                "target_selection_rate": val_rate,
+                                "selection_rate_source": source_name,
+                            }
+                        )
+            for policy in policies:
+                rate = float(policy["target_selection_rate"])
+                if not np.isfinite(rate):
+                    continue
+                rate = float(max(0.0, min(1.0, rate)))
+                threshold = _score_quantile_threshold(test, rate)
+                if not np.isfinite(threshold) and not np.isinf(threshold):
+                    continue
+                scores = pd.to_numeric(test["prob_long"], errors="coerce")
+                selected_mask = scores >= threshold
+                class_metrics = _classification_metrics_for_mask(test["label"], selected_mask)
+                selection_stats = _selection_stats_for_mask(test, selected_mask)
+                rows.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_type": candidate_type,
+                        "fold_scope": fold_scope,
+                        "policy_name": policy["policy_name"],
+                        "policy_type": policy["policy_type"],
+                        "fold": fold,
+                        "selection_rate_source": policy["selection_rate_source"],
+                        "target_selection_rate": rate,
+                        "realized_selection_rate": class_metrics["pred_long_rate"],
+                        "score_quantile_threshold": threshold,
+                        "official_f1": official_f1,
+                        "official_pred_long_rate": official_rate,
+                        "test_f1": class_metrics["f1"],
+                        "test_precision": class_metrics["precision"],
+                        "test_recall": class_metrics["recall"],
+                        "test_pred_long_rate": class_metrics["pred_long_rate"],
+                        "test_actual_long_rate": selection_stats["actual_long_rate"],
+                        "test_label_lift_vs_base": selection_stats["label_lift_vs_base"],
+                        "test_mean_forward_return": selection_stats["mean_forward_return"],
+                        "test_mean_tb_return": selection_stats["mean_tb_return"],
+                        "selection_guard": "uses_current_test_score_distribution_no_labels_diagnostic_only",
+                    }
+                )
+    if not rows:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+
+    by_fold = (
+        pd.DataFrame(rows, columns=by_fold_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "policy_name", "fold"])
+        .reset_index(drop=True)
+    )
+    summaries: list[dict[str, Any]] = []
+    group_cols = ["candidate", "candidate_type", "fold_scope", "policy_name", "policy_type"]
+    for keys, part in by_fold.groupby(group_cols, dropna=False):
+        candidate, candidate_type, fold_scope, policy_name, policy_type = keys
+        f1 = pd.to_numeric(part["test_f1"], errors="coerce")
+        precision = pd.to_numeric(part["test_precision"], errors="coerce")
+        pred_rate = pd.to_numeric(part["test_pred_long_rate"], errors="coerce")
+        lift = pd.to_numeric(part["test_label_lift_vs_base"], errors="coerce")
+        fwd = pd.to_numeric(part["test_mean_forward_return"], errors="coerce")
+        official_f1 = pd.to_numeric(part["official_f1"], errors="coerce")
+        official_rate = pd.to_numeric(part["official_pred_long_rate"], errors="coerce")
+        f1_pass = f1 >= min_long_f1
+        precision_pass = precision >= min_precision
+        pred_pass = pred_rate <= max_pred_long_rate
+        fold_pass = f1_pass & precision_pass & pred_pass
+        f1_pass_rate = float(f1_pass.mean()) if f1.notna().any() else np.nan
+        precision_pass_rate = float(precision_pass.mean()) if precision.notna().any() else np.nan
+        pred_pass_rate = float(pred_pass.mean()) if pred_rate.notna().any() else np.nan
+        positive_lift_rate = float((lift > 1.0).mean()) if lift.notna().any() else np.nan
+        positive_fwd_rate = float((fwd > 0.0).mean()) if fwd.notna().any() else np.nan
+        policy_passed = bool(
+            np.isfinite(f1_pass_rate)
+            and f1_pass_rate >= 0.75
+            and np.isfinite(pred_pass_rate)
+            and pred_pass_rate >= 0.75
+            and np.isfinite(precision_pass_rate)
+            and precision_pass_rate >= 0.75
+        )
+        f1_mean = float(f1.mean()) if f1.notna().any() else np.nan
+        official_f1_mean = float(official_f1.mean()) if official_f1.notna().any() else np.nan
+        f1_delta = f1_mean - official_f1_mean if np.isfinite(f1_mean) and np.isfinite(official_f1_mean) else np.nan
+        if policy_passed and np.isfinite(f1_delta) and f1_delta > 0.005:
+            outcome = "score_scale_transfer_candidate"
+            action = "pre_register_score_quantile_policy_for_future_oos; not deployable from current holdout"
+        elif np.isfinite(f1_mean) and f1_mean >= min_long_f1 and np.isfinite(float(pred_rate.mean())) and float(pred_rate.mean()) > max_pred_long_rate:
+            outcome = "quantile_policy_too_broad"
+            action = "do_not_promote; selection rate must be lower or score separation must improve"
+        elif np.isfinite(f1_mean) and f1_mean < min_long_f1:
+            outcome = "score_separation_not_solved_by_scale_normalization"
+            action = "prioritize score-reversal/gating hypothesis over threshold-only work"
+        else:
+            outcome = "monitor_no_clear_threshold_fix"
+            action = "diagnostic_only"
+        summaries.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "policy_name": policy_name,
+                "policy_type": policy_type,
+                "fold_count": int(part["fold"].nunique()),
+                "target_selection_rate_mean": float(pd.to_numeric(part["target_selection_rate"], errors="coerce").mean()),
+                "realized_selection_rate_mean": float(pd.to_numeric(part["realized_selection_rate"], errors="coerce").mean()),
+                "score_quantile_threshold_mean": float(pd.to_numeric(part["score_quantile_threshold"], errors="coerce").mean()),
+                "test_f1_mean": f1_mean,
+                "test_precision_mean": float(precision.mean()) if precision.notna().any() else np.nan,
+                "test_recall_mean": float(pd.to_numeric(part["test_recall"], errors="coerce").mean()),
+                "test_pred_long_rate_mean": float(pred_rate.mean()) if pred_rate.notna().any() else np.nan,
+                "test_label_lift_vs_base_mean": float(lift.mean()) if lift.notna().any() else np.nan,
+                "test_mean_forward_return_mean": float(fwd.mean()) if fwd.notna().any() else np.nan,
+                "test_mean_tb_return_mean": float(pd.to_numeric(part["test_mean_tb_return"], errors="coerce").mean()),
+                "official_f1_mean": official_f1_mean,
+                "f1_delta_vs_official": f1_delta,
+                "official_pred_long_rate_mean": float(official_rate.mean()) if official_rate.notna().any() else np.nan,
+                "pred_long_rate_delta_vs_official": (
+                    float(pred_rate.mean() - official_rate.mean())
+                    if pred_rate.notna().any() and official_rate.notna().any()
+                    else np.nan
+                ),
+                "f1_pass_fold_rate": f1_pass_rate,
+                "precision_pass_fold_rate": precision_pass_rate,
+                "pred_rate_pass_fold_rate": pred_pass_rate,
+                "positive_lift_fold_rate": positive_lift_rate,
+                "positive_forward_return_fold_rate": positive_fwd_rate,
+                "policy_passed_diagnostic": policy_passed,
+                "diagnostic_outcome": outcome,
+                "recommended_action": action,
+                "selection_guard": ";".join(sorted({str(value) for value in part["selection_guard"].dropna()})),
+            }
+        )
+    summary = (
+        pd.DataFrame(summaries, columns=summary_columns)
+        .sort_values(
+            ["candidate_type", "candidate", "fold_scope", "policy_passed_diagnostic", "test_f1_mean"],
+            ascending=[True, True, True, False, False],
+        )
+        .reset_index(drop=True)
+    )
+    return summary, by_fold
+
+
+def _threshold_score_quantile_review_markdown(summary: pd.DataFrame, by_fold: pd.DataFrame) -> str:
+    lines = ["# Threshold Score-Quantile Review", ""]
+    lines.append(
+        "This diagnostic asks whether normalizing scores by within-fold score quantiles would close the "
+        "official F1 gap. It uses no labels to form the selection mask, but it does use the current test "
+        "score distribution, so it is diagnostic-only and not a deployable Phase 1 policy."
+    )
+    if summary.empty:
+        lines.extend(["", "No score-quantile threshold rows were produced."])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "policy_name",
+        "test_f1_mean",
+        "test_pred_long_rate_mean",
+        "f1_delta_vs_official",
+        "f1_pass_fold_rate",
+        "positive_forward_return_fold_rate",
+        "diagnostic_outcome",
+        "recommended_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append(f"By-fold rows: {len(by_fold)}. See `threshold_score_quantile_by_fold.csv`.")
+    return "\n".join(lines)
+
+
+def _write_threshold_score_quantile_review(path: Path, summary: pd.DataFrame, by_fold: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(path / "threshold_score_quantile_review.csv", index=False)
+    by_fold.to_csv(path / "threshold_score_quantile_by_fold.csv", index=False)
+    (path / "threshold_score_quantile_review.md").write_text(
+        _threshold_score_quantile_review_markdown(summary, by_fold),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "threshold_score_quantile_review.json",
         {
             "summary": summary.to_dict(orient="records"),
             "by_fold": by_fold.to_dict(orient="records"),
@@ -10169,6 +10567,10 @@ def _write_experiment_bundle(
         "threshold_transfer_review.md",
         "threshold_transfer_review.json",
         "threshold_transfer_by_fold.csv",
+        "threshold_score_quantile_review.csv",
+        "threshold_score_quantile_review.md",
+        "threshold_score_quantile_review.json",
+        "threshold_score_quantile_by_fold.csv",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -10355,6 +10757,10 @@ def run_experiment_matrix(
     threshold_forensics = _threshold_forensics_frame(all_results, config)
     threshold_policy_review = _threshold_policy_review_frame(all_results, config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(all_results, config)
+    threshold_score_quantile_review, threshold_score_quantile_by_fold = _threshold_score_quantile_review_frames(
+        all_results,
+        config,
+    )
     payoff_alignment = _payoff_alignment_frame(all_results, [], config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(all_results, [], config)
@@ -10441,6 +10847,7 @@ def run_experiment_matrix(
     _write_regime_stability(run_dir, regime_stability_forensics, regime_stability_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
+    _write_threshold_score_quantile_review(run_dir, threshold_score_quantile_review, threshold_score_quantile_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
@@ -10504,6 +10911,7 @@ def run_experiment_matrix(
         ),
         "threshold_policy_review": threshold_policy_review.to_dict(orient="records"),
         "threshold_transfer_review": threshold_transfer_review.to_dict(orient="records"),
+        "threshold_score_quantile_review": threshold_score_quantile_review.to_dict(orient="records"),
         "payoff_alignment_summary": payoff_alignment_summary.to_dict(orient="records"),
         "payoff_policy_robustness_summary": payoff_policy_robustness_summary.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
@@ -10548,6 +10956,8 @@ def run_experiment_matrix(
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
         "threshold_transfer_by_fold": threshold_transfer_by_fold,
+        "threshold_score_quantile_review": threshold_score_quantile_review,
+        "threshold_score_quantile_by_fold": threshold_score_quantile_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
@@ -10805,6 +11215,10 @@ def write_experiment_diagnostics(
     threshold_forensics = _threshold_forensics_frame(entries, diagnostic_config)
     threshold_policy_review = _threshold_policy_review_frame(entries, diagnostic_config)
     threshold_transfer_review, threshold_transfer_by_fold = _threshold_transfer_review_frames(entries, diagnostic_config)
+    threshold_score_quantile_review, threshold_score_quantile_by_fold = _threshold_score_quantile_review_frames(
+        entries,
+        diagnostic_config,
+    )
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
@@ -10831,6 +11245,7 @@ def write_experiment_diagnostics(
     )
     decision["threshold_policy_review"] = threshold_policy_review.to_dict(orient="records")
     decision["threshold_transfer_review"] = threshold_transfer_review.to_dict(orient="records")
+    decision["threshold_score_quantile_review"] = threshold_score_quantile_review.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -10864,6 +11279,11 @@ def write_experiment_diagnostics(
     _write_regime_stability(report_dir, regime_stability_forensics, regime_stability_summary)
     _write_threshold_policy_review(report_dir, threshold_policy_review)
     _write_threshold_transfer_review(report_dir, threshold_transfer_review, threshold_transfer_by_fold)
+    _write_threshold_score_quantile_review(
+        report_dir,
+        threshold_score_quantile_review,
+        threshold_score_quantile_by_fold,
+    )
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
@@ -11055,6 +11475,7 @@ def write_experiment_diagnostics(
     _write_regime_stability(run_dir, regime_stability_forensics, regime_stability_summary)
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
+    _write_threshold_score_quantile_review(run_dir, threshold_score_quantile_review, threshold_score_quantile_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -11126,6 +11547,8 @@ def write_experiment_diagnostics(
         "threshold_policy_review": threshold_policy_review,
         "threshold_transfer_review": threshold_transfer_review,
         "threshold_transfer_by_fold": threshold_transfer_by_fold,
+        "threshold_score_quantile_review": threshold_score_quantile_review,
+        "threshold_score_quantile_by_fold": threshold_score_quantile_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,

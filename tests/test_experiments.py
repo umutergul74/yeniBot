@@ -50,6 +50,7 @@ from yenibot.experiments import (
     _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
+    _threshold_score_quantile_review_frames,
     _threshold_transfer_review_frames,
     experiment_settings,
     prepare_training_holdout_split,
@@ -818,6 +819,71 @@ def test_threshold_transfer_review_uses_prior_fold_thresholds_only() -> None:
     summary_row = summary.loc[summary["policy_name"] == "past_median_constrained_threshold"].iloc[0]
     assert int(summary_row["fold_count"]) == 2
     assert "test_f1" in summary.columns
+
+
+def test_threshold_score_quantile_review_flags_scale_transfer_candidate() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+            "score_quantile_review": {"selection_rates": [0.50]},
+        }
+    }
+    rows = []
+    for fold in range(2):
+        for split in ("val", "test"):
+            for idx, score in enumerate([0.10, 0.20, 0.80, 0.90]):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-03-01") + pd.Timedelta(hours=fold * 10 + idx),
+                        "label": int(idx >= 2),
+                        "prob_long": score,
+                        "forward_return": 0.002 if idx >= 2 else -0.001,
+                        "tb_return": 0.003 if idx >= 2 else 0.0,
+                    }
+                )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": 0,
+                        "selected_threshold": 0.50,
+                        "constrained_threshold": 0.50,
+                        "official_threshold": 0.50,
+                        "test_f1_at_official_threshold": 0.30,
+                        "test_pred_long_rate_at_official_threshold": 0.80,
+                    },
+                    {
+                        "fold": 1,
+                        "selected_threshold": 0.50,
+                        "constrained_threshold": 0.50,
+                        "official_threshold": 0.50,
+                        "test_f1_at_official_threshold": 0.35,
+                        "test_pred_long_rate_at_official_threshold": 0.80,
+                    },
+                ]
+            )
+        },
+    }
+
+    summary, by_fold = _threshold_score_quantile_review_frames([entry], config)
+
+    assert not summary.empty
+    assert not by_fold.empty
+    assert "fixed_top_50" in set(summary["policy_name"])
+    fixed = summary.loc[summary["policy_name"] == "fixed_top_50"].iloc[0]
+    assert bool(fixed["policy_passed_diagnostic"]) is True
+    assert fixed["diagnostic_outcome"] == "score_scale_transfer_candidate"
+    assert fixed["selection_guard"] == "uses_current_test_score_distribution_no_labels_diagnostic_only"
+    assert float(fixed["test_f1_mean"]) == pytest.approx(1.0)
+    assert float(fixed["test_pred_long_rate_mean"]) == pytest.approx(0.5)
+    assert "validation_official_rate_quantile" in set(summary["policy_name"])
 
 
 def test_score_separation_forensics_flags_bad_fold_signature() -> None:
@@ -2978,6 +3044,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "threshold_transfer_by_fold.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_score_quantile_review.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "threshold_score_quantile_by_fold.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -3017,6 +3085,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_policy_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_review.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_transfer_by_fold.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_score_quantile_review.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "threshold_score_quantile_by_fold.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
@@ -3079,6 +3149,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["threshold_policy_review"].empty
     assert not diagnostics["threshold_transfer_review"].empty
     assert not diagnostics["threshold_transfer_by_fold"].empty
+    assert not diagnostics["threshold_score_quantile_review"].empty
+    assert not diagnostics["threshold_score_quantile_by_fold"].empty
     assert not diagnostics["payoff_alignment"].empty
     assert not diagnostics["payoff_alignment_summary"].empty
     assert not diagnostics["payoff_policy_robustness"].empty
@@ -3151,6 +3223,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "validation_constrained_threshold" in set(diagnostics["threshold_policy_review"]["policy_name"])
     assert "past_median_constrained_threshold" in set(diagnostics["threshold_transfer_review"]["policy_name"])
     assert "threshold_transfer_review" in diagnostics["decision"]
+    assert "fixed_top_50" in set(diagnostics["threshold_score_quantile_review"]["policy_name"])
+    assert "threshold_score_quantile_review" in diagnostics["decision"]
     assert "profile_calibrated_threshold_summary.csv" in {
         path.name for path in (tmp_path / "reports" / "experiments" / "matrix").iterdir()
     }
@@ -3253,6 +3327,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/threshold_policy_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_review.csv" in archive.namelist()
         assert "matrix/threshold_transfer_by_fold.csv" in archive.namelist()
+        assert "matrix/threshold_score_quantile_review.csv" in archive.namelist()
+        assert "matrix/threshold_score_quantile_by_fold.csv" in archive.namelist()
         assert "matrix/payoff_alignment.csv" in archive.namelist()
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
@@ -3303,6 +3379,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/threshold_policy_review.csv" in names
     assert "matrix/threshold_transfer_review.csv" in names
     assert "matrix/threshold_transfer_by_fold.csv" in names
+    assert "matrix/threshold_score_quantile_review.csv" in names
+    assert "matrix/threshold_score_quantile_by_fold.csv" in names
     assert "matrix/payoff_alignment.csv" in names
     assert "matrix/payoff_alignment_summary.csv" in names
     assert "matrix/payoff_policy_robustness.csv" in names

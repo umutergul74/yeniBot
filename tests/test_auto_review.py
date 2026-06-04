@@ -162,6 +162,20 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         [
             {
                 "candidate": control,
+                "fold_scope": "full",
+                "policy_name": "fixed_top_50",
+                "test_f1_mean": 0.46,
+                "official_f1_mean": 0.43,
+                "f1_delta_vs_official": 0.03,
+                "diagnostic_outcome": "score_scale_transfer_candidate",
+                "selection_guard": "uses_current_test_score_distribution_no_labels_diagnostic_only",
+            }
+        ]
+    ).to_csv(path / "threshold_score_quantile_review.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
                 "mechanism": "score_separation_instability",
                 "fold_count": 1,
                 "recommendation": "diagnose_before_retrain",
@@ -211,6 +225,8 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["next_action"]["do_not_promote_from_current_holdout"] is True
     assert review["cv"]["control"]["profile"] == "control_profile"
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
+    assert review["threshold_score_quantile"]["policy_count"] == 1
+    assert review["threshold_score_quantile"]["best_test_f1_policy"]["policy_name"] == "fixed_top_50"
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
