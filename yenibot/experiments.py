@@ -16,6 +16,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
+from scipy.stats import spearmanr
 from sklearn.metrics import average_precision_score
 
 from yenibot.diagnostics import (
@@ -6321,6 +6322,248 @@ def _score_quantile_threshold(frame: pd.DataFrame, selection_rate: float) -> flo
     return float(scores.quantile(max(0.0, min(1.0, 1.0 - rate))))
 
 
+def _rank_ic_uncertainty_frames(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    by_fold_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold",
+        "count",
+        "observed_rank_ic",
+        "independent_sampling_se",
+        "bootstrap_rank_ic_mean",
+        "bootstrap_rank_ic_std",
+        "bootstrap_ci_low",
+        "bootstrap_ci_high",
+        "bootstrap_positive_probability",
+        "block_length",
+        "bootstrap_repeats",
+    ]
+    summary_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "observed_mean_rank_ic",
+        "observed_std_rank_ic",
+        "mean_fold_count",
+        "independent_noise_floor_std",
+        "block_bootstrap_noise_floor_std",
+        "estimated_between_fold_std",
+        "sampling_variance_fraction",
+        "observed_std_to_bootstrap_noise_ratio",
+        "target_rank_ic_std",
+        "target_below_independent_noise_floor",
+        "target_below_block_bootstrap_noise_floor",
+        "positive_probability_mean",
+        "diagnostic_conclusion",
+        "recommended_action",
+        "block_length",
+        "bootstrap_repeats",
+    ]
+    cfg = _cfg(config, ["validation", "rank_ic_uncertainty"], {}) or {}
+    if not bool(cfg.get("enabled", True)):
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+    block_length = max(1, int(cfg.get("block_length", 24)))
+    repeats = max(20, int(cfg.get("bootstrap_repeats", 120)))
+    confidence_level = float(cfg.get("confidence_level", 0.95))
+    confidence_level = min(max(confidence_level, 0.50), 0.999)
+    alpha = (1.0 - confidence_level) / 2.0
+    base_seed = int(cfg.get("random_seed", _cfg(config, ["project", "random_seed"], 42)))
+    rows: list[dict[str, Any]] = []
+
+    for entry_index, entry in enumerate(entries):
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        test = _test_predictions(predictions)
+        if not {"fold", "prob_long", "forward_return"}.issubset(test.columns):
+            continue
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for fold_raw, part in test.groupby("fold"):
+            clean = (
+                part[["prob_long", "forward_return"]]
+                .apply(pd.to_numeric, errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            count = int(len(clean))
+            if count < 8:
+                continue
+            scores = clean["prob_long"].to_numpy(dtype=float)
+            returns = clean["forward_return"].to_numpy(dtype=float)
+            observed = float(spearmanr(scores, returns).statistic)
+            if not np.isfinite(observed):
+                continue
+            effective_block = min(block_length, count)
+            block_count = int(np.ceil(count / effective_block))
+            rng = np.random.default_rng(base_seed + entry_index * 100_003 + int(fold_raw) * 997)
+            boot_values = np.empty(repeats, dtype=float)
+            offsets = np.arange(effective_block)
+            for repeat in range(repeats):
+                starts = rng.integers(0, count, size=block_count)
+                indices = ((starts[:, None] + offsets[None, :]) % count).reshape(-1)[:count]
+                boot_values[repeat] = float(spearmanr(scores[indices], returns[indices]).statistic)
+            boot_values = boot_values[np.isfinite(boot_values)]
+            independent_se = float((1.0 - observed**2) / np.sqrt(max(count - 1, 1)))
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": candidate_type,
+                    "fold_scope": fold_scope,
+                    "fold": int(fold_raw),
+                    "count": count,
+                    "observed_rank_ic": observed,
+                    "independent_sampling_se": independent_se,
+                    "bootstrap_rank_ic_mean": float(np.mean(boot_values)) if len(boot_values) else np.nan,
+                    "bootstrap_rank_ic_std": float(np.std(boot_values, ddof=1)) if len(boot_values) > 1 else np.nan,
+                    "bootstrap_ci_low": float(np.quantile(boot_values, alpha)) if len(boot_values) else np.nan,
+                    "bootstrap_ci_high": float(np.quantile(boot_values, 1.0 - alpha)) if len(boot_values) else np.nan,
+                    "bootstrap_positive_probability": float(np.mean(boot_values > 0.0)) if len(boot_values) else np.nan,
+                    "block_length": effective_block,
+                    "bootstrap_repeats": int(len(boot_values)),
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+
+    by_fold = (
+        pd.DataFrame(rows, columns=by_fold_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "fold"])
+        .reset_index(drop=True)
+    )
+    target_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
+    summaries: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope), part in by_fold.groupby(
+        ["candidate", "candidate_type", "fold_scope"],
+        dropna=False,
+    ):
+        observed = pd.to_numeric(part["observed_rank_ic"], errors="coerce").dropna()
+        independent_se = pd.to_numeric(part["independent_sampling_se"], errors="coerce").dropna()
+        bootstrap_se = pd.to_numeric(part["bootstrap_rank_ic_std"], errors="coerce").dropna()
+        observed_variance = float(observed.var(ddof=0)) if len(observed) else np.nan
+        independent_noise = float(np.sqrt(np.mean(np.square(independent_se)))) if len(independent_se) else np.nan
+        bootstrap_noise = float(np.sqrt(np.mean(np.square(bootstrap_se)))) if len(bootstrap_se) else np.nan
+        bootstrap_variance = bootstrap_noise**2 if np.isfinite(bootstrap_noise) else np.nan
+        between_variance = (
+            max(observed_variance - bootstrap_variance, 0.0)
+            if np.isfinite(observed_variance) and np.isfinite(bootstrap_variance)
+            else np.nan
+        )
+        between_std = float(np.sqrt(between_variance)) if np.isfinite(between_variance) else np.nan
+        sampling_fraction = (
+            min(max(bootstrap_variance / observed_variance, 0.0), 1.0)
+            if np.isfinite(bootstrap_variance) and np.isfinite(observed_variance) and observed_variance > 0
+            else np.nan
+        )
+        observed_std = float(observed.std(ddof=0)) if len(observed) else np.nan
+        ratio = (
+            observed_std / bootstrap_noise
+            if np.isfinite(observed_std) and np.isfinite(bootstrap_noise) and bootstrap_noise > 0
+            else np.nan
+        )
+        target_below_independent = bool(np.isfinite(independent_noise) and target_std < independent_noise)
+        target_below_bootstrap = bool(np.isfinite(bootstrap_noise) and target_std < bootstrap_noise)
+        if target_below_bootstrap:
+            conclusion = "official_std_target_below_estimated_fold_measurement_noise"
+            action = "keep_official_gate_but_review_its_statistical_feasibility; prioritize noise_adjusted_stability"
+        elif np.isfinite(sampling_fraction) and sampling_fraction >= 0.50:
+            conclusion = "observed_std_substantially_explained_by_sampling_noise"
+            action = "avoid_profile_churn; confirm with longer non_overlapping_oos_windows"
+        elif np.isfinite(between_std) and between_std > target_std:
+            conclusion = "material_between_fold_instability_remains_after_noise_adjustment"
+            action = "target_score_reversal_mechanism_with_pre_registered_causal_hypothesis"
+        else:
+            conclusion = "noise_adjusted_fold_stability_near_target"
+            action = "do_not_retrain_for_std_alone; focus_on_threshold_transfer_and_future_oos"
+        summaries.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "fold_scope": str(fold_scope),
+                "fold_count": int(part["fold"].nunique()),
+                "observed_mean_rank_ic": float(observed.mean()) if len(observed) else np.nan,
+                "observed_std_rank_ic": observed_std,
+                "mean_fold_count": float(pd.to_numeric(part["count"], errors="coerce").mean()),
+                "independent_noise_floor_std": independent_noise,
+                "block_bootstrap_noise_floor_std": bootstrap_noise,
+                "estimated_between_fold_std": between_std,
+                "sampling_variance_fraction": sampling_fraction,
+                "observed_std_to_bootstrap_noise_ratio": ratio,
+                "target_rank_ic_std": target_std,
+                "target_below_independent_noise_floor": target_below_independent,
+                "target_below_block_bootstrap_noise_floor": target_below_bootstrap,
+                "positive_probability_mean": float(
+                    pd.to_numeric(part["bootstrap_positive_probability"], errors="coerce").mean()
+                ),
+                "diagnostic_conclusion": conclusion,
+                "recommended_action": action,
+                "block_length": block_length,
+                "bootstrap_repeats": repeats,
+            }
+        )
+    summary = (
+        pd.DataFrame(summaries, columns=summary_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope"])
+        .reset_index(drop=True)
+    )
+    return summary, by_fold
+
+
+def _rank_ic_uncertainty_markdown(summary: pd.DataFrame, by_fold: pd.DataFrame) -> str:
+    lines = ["# Rank IC Variance Decomposition", ""]
+    lines.append(
+        "This report separates observed fold-to-fold Rank IC variance from finite-sample uncertainty. "
+        "The moving-block bootstrap preserves short-range time dependence. It is a diagnostic and does "
+        "not replace the official Phase 1 Rank IC std gate."
+    )
+    if summary.empty:
+        lines.extend(["", "No Rank IC uncertainty rows were produced."])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "observed_std_rank_ic",
+        "independent_noise_floor_std",
+        "block_bootstrap_noise_floor_std",
+        "estimated_between_fold_std",
+        "sampling_variance_fraction",
+        "target_rank_ic_std",
+        "diagnostic_conclusion",
+        "recommended_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append(f"Fold-level uncertainty rows: {len(by_fold)}. See `rank_ic_sampling_uncertainty.csv`.")
+    return "\n".join(lines)
+
+
+def _write_rank_ic_uncertainty(path: Path, summary: pd.DataFrame, by_fold: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(path / "rank_ic_variance_decomposition.csv", index=False)
+    by_fold.to_csv(path / "rank_ic_sampling_uncertainty.csv", index=False)
+    (path / "rank_ic_variance_decomposition.md").write_text(
+        _rank_ic_uncertainty_markdown(summary, by_fold),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "rank_ic_variance_decomposition.json",
+        {"summary": summary.to_dict(orient="records"), "by_fold": by_fold.to_dict(orient="records")},
+    )
+
+
 def _selection_stats_for_mask(frame: pd.DataFrame, selected_mask: pd.Series) -> dict[str, float]:
     if frame.empty or "label" not in frame.columns:
         return {
@@ -6687,6 +6930,356 @@ def _write_threshold_score_quantile_review(path: Path, summary: pd.DataFrame, by
             "summary": summary.to_dict(orient="records"),
             "by_fold": by_fold.to_dict(orient="records"),
         },
+    )
+
+
+def _causal_score_quantile_mask(
+    validation_scores: pd.Series,
+    test_scores: pd.Series,
+    *,
+    selection_rate: float,
+    rolling_window: int,
+    min_history: int,
+) -> tuple[pd.Series, pd.Series]:
+    history = (
+        pd.to_numeric(validation_scores, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .tolist()
+    )
+    if rolling_window > 0:
+        history = history[-rolling_window:]
+    selections: list[bool] = []
+    thresholds: list[float] = []
+    for value in pd.to_numeric(test_scores, errors="coerce").tolist():
+        if len(history) < min_history or not np.isfinite(value):
+            thresholds.append(np.nan)
+            selections.append(False)
+        else:
+            threshold = float(np.quantile(np.asarray(history, dtype=float), 1.0 - selection_rate))
+            thresholds.append(threshold)
+            selections.append(bool(value >= threshold))
+        if np.isfinite(value):
+            history.append(float(value))
+            if rolling_window > 0 and len(history) > rolling_window:
+                history = history[-rolling_window:]
+    return (
+        pd.Series(selections, index=test_scores.index, dtype=bool),
+        pd.Series(thresholds, index=test_scores.index, dtype=float),
+    )
+
+
+def _causal_threshold_policy_frames(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    by_fold_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "fold",
+        "selection_rate_source",
+        "target_selection_rate",
+        "realized_selection_rate",
+        "mean_causal_threshold",
+        "threshold_std",
+        "history_rows",
+        "rolling_window",
+        "min_history",
+        "official_f1",
+        "official_pred_long_rate",
+        "test_f1",
+        "test_precision",
+        "test_recall",
+        "test_pred_long_rate",
+        "test_actual_long_rate",
+        "test_label_lift_vs_base",
+        "test_mean_forward_return",
+        "test_mean_tb_return",
+        "selection_guard",
+    ]
+    summary_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "fold_count",
+        "target_selection_rate_mean",
+        "realized_selection_rate_mean",
+        "test_f1_mean",
+        "test_precision_mean",
+        "test_recall_mean",
+        "test_pred_long_rate_mean",
+        "test_label_lift_vs_base_mean",
+        "test_mean_forward_return_mean",
+        "test_mean_tb_return_mean",
+        "official_f1_mean",
+        "f1_delta_vs_official",
+        "f1_pass_fold_rate",
+        "precision_pass_fold_rate",
+        "pred_rate_pass_fold_rate",
+        "positive_lift_fold_rate",
+        "positive_forward_return_fold_rate",
+        "causal_policy_passed_cv",
+        "diagnostic_outcome",
+        "recommended_action",
+        "selection_guard",
+    ]
+    cfg = _cfg(config, ["validation", "causal_threshold_policy"], {}) or {}
+    if not bool(cfg.get("enabled", True)):
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+    rolling_window = max(0, int(cfg.get("rolling_window", 1080)))
+    min_history = max(20, int(cfg.get("min_history", 256)))
+    configured_rates = cfg.get("selection_rates", [0.55, 0.60, 0.65, 0.70]) or []
+    fixed_rates = sorted(
+        {
+            float(value)
+            for value in configured_rates
+            if isinstance(value, (int, float)) and np.isfinite(float(value)) and 0.0 < float(value) < 1.0
+        }
+    )
+    min_long_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    min_precision = float(threshold_cfg.get("min_precision", 0.30))
+    rows: list[dict[str, Any]] = []
+
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        if not {"fold", "split", "label", "prob_long"}.issubset(predictions.columns):
+            continue
+        threshold_metrics = _entry_threshold_policy_frame(entry)
+        metric_by_fold = (
+            {int(row["fold"]): row.to_dict() for _, row in threshold_metrics.dropna(subset=["fold"]).iterrows()}
+            if not threshold_metrics.empty and "fold" in threshold_metrics.columns
+            else {}
+        )
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for fold_raw, fold_part in predictions.groupby("fold"):
+            fold = int(fold_raw)
+            validation = fold_part.loc[fold_part["split"].astype(str) == "val"].copy()
+            test = fold_part.loc[fold_part["split"].astype(str) == "test"].copy()
+            if validation.empty or test.empty:
+                continue
+            sort_column = "timestamp" if "timestamp" in test.columns else None
+            if sort_column:
+                validation = validation.sort_values(sort_column)
+                test = test.sort_values(sort_column)
+            validation = validation.replace([np.inf, -np.inf], np.nan).dropna(subset=["prob_long"]).copy()
+            test = test.replace([np.inf, -np.inf], np.nan).dropna(subset=["label", "prob_long"]).copy()
+            if len(validation) < min_history or test.empty:
+                continue
+            metrics_row = metric_by_fold.get(fold, {})
+            policies = [
+                {
+                    "policy_name": f"causal_fixed_top_{int(round(rate * 100)):02d}",
+                    "target_selection_rate": rate,
+                    "selection_rate_source": "configured_fixed_rate",
+                }
+                for rate in fixed_rates
+            ]
+            for source_name, threshold_column in [
+                ("validation_constrained_rate", "constrained_threshold"),
+                ("validation_official_rate", "official_threshold"),
+            ]:
+                threshold = _float(metrics_row, threshold_column)
+                if np.isfinite(threshold):
+                    val_rate = float(
+                        (
+                            pd.to_numeric(validation["prob_long"], errors="coerce")
+                            >= threshold
+                        ).mean()
+                    )
+                    if 0.0 < val_rate < 1.0:
+                        policies.append(
+                            {
+                                "policy_name": f"causal_{source_name}",
+                                "target_selection_rate": val_rate,
+                                "selection_rate_source": source_name,
+                            }
+                        )
+            for policy in policies:
+                rate = float(policy["target_selection_rate"])
+                selected_mask, thresholds = _causal_score_quantile_mask(
+                    validation["prob_long"],
+                    test["prob_long"],
+                    selection_rate=rate,
+                    rolling_window=rolling_window,
+                    min_history=min_history,
+                )
+                class_metrics = _classification_metrics_for_mask(test["label"], selected_mask)
+                selection_stats = _selection_stats_for_mask(test, selected_mask)
+                rows.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_type": candidate_type,
+                        "fold_scope": fold_scope,
+                        "policy_name": policy["policy_name"],
+                        "fold": fold,
+                        "selection_rate_source": policy["selection_rate_source"],
+                        "target_selection_rate": rate,
+                        "realized_selection_rate": class_metrics["pred_long_rate"],
+                        "mean_causal_threshold": float(thresholds.mean()) if thresholds.notna().any() else np.nan,
+                        "threshold_std": float(thresholds.std(ddof=0)) if thresholds.notna().any() else np.nan,
+                        "history_rows": int(len(validation)),
+                        "rolling_window": rolling_window,
+                        "min_history": min_history,
+                        "official_f1": _float(metrics_row, "test_f1_at_official_threshold"),
+                        "official_pred_long_rate": _float(
+                            metrics_row,
+                            "test_pred_long_rate_at_official_threshold",
+                        ),
+                        "test_f1": class_metrics["f1"],
+                        "test_precision": class_metrics["precision"],
+                        "test_recall": class_metrics["recall"],
+                        "test_pred_long_rate": class_metrics["pred_long_rate"],
+                        "test_actual_long_rate": selection_stats["actual_long_rate"],
+                        "test_label_lift_vs_base": selection_stats["label_lift_vs_base"],
+                        "test_mean_forward_return": selection_stats["mean_forward_return"],
+                        "test_mean_tb_return": selection_stats["mean_tb_return"],
+                        "selection_guard": "causal_past_scores_only_no_test_labels",
+                    }
+                )
+    if not rows:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+    by_fold = (
+        pd.DataFrame(rows, columns=by_fold_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "policy_name", "fold"])
+        .reset_index(drop=True)
+    )
+    summaries: list[dict[str, Any]] = []
+    for keys, part in by_fold.groupby(
+        ["candidate", "candidate_type", "fold_scope", "policy_name"],
+        dropna=False,
+    ):
+        candidate, candidate_type, fold_scope, policy_name = keys
+        f1 = pd.to_numeric(part["test_f1"], errors="coerce")
+        precision = pd.to_numeric(part["test_precision"], errors="coerce")
+        pred_rate = pd.to_numeric(part["test_pred_long_rate"], errors="coerce")
+        lift = pd.to_numeric(part["test_label_lift_vs_base"], errors="coerce")
+        fwd = pd.to_numeric(part["test_mean_forward_return"], errors="coerce")
+        official_f1 = pd.to_numeric(part["official_f1"], errors="coerce")
+        f1_pass_rate = float((f1 >= min_long_f1).mean()) if f1.notna().any() else np.nan
+        precision_pass_rate = float((precision >= min_precision).mean()) if precision.notna().any() else np.nan
+        pred_pass_rate = float((pred_rate <= max_pred_long_rate).mean()) if pred_rate.notna().any() else np.nan
+        policy_passed = bool(
+            np.isfinite(f1_pass_rate)
+            and f1_pass_rate >= 0.75
+            and np.isfinite(precision_pass_rate)
+            and precision_pass_rate >= 0.75
+            and np.isfinite(pred_pass_rate)
+            and pred_pass_rate >= 0.75
+        )
+        f1_mean = float(f1.mean()) if f1.notna().any() else np.nan
+        official_f1_mean = float(official_f1.mean()) if official_f1.notna().any() else np.nan
+        f1_delta = f1_mean - official_f1_mean if np.isfinite(f1_mean) and np.isfinite(official_f1_mean) else np.nan
+        if policy_passed and np.isfinite(f1_delta) and f1_delta > 0.005:
+            outcome = "causal_threshold_transfer_candidate"
+            action = "pre_register_for_future_unseen_oos; do_not_promote_from_seen_holdout"
+        elif np.isfinite(f1_mean) and f1_mean >= min_long_f1 and float(pred_rate.mean()) > max_pred_long_rate:
+            outcome = "causal_policy_too_broad"
+            action = "reject_policy; do_not_relax_pred_long_rate_guardrail"
+        elif np.isfinite(f1_mean) and f1_mean < min_long_f1:
+            outcome = "causal_threshold_transfer_insufficient"
+            action = "score_separation_remains_primary_f1_blocker"
+        else:
+            outcome = "monitor_no_clear_causal_threshold_fix"
+            action = "diagnostic_only"
+        summaries.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "fold_scope": str(fold_scope),
+                "policy_name": str(policy_name),
+                "fold_count": int(part["fold"].nunique()),
+                "target_selection_rate_mean": float(
+                    pd.to_numeric(part["target_selection_rate"], errors="coerce").mean()
+                ),
+                "realized_selection_rate_mean": float(pred_rate.mean()) if pred_rate.notna().any() else np.nan,
+                "test_f1_mean": f1_mean,
+                "test_precision_mean": float(precision.mean()) if precision.notna().any() else np.nan,
+                "test_recall_mean": float(pd.to_numeric(part["test_recall"], errors="coerce").mean()),
+                "test_pred_long_rate_mean": float(pred_rate.mean()) if pred_rate.notna().any() else np.nan,
+                "test_label_lift_vs_base_mean": float(lift.mean()) if lift.notna().any() else np.nan,
+                "test_mean_forward_return_mean": float(fwd.mean()) if fwd.notna().any() else np.nan,
+                "test_mean_tb_return_mean": float(
+                    pd.to_numeric(part["test_mean_tb_return"], errors="coerce").mean()
+                ),
+                "official_f1_mean": official_f1_mean,
+                "f1_delta_vs_official": f1_delta,
+                "f1_pass_fold_rate": f1_pass_rate,
+                "precision_pass_fold_rate": precision_pass_rate,
+                "pred_rate_pass_fold_rate": pred_pass_rate,
+                "positive_lift_fold_rate": float((lift > 1.0).mean()) if lift.notna().any() else np.nan,
+                "positive_forward_return_fold_rate": float((fwd > 0.0).mean()) if fwd.notna().any() else np.nan,
+                "causal_policy_passed_cv": policy_passed,
+                "diagnostic_outcome": outcome,
+                "recommended_action": action,
+                "selection_guard": "causal_past_scores_only_no_test_labels",
+            }
+        )
+    summary = (
+        pd.DataFrame(summaries, columns=summary_columns)
+        .sort_values(
+            ["candidate_type", "candidate", "fold_scope", "causal_policy_passed_cv", "test_f1_mean"],
+            ascending=[True, True, True, False, False],
+        )
+        .reset_index(drop=True)
+    )
+    return summary, by_fold
+
+
+def _causal_threshold_policy_markdown(summary: pd.DataFrame, by_fold: pd.DataFrame) -> str:
+    lines = ["# Causal Threshold Policy Review", ""]
+    lines.append(
+        "Each test decision uses only validation scores and earlier test scores. Test labels never set "
+        "the threshold. These policies remain CV diagnostics until pre-registered future unseen OOS confirms them."
+    )
+    if summary.empty:
+        lines.extend(["", "No causal threshold policy rows were produced."])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "policy_name",
+        "test_f1_mean",
+        "test_pred_long_rate_mean",
+        "f1_delta_vs_official",
+        "f1_pass_fold_rate",
+        "positive_forward_return_fold_rate",
+        "causal_policy_passed_cv",
+        "diagnostic_outcome",
+        "recommended_action",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append(f"Fold-level rows: {len(by_fold)}. See `causal_threshold_policy_by_fold.csv`.")
+    return "\n".join(lines)
+
+
+def _write_causal_threshold_policy(path: Path, summary: pd.DataFrame, by_fold: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(path / "causal_threshold_policy_summary.csv", index=False)
+    by_fold.to_csv(path / "causal_threshold_policy_by_fold.csv", index=False)
+    (path / "causal_threshold_policy.md").write_text(
+        _causal_threshold_policy_markdown(summary, by_fold),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "causal_threshold_policy.json",
+        {"summary": summary.to_dict(orient="records"), "by_fold": by_fold.to_dict(orient="records")},
     )
 
 
@@ -10690,6 +11283,14 @@ def _write_experiment_bundle(
         "threshold_score_quantile_review.md",
         "threshold_score_quantile_review.json",
         "threshold_score_quantile_by_fold.csv",
+        "rank_ic_variance_decomposition.csv",
+        "rank_ic_variance_decomposition.md",
+        "rank_ic_variance_decomposition.json",
+        "rank_ic_sampling_uncertainty.csv",
+        "causal_threshold_policy_summary.csv",
+        "causal_threshold_policy_by_fold.csv",
+        "causal_threshold_policy.md",
+        "causal_threshold_policy.json",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -10880,6 +11481,14 @@ def run_experiment_matrix(
         all_results,
         config,
     )
+    rank_ic_variance_decomposition, rank_ic_sampling_uncertainty = _rank_ic_uncertainty_frames(
+        all_results,
+        config,
+    )
+    causal_threshold_policy_summary, causal_threshold_policy_by_fold = _causal_threshold_policy_frames(
+        all_results,
+        config,
+    )
     payoff_alignment = _payoff_alignment_frame(all_results, [], config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(all_results, [], config)
@@ -10973,6 +11582,8 @@ def run_experiment_matrix(
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_threshold_score_quantile_review(run_dir, threshold_score_quantile_review, threshold_score_quantile_by_fold)
+    _write_rank_ic_uncertainty(run_dir, rank_ic_variance_decomposition, rank_ic_sampling_uncertainty)
+    _write_causal_threshold_policy(run_dir, causal_threshold_policy_summary, causal_threshold_policy_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     profile_delta = _profile_delta_vs_control(profile_results, settings["control_profile"])
@@ -11038,6 +11649,8 @@ def run_experiment_matrix(
         "threshold_policy_review": threshold_policy_review.to_dict(orient="records"),
         "threshold_transfer_review": threshold_transfer_review.to_dict(orient="records"),
         "threshold_score_quantile_review": threshold_score_quantile_review.to_dict(orient="records"),
+        "rank_ic_variance_decomposition": rank_ic_variance_decomposition.to_dict(orient="records"),
+        "causal_threshold_policy_summary": causal_threshold_policy_summary.to_dict(orient="records"),
         "payoff_alignment_summary": payoff_alignment_summary.to_dict(orient="records"),
         "payoff_policy_robustness_summary": payoff_policy_robustness_summary.to_dict(orient="records"),
         "recommendation": _recommendation_with_policy_guard(recommendation, settings),
@@ -11085,6 +11698,10 @@ def run_experiment_matrix(
         "threshold_transfer_by_fold": threshold_transfer_by_fold,
         "threshold_score_quantile_review": threshold_score_quantile_review,
         "threshold_score_quantile_by_fold": threshold_score_quantile_by_fold,
+        "rank_ic_variance_decomposition": rank_ic_variance_decomposition,
+        "rank_ic_sampling_uncertainty": rank_ic_sampling_uncertainty,
+        "causal_threshold_policy_summary": causal_threshold_policy_summary,
+        "causal_threshold_policy_by_fold": causal_threshold_policy_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
@@ -11346,6 +11963,14 @@ def write_experiment_diagnostics(
         entries,
         diagnostic_config,
     )
+    rank_ic_variance_decomposition, rank_ic_sampling_uncertainty = _rank_ic_uncertainty_frames(
+        entries,
+        diagnostic_config,
+    )
+    causal_threshold_policy_summary, causal_threshold_policy_by_fold = _causal_threshold_policy_frames(
+        entries,
+        diagnostic_config,
+    )
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
@@ -11373,6 +11998,8 @@ def write_experiment_diagnostics(
     decision["threshold_policy_review"] = threshold_policy_review.to_dict(orient="records")
     decision["threshold_transfer_review"] = threshold_transfer_review.to_dict(orient="records")
     decision["threshold_score_quantile_review"] = threshold_score_quantile_review.to_dict(orient="records")
+    decision["rank_ic_variance_decomposition"] = rank_ic_variance_decomposition.to_dict(orient="records")
+    decision["causal_threshold_policy_summary"] = causal_threshold_policy_summary.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -11410,6 +12037,16 @@ def write_experiment_diagnostics(
         report_dir,
         threshold_score_quantile_review,
         threshold_score_quantile_by_fold,
+    )
+    _write_rank_ic_uncertainty(
+        report_dir,
+        rank_ic_variance_decomposition,
+        rank_ic_sampling_uncertainty,
+    )
+    _write_causal_threshold_policy(
+        report_dir,
+        causal_threshold_policy_summary,
+        causal_threshold_policy_by_fold,
     )
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
@@ -11611,6 +12248,8 @@ def write_experiment_diagnostics(
     _write_threshold_policy_review(run_dir, threshold_policy_review)
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_threshold_score_quantile_review(run_dir, threshold_score_quantile_review, threshold_score_quantile_by_fold)
+    _write_rank_ic_uncertainty(run_dir, rank_ic_variance_decomposition, rank_ic_sampling_uncertainty)
+    _write_causal_threshold_policy(run_dir, causal_threshold_policy_summary, causal_threshold_policy_by_fold)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -11685,6 +12324,10 @@ def write_experiment_diagnostics(
         "threshold_transfer_by_fold": threshold_transfer_by_fold,
         "threshold_score_quantile_review": threshold_score_quantile_review,
         "threshold_score_quantile_by_fold": threshold_score_quantile_by_fold,
+        "rank_ic_variance_decomposition": rank_ic_variance_decomposition,
+        "rank_ic_sampling_uncertainty": rank_ic_sampling_uncertainty,
+        "causal_threshold_policy_summary": causal_threshold_policy_summary,
+        "causal_threshold_policy_by_fold": causal_threshold_policy_by_fold,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,

@@ -46,6 +46,9 @@ from yenibot.experiments import (
     _score_distribution_shift_frame,
     _score_distribution_shift_summary_frame,
     _bad_fold_signature_frame,
+    _causal_score_quantile_mask,
+    _causal_threshold_policy_frames,
+    _rank_ic_uncertainty_frames,
     _score_separation_forensics_frame,
     _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
@@ -884,6 +887,137 @@ def test_threshold_score_quantile_review_flags_scale_transfer_candidate() -> Non
     assert float(fixed["test_f1_mean"]) == pytest.approx(1.0)
     assert float(fixed["test_pred_long_rate_mean"]) == pytest.approx(0.5)
     assert "validation_official_rate_quantile" in set(summary["policy_name"])
+
+
+def test_causal_score_quantile_mask_is_unchanged_by_future_scores() -> None:
+    validation = pd.Series(np.linspace(0.05, 0.95, 100))
+    first_test = pd.Series([0.80, 0.20, 0.70], index=[10, 11, 12])
+    extended_test = pd.Series([0.80, 0.20, 0.70, 0.99, 0.01], index=[10, 11, 12, 13, 14])
+
+    first_mask, first_thresholds = _causal_score_quantile_mask(
+        validation,
+        first_test,
+        selection_rate=0.50,
+        rolling_window=100,
+        min_history=50,
+    )
+    extended_mask, extended_thresholds = _causal_score_quantile_mask(
+        validation,
+        extended_test,
+        selection_rate=0.50,
+        rolling_window=100,
+        min_history=50,
+    )
+
+    assert first_mask.tolist() == extended_mask.iloc[:3].tolist()
+    assert first_thresholds.tolist() == pytest.approx(extended_thresholds.iloc[:3].tolist())
+
+
+def test_causal_threshold_policy_uses_past_scores_only() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+            "causal_threshold_policy": {
+                "enabled": True,
+                "rolling_window": 100,
+                "min_history": 40,
+                "selection_rates": [0.50],
+            },
+        }
+    }
+    rows = []
+    for fold in range(2):
+        for split in ("val", "test"):
+            for idx, score in enumerate(np.linspace(0.01, 0.99, 80)):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-04-01") + pd.Timedelta(hours=fold * 200 + idx),
+                        "label": int(score >= 0.55),
+                        "prob_long": score,
+                        "forward_return": 0.002 if score >= 0.55 else -0.001,
+                        "tb_return": 0.003 if score >= 0.55 else 0.0,
+                    }
+                )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "threshold_metrics": pd.DataFrame(
+                [
+                    {
+                        "fold": fold,
+                        "official_threshold": 0.55,
+                        "constrained_threshold": 0.55,
+                        "test_f1_at_official_threshold": 1.0,
+                        "test_pred_long_rate_at_official_threshold": 0.45,
+                    }
+                    for fold in range(2)
+                ]
+            )
+        },
+    }
+
+    summary, by_fold = _causal_threshold_policy_frames([entry], config)
+
+    assert not summary.empty
+    assert not by_fold.empty
+    assert set(by_fold["selection_guard"]) == {"causal_past_scores_only_no_test_labels"}
+    assert "causal_fixed_top_50" in set(summary["policy_name"])
+    assert float(summary.loc[summary["policy_name"] == "causal_fixed_top_50", "test_f1_mean"].iloc[0]) > 0.80
+
+
+def test_rank_ic_uncertainty_reports_noise_adjusted_std() -> None:
+    config = {
+        "project": {"random_seed": 7},
+        "validation": {
+            "max_rank_ic_std": 0.03,
+            "rank_ic_uncertainty": {
+                "enabled": True,
+                "block_length": 8,
+                "bootstrap_repeats": 30,
+                "confidence_level": 0.90,
+                "random_seed": 7,
+            },
+        },
+    }
+    rows = []
+    rng = np.random.default_rng(9)
+    for fold in range(4):
+        scores = rng.normal(size=120)
+        returns = 0.15 * scores + rng.normal(size=120)
+        for idx, (score, forward_return) in enumerate(zip(scores, returns)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(hours=fold * 200 + idx),
+                    "prob_long": score,
+                    "forward_return": forward_return,
+                }
+            )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+    }
+
+    summary, by_fold = _rank_ic_uncertainty_frames([entry], config)
+
+    assert len(by_fold) == 4
+    row = summary.iloc[0]
+    assert row["block_bootstrap_noise_floor_std"] > 0
+    assert row["estimated_between_fold_std"] >= 0
+    assert bool(row["target_below_independent_noise_floor"]) is True
+    assert row["diagnostic_conclusion"] in {
+        "official_std_target_below_estimated_fold_measurement_noise",
+        "observed_std_substantially_explained_by_sampling_noise",
+        "material_between_fold_instability_remains_after_noise_adjustment",
+        "noise_adjusted_fold_stability_near_target",
+    }
 
 
 def test_score_separation_forensics_flags_bad_fold_signature() -> None:

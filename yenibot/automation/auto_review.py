@@ -183,6 +183,10 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "phase1_blocker_root_cause.csv",
         "threshold_oracle_gap.csv",
         "threshold_score_quantile_review.csv",
+        "rank_ic_variance_decomposition.csv",
+        "rank_ic_sampling_uncertainty.csv",
+        "causal_threshold_policy_summary.csv",
+        "causal_threshold_policy_by_fold.csv",
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
@@ -415,6 +419,12 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         advisories.append("selected_threshold_pred_long_rate_above_guardrail")
     if constrained_pred_rate is not None and constrained_pred_rate > 0.70:
         advisories.append("constrained_threshold_pred_long_rate_above_guardrail")
+    ic_uncertainty = review.get("rank_ic_uncertainty", {}).get("control", {}) or {}
+    if _to_bool(ic_uncertainty.get("target_below_block_bootstrap_noise_floor"), default=False):
+        advisories.append("rank_ic_std_target_below_estimated_fold_measurement_noise")
+    causal_threshold = review.get("causal_threshold_policy", {}) or {}
+    if int(causal_threshold.get("passed_policy_count") or 0) > 0:
+        advisories.append("causal_threshold_policy_cv_candidate_requires_future_unseen_oos")
     checks = [
         {
             "check": "report_complete",
@@ -635,6 +645,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     fold_stability_forensics = _read_csv(report_path / "fold_stability_forensics.csv")
     threshold_forensics = _read_csv(report_path / "threshold_forensics.csv")
     threshold_score_quantile = _read_csv(report_path / "threshold_score_quantile_review.csv")
+    rank_ic_variance = _read_csv(report_path / "rank_ic_variance_decomposition.csv")
+    causal_threshold_policy = _read_csv(report_path / "causal_threshold_policy_summary.csv")
     score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
@@ -649,6 +661,18 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     holdout_best = _best_holdout_rows(holdout)
     policy = _holdout_policy(report_path, decision)
     cv_promotable = _cv_promotable_candidates(full_frame, control_row)
+    control_rank_ic_variance = {}
+    if not rank_ic_variance.empty and "candidate" in rank_ic_variance.columns:
+        matched = rank_ic_variance.loc[
+            (rank_ic_variance["candidate"].astype(str) == control_profile)
+            & (
+                rank_ic_variance["fold_scope"].astype(str).eq("full")
+                if "fold_scope" in rank_ic_variance.columns
+                else True
+            )
+        ]
+        if not matched.empty:
+            control_rank_ic_variance = _json_ready(matched.iloc[0].to_dict())
     action, reasons = _next_action(
         missing_files=missing_files,
         missing_profiles=missing_profiles,
@@ -703,6 +727,21 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "best_test_f1_policy": _best_row(threshold_score_quantile, "test_f1_mean"),
             "best_f1_delta_policy": _best_row(threshold_score_quantile, "f1_delta_vs_official"),
             "policy_count": int(len(threshold_score_quantile)) if not threshold_score_quantile.empty else 0,
+        },
+        "rank_ic_uncertainty": {
+            "control": control_rank_ic_variance,
+            "profile_count": int(len(rank_ic_variance)) if not rank_ic_variance.empty else 0,
+        },
+        "causal_threshold_policy": {
+            "best_test_f1_policy": _best_row(causal_threshold_policy, "test_f1_mean"),
+            "best_f1_delta_policy": _best_row(causal_threshold_policy, "f1_delta_vs_official"),
+            "passed_policy_count": (
+                int(causal_threshold_policy["causal_policy_passed_cv"].map(_to_bool).sum())
+                if not causal_threshold_policy.empty
+                and "causal_policy_passed_cv" in causal_threshold_policy.columns
+                else 0
+            ),
+            "policy_count": int(len(causal_threshold_policy)) if not causal_threshold_policy.empty else 0,
         },
         "score_reversal_context": {
             "hypothesis_count": int(len(score_reversal_context)) if not score_reversal_context.empty else 0,
@@ -816,6 +855,14 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Best score-quantile policy by F1: `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('policy_name', '')}` "
         f"with F1 `{_fmt(review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('test_f1_mean'))}` "
         f"and outcome `{review.get('threshold_score_quantile', {}).get('best_test_f1_policy', {}).get('diagnostic_outcome', '')}`",
+        f"- IC block-bootstrap noise floor: `{_fmt(review.get('rank_ic_uncertainty', {}).get('control', {}).get('block_bootstrap_noise_floor_std'))}`",
+        f"- Noise-adjusted between-fold IC std: `{_fmt(review.get('rank_ic_uncertainty', {}).get('control', {}).get('estimated_between_fold_std'))}`",
+        f"- IC uncertainty conclusion: `{review.get('rank_ic_uncertainty', {}).get('control', {}).get('diagnostic_conclusion', '')}`",
+        f"- Causal threshold policies: `{review.get('causal_threshold_policy', {}).get('policy_count', 0)}`; "
+        f"CV-passed: `{review.get('causal_threshold_policy', {}).get('passed_policy_count', 0)}`",
+        f"- Best causal threshold policy: `{review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('policy_name', '')}` "
+        f"with F1 `{_fmt(review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('test_f1_mean'))}` "
+        f"and outcome `{review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('diagnostic_outcome', '')}`",
         f"- Score-reversal context hypotheses: `{review.get('score_reversal_context', {}).get('hypothesis_count', 0)}`",
         f"- Top context hypothesis: `{review.get('score_reversal_context', {}).get('top_hypothesis', {}).get('profile', '')}`",
         "",

@@ -1760,6 +1760,17 @@ validation:
   threshold_checks:
     max_pred_long_rate: 0.70
     min_precision: 0.30
+  rank_ic_uncertainty:
+    enabled: true
+    block_length: 24
+    bootstrap_repeats: 120
+    confidence_level: 0.95
+    random_seed: 42
+  causal_threshold_policy:
+    enabled: true
+    rolling_window: 1080
+    min_history: 256
+    selection_rates: [0.55, 0.60, 0.65, 0.70]
   policy_selection:
     threshold_caps: [0.30, 0.40, 0.50, 0.60, 0.70]
     max_selection_rate: 0.70
