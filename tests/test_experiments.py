@@ -52,12 +52,15 @@ from yenibot.experiments import (
     _rank_ic_stability_evidence_frames,
     _rank_ic_uncertainty_frames,
     _score_separation_forensics_frame,
+    _seed_audit_coverage_frame,
     _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
     _threshold_score_quantile_review_frames,
     _threshold_transfer_review_frames,
     _validation_charter_review_frame,
+    _validation_charter_proposal_frame,
+    _validate_requested_fold_ids,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -1180,6 +1183,75 @@ def test_validation_charter_flags_non_discriminative_legacy_targets() -> None:
     assert not review["automatic_gate_change_allowed"].astype(bool).any()
 
 
+def test_validation_charter_proposal_is_inactive_and_uses_skill_evidence() -> None:
+    rank_evidence = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "observed_mean_rank_ic": 0.06,
+                "observed_std_rank_ic": 0.07,
+                "positive_fold_fraction": 0.85,
+                "positive_fold_sign_test_pvalue": 0.001,
+                "random_effects_positive_all_blocks": True,
+            }
+        ]
+    )
+    classification = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "policy_name": "official_threshold",
+                "prauc_lift_vs_prevalence_mean": 1.12,
+                "precision_lift_vs_prevalence_mean": 1.10,
+                "f1_skill_vs_rate_matched_random_mean": 0.03,
+                "positive_f1_skill_vs_rate_random_fold_rate": 0.80,
+                "positive_forward_return_fold_rate": 0.70,
+                "pred_long_rate_mean": 0.64,
+                "f1_mean": 0.43,
+            }
+        ]
+    )
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_positive_ic_fraction": 0.75,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+            "classification_skill": {
+                "min_prauc_lift_vs_prevalence": 1.05,
+                "min_precision_lift_vs_prevalence": 1.05,
+                "min_f1_skill_vs_rate_random": 0.0,
+                "min_positive_forward_return_fold_rate": 0.60,
+            },
+            "charter_proposal": {
+                "enabled": True,
+                "version": "v4_draft",
+                "status": "proposed_not_active",
+                "min_positive_f1_skill_fold_fraction": 0.75,
+            },
+        }
+    }
+
+    proposal = _validation_charter_proposal_frame(
+        control_profile="control",
+        rank_ic_evidence=rank_evidence,
+        classification_skill_summary=classification,
+        config=config,
+    )
+
+    gates = proposal.loc[proposal["criterion_role"].eq("gate")]
+    assert not gates.empty
+    assert gates["evidence_passed"].astype(bool).all()
+    assert proposal["active_for_phase1_readiness"].eq(False).all()
+    assert proposal["official_gate_unchanged"].astype(bool).all()
+    assert set(proposal.loc[proposal["criterion_role"].eq("monitor"), "criterion"]) == {
+        "rank_ic_std",
+        "raw_long_f1",
+    }
+
+
 def test_score_separation_forensics_flags_bad_fold_signature() -> None:
     config = {
         "validation": {
@@ -2155,6 +2227,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
+    assert config["experiments"]["seed_audit"]["fold_ids"] == [0, 5, 10, 15, 20, 25, 30, 35]
+    assert config["experiments"]["seed_audit"]["min_temporal_span_fraction"] == 0.90
     notes = config["experiments"]["experiment_memory"]["reference_notes"]
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
@@ -2196,7 +2270,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert regime_threshold["enabled"] is True
     assert regime_threshold["min_regime_val_rows"] == 80
     assert regime_threshold["max_pred_long_rate"] == 0.70
-    assert {0, 2, 4, 8, 17, 21, 32, 39}.issubset(set(config["experiments"]["triage_fold_ids"]))
+    assert {0, 2, 4, 8, 17, 21, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
+    assert max(config["experiments"]["triage_fold_ids"]) == 35
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -4064,12 +4139,62 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert result["seed_ensemble"].loc[0, "seed_count"] == 2
     assert not diagnostics["seed_audit"].empty
     assert not diagnostics["seed_stability"].empty
+    assert diagnostics["seed_audit_coverage"]["coverage_passed"].all()
     assert not diagnostics["seed_ensemble"].empty
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_bundle_seeded.zip") as archive:
         names = set(archive.namelist())
     assert "seeded/seed_audit.csv" in names
+    assert "seeded/seed_audit_coverage.csv" in names
     assert "seeded/seed_stability.csv" in names
     assert "seeded/seed_ensemble.csv" in names
+
+
+def test_fold_plan_validation_rejects_unavailable_ids() -> None:
+    with pytest.raises(ValueError, match="never silently skipped"):
+        _validate_requested_fold_ids(
+            plan_name="seed audit",
+            requested_fold_ids=[0, 5, 9],
+            available_fold_ids=[0, 1, 2, 3, 4, 5],
+        )
+
+
+def test_seed_audit_coverage_reports_missing_and_invalid_folds() -> None:
+    predictions = pd.DataFrame(
+        {
+            "fold": [0, 0, 5, 5],
+            "split": ["test"] * 4,
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+        }
+    )
+    entries = [
+        {
+            "profile": "control",
+            "fold_scope": "full",
+            "predictions": pd.DataFrame({"fold": list(range(6))}),
+        },
+        {
+            "profile": "control",
+            "fold_scope": "seed_audit_seed_042",
+            "predictions": predictions,
+        },
+    ]
+    settings = {
+        "control_profile": "control",
+        "seed_audit": {
+            "enabled": True,
+            "profiles": ["control"],
+            "seeds": [42],
+            "fold_ids": [0, 5, 9],
+            "min_temporal_span_fraction": 0.8,
+        },
+    }
+
+    coverage = _seed_audit_coverage_frame(entries, settings)
+
+    assert coverage.loc[0, "invalid_configured_fold_ids"] == "9"
+    assert coverage.loc[0, "observed_fold_count"] == 2
+    assert bool(coverage.loc[0, "coverage_passed"]) is False
+    assert coverage.loc[0, "status"] == "invalid_configured_fold_ids"
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:

@@ -164,7 +164,9 @@ Required diagnostic artifacts include:
 - `causal_threshold_policy_by_fold.csv`
 - `classification_skill_summary.csv`
 - `classification_skill_by_fold.csv`
+- `seed_audit_coverage.csv`
 - `validation_charter_review.csv`
+- `validation_charter_proposal.csv`
 - `holdout_evaluation.csv`
 - `holdout_policy_decision.csv`
 - `future_oos_candidate_plan.csv`
@@ -196,9 +198,10 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
 5. IC uncertainty: use `rank_ic_variance_decomposition.csv`, `rank_ic_aggregate_evidence.csv`, and `rank_ic_block_sensitivity.csv` to separate finite-fold measurement noise from estimated between-fold instability. Require multi-block sensitivity and random-effects evidence before claiming that fold std reflects structural regime failure. Do not silently replace or relax the official std gate, but do not invent new profiles merely to chase an std target that is below the measured noise floor.
 6. Causal threshold transfer: use `causal_threshold_policy_summary.csv` to test thresholds formed from validation and past scores only. Full-test score quantiles remain diagnostic-only because they see the complete test score distribution.
 7. Classification skill: interpret F1 only beside the always-long F1, a rate-matched random F1, PRAUC divided by label prevalence, precision lift, prediction-rate guardrails, and selected forward return. Raw F1 alone is not evidence of predictive skill and must not justify promotion.
-8. Validation charter: use `validation_charter_review.csv` to identify statistically weak legacy targets. This report may recommend a formal charter review, but it must never change readiness gates automatically.
-9. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
-10. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
+8. Seed robustness: `seed_audit_coverage.csv` must prove that every configured seed fold exists, completed, and spans the available walk-forward history. Never silently ignore unavailable fold ids.
+9. Validation charter: use `validation_charter_review.csv` to identify statistically weak legacy targets and `validation_charter_proposal.csv` to organize an inactive replacement draft. Neither report may change readiness gates automatically.
+10. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
+11. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
 
 Do not chase every holdout-best row. A holdout-best row seen after the fact is a hypothesis generator only.
 
@@ -225,3 +228,4 @@ Always check `git status` before committing. Never revert user changes unless ex
 - Do not promote current-holdout winners without future unseen OOS confirmation.
 - Do not repeat historically rejected experiments without an explicit retest reason.
 - Do not silently relax criteria to force Phase 2.
+- Do not count a partial seed audit as complete. Validate configured fold ids against the current purged walk-forward fold universe before training starts.

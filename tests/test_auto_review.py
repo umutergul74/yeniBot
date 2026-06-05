@@ -286,6 +286,29 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "enabled": True,
+                "profile": control,
+                "seed": 42,
+                "available_fold_count": 8,
+                "configured_fold_count": 8,
+                "configured_fold_ids": "0,1,2,3,4,5,6,7",
+                "valid_configured_fold_ids": "0,1,2,3,4,5,6,7",
+                "invalid_configured_fold_ids": "",
+                "observed_fold_count": 8,
+                "observed_fold_ids": "0,1,2,3,4,5,6,7",
+                "missing_valid_fold_ids": "",
+                "temporal_span_fraction": 1.0,
+                "minimum_temporal_span_fraction": 0.8,
+                "first_available_fold_covered": True,
+                "last_available_fold_covered": True,
+                "coverage_passed": True,
+                "status": "passed",
+            }
+        ]
+    ).to_csv(path / "seed_audit_coverage.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "criterion": "rank_ic_std",
                 "control_profile": control,
                 "charter_review_recommended": True,
@@ -299,6 +322,24 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
             },
         ]
     ).to_csv(path / "validation_charter_review.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "proposal_version": "v4_draft",
+                "proposal_status": "proposed_not_active",
+                "active_for_phase1_readiness": False,
+                "criterion": "mean_rank_ic",
+                "criterion_role": "gate",
+                "comparison": ">=",
+                "proposed_target": 0.03,
+                "observed_value": 0.06,
+                "evidence_passed": True,
+                "evidence_source": "rank_ic_aggregate_evidence.csv",
+                "rationale": "Aggregate signal.",
+                "official_gate_unchanged": True,
+            }
+        ]
+    ).to_csv(path / "validation_charter_proposal.csv", index=False)
     pd.DataFrame(
         [
             {
@@ -373,7 +414,9 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["causal_threshold_policy"]["passed_policy_count"] == 1
     assert review["causal_threshold_policy"]["best_test_f1_policy"]["policy_name"] == "causal_fixed_top_60"
     assert review["classification_skill"]["control_official"]["always_long_f1_mean"] == 0.48
+    assert review["seed_audit_coverage"]["coverage_passed"] is True
     assert review["validation_charter_review"]["formal_revision_recommended"] is True
+    assert review["validation_charter_proposal"]["active_for_phase1_readiness"] is False
     assert review["score_reversal_context"]["hypothesis_count"] == 1
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]

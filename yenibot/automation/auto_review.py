@@ -191,7 +191,9 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "causal_threshold_policy_by_fold.csv",
         "classification_skill_summary.csv",
         "classification_skill_by_fold.csv",
+        "seed_audit_coverage.csv",
         "validation_charter_review.csv",
+        "validation_charter_proposal.csv",
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
@@ -413,6 +415,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
+    seed_coverage = review.get("seed_audit_coverage", {}) or {}
     official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
     advisories: list[str] = []
     if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
@@ -498,6 +501,13 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "value": control.get("stationarity_policy_passed"),
             "target": True,
             "blocker": "stationarity_policy_check_failed",
+        },
+        {
+            "check": "seed_audit_coverage",
+            "passed": bool(seed_coverage.get("coverage_passed", False)),
+            "value": seed_coverage.get("coverage_passed", False),
+            "target": True,
+            "blocker": "seed_audit_fold_coverage_incomplete",
         },
         {
             "check": "future_unseen_oos_ready",
@@ -670,7 +680,9 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     rank_ic_evidence = _read_csv(report_path / "rank_ic_aggregate_evidence.csv")
     causal_threshold_policy = _read_csv(report_path / "causal_threshold_policy_summary.csv")
     classification_skill = _read_csv(report_path / "classification_skill_summary.csv")
+    seed_audit_coverage = _read_csv(report_path / "seed_audit_coverage.csv")
     validation_charter = _read_csv(report_path / "validation_charter_review.csv")
+    validation_charter_proposal = _read_csv(report_path / "validation_charter_proposal.csv")
     score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
@@ -726,6 +738,11 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         ]
         if not matched.empty:
             control_classification_skill = _json_ready(matched.iloc[0].to_dict())
+    seed_coverage_passed = bool(
+        not seed_audit_coverage.empty
+        and "coverage_passed" in seed_audit_coverage.columns
+        and seed_audit_coverage["coverage_passed"].map(_to_bool).all()
+    )
     action, reasons = _next_action(
         missing_files=missing_files,
         missing_profiles=missing_profiles,
@@ -804,6 +821,15 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "control_official": control_classification_skill,
             "policy_count": int(len(classification_skill)) if not classification_skill.empty else 0,
         },
+        "seed_audit_coverage": {
+            "coverage_passed": seed_coverage_passed,
+            "rows": _records(seed_audit_coverage),
+            "failed_rows": (
+                _records(seed_audit_coverage.loc[~seed_audit_coverage["coverage_passed"].map(_to_bool)])
+                if not seed_audit_coverage.empty and "coverage_passed" in seed_audit_coverage.columns
+                else []
+            ),
+        },
         "validation_charter_review": {
             "rows": _records(validation_charter),
             "formal_revision_recommended": bool(
@@ -812,6 +838,26 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
                 and validation_charter["charter_review_recommended"].map(_to_bool).any()
             ),
             "automatic_gate_change_allowed": False,
+        },
+        "validation_charter_proposal": {
+            "rows": _records(validation_charter_proposal),
+            "proposal_status": (
+                str(validation_charter_proposal["proposal_status"].iloc[0])
+                if not validation_charter_proposal.empty
+                and "proposal_status" in validation_charter_proposal.columns
+                else "not_produced"
+            ),
+            "active_for_phase1_readiness": False,
+            "official_gate_unchanged": True,
+            "draft_evidence_gates_passed": bool(
+                not validation_charter_proposal.empty
+                and "criterion_role" in validation_charter_proposal.columns
+                and "evidence_passed" in validation_charter_proposal.columns
+                and validation_charter_proposal.loc[
+                    validation_charter_proposal["criterion_role"].astype(str).eq("gate"),
+                    "evidence_passed",
+                ].map(_to_bool).all()
+            ),
         },
         "score_reversal_context": {
             "hypothesis_count": int(len(score_reversal_context)) if not score_reversal_context.empty else 0,
@@ -951,6 +997,11 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"`{review.get('classification_skill', {}).get('control_official', {}).get('classification_conclusion', '')}`",
         f"- Formal validation charter review recommended: "
         f"`{review.get('validation_charter_review', {}).get('formal_revision_recommended', False)}`",
+        f"- Seed audit fold coverage passed: "
+        f"`{review.get('seed_audit_coverage', {}).get('coverage_passed', False)}`",
+        f"- Validation charter proposal status: "
+        f"`{review.get('validation_charter_proposal', {}).get('proposal_status', 'not_produced')}` "
+        f"(active: `{review.get('validation_charter_proposal', {}).get('active_for_phase1_readiness', False)}`)",
         f"- Score-reversal context hypotheses: `{review.get('score_reversal_context', {}).get('hypothesis_count', 0)}`",
         f"- Top context hypothesis: `{review.get('score_reversal_context', {}).get('top_hypothesis', {}).get('profile', '')}`",
         "",

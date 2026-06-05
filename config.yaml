@@ -1774,6 +1774,19 @@ validation:
     min_precision_lift_vs_prevalence: 1.05
     min_f1_skill_vs_rate_random: 0.00
     min_positive_forward_return_fold_rate: 0.60
+  charter_proposal:
+    enabled: true
+    version: v4_draft
+    status: proposed_not_active
+    min_mean_rank_ic: 0.03
+    min_positive_fold_fraction: 0.75
+    max_positive_fold_sign_test_pvalue: 0.01
+    min_prauc_lift_vs_prevalence: 1.05
+    min_precision_lift_vs_prevalence: 1.05
+    min_f1_skill_vs_rate_random: 0.00
+    min_positive_f1_skill_fold_fraction: 0.75
+    min_positive_forward_return_fold_fraction: 0.60
+    max_pred_long_rate: 0.70
   causal_threshold_policy:
     enabled: true
     rolling_window: 1080
@@ -1844,7 +1857,7 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles: []
-  triage_fold_ids: [0, 2, 4, 8, 13, 16, 17, 20, 21, 22, 23, 29, 32, 35, 36, 38, 39, 40, 41]
+  triage_fold_ids: [0, 2, 4, 8, 13, 16, 17, 20, 21, 22, 23, 29, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -2037,7 +2050,8 @@ experiments:
     profiles:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     seeds: [42, 43, 44]
-    fold_ids: [0, 13, 21, 29, 32, 35, 39, 41]
+    fold_ids: [0, 5, 10, 15, 20, 25, 30, 35]
+    min_temporal_span_fraction: 0.90
   promotion_gates:
     triage:
       min_mean_rank_ic_delta: 0.005

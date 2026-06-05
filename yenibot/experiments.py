@@ -48,7 +48,7 @@ from yenibot.diagnostics import (
     write_phase1_diagnostic_bundle,
 )
 from yenibot.features import filter_feature_columns, resolve_feature_profile, select_feature_columns
-from yenibot.training import run_walk_forward_training
+from yenibot.training import PurgedWalkForwardCV, run_walk_forward_training
 from yenibot.training.trainer import _add_regime_probs, _build_model, _device, _make_dataset, _predict_dataset
 
 
@@ -414,6 +414,64 @@ def experiment_settings(config: dict[str, Any]) -> dict[str, Any]:
     experiments["skipped_profiles"] = [*skipped_candidates, *skipped_always_full, *skipped_seed_profiles]
     experiments = _apply_experiment_policy_guard(experiments, config)
     return experiments
+
+
+def _available_walk_forward_fold_ids(n_rows: int, config: dict[str, Any]) -> list[int]:
+    cv_cfg = _cfg(config, ["walk_forward"], {}) or {}
+    cv = PurgedWalkForwardCV(
+        train_bars=int(cv_cfg["train_bars"]),
+        val_bars=int(cv_cfg["val_bars"]),
+        test_bars=int(cv_cfg["test_bars"]),
+        step_bars=int(cv_cfg["step_bars"]),
+        purge_bars=int(cv_cfg["purge_bars"]),
+        embargo_bars=int(cv_cfg["embargo_bars"]),
+    )
+    return [int(fold.fold) for fold in cv.split(int(n_rows))]
+
+
+def _validate_requested_fold_ids(
+    *,
+    plan_name: str,
+    requested_fold_ids: list[int] | None,
+    available_fold_ids: list[int],
+) -> None:
+    if requested_fold_ids is None:
+        return
+    requested = list(dict.fromkeys(int(fold_id) for fold_id in requested_fold_ids))
+    available = set(int(fold_id) for fold_id in available_fold_ids)
+    invalid = [fold_id for fold_id in requested if fold_id not in available]
+    if invalid:
+        available_range = (
+            f"{min(available)}..{max(available)}" if available else "none"
+        )
+        raise ValueError(
+            f"{plan_name} contains unavailable fold ids {invalid}. "
+            f"Available walk-forward folds are {available_range} ({len(available)} folds). "
+            "Update config.yaml before training; fold ids are never silently skipped."
+        )
+
+
+def _preflight_fold_plans(
+    frame: pd.DataFrame,
+    settings: dict[str, Any],
+    config: dict[str, Any],
+) -> list[int]:
+    available_fold_ids = _available_walk_forward_fold_ids(len(frame), config)
+    triage_fold_ids = [int(fold_id) for fold_id in settings.get("triage_fold_ids", [])]
+    _validate_requested_fold_ids(
+        plan_name="experiments.triage_fold_ids",
+        requested_fold_ids=triage_fold_ids or None,
+        available_fold_ids=available_fold_ids,
+    )
+    seed_cfg = settings.get("seed_audit", {}) or {}
+    if bool(seed_cfg.get("enabled", False)):
+        seed_fold_ids = [int(fold_id) for fold_id in seed_cfg.get("fold_ids", [])]
+        _validate_requested_fold_ids(
+            plan_name="experiments.seed_audit.fold_ids",
+            requested_fold_ids=seed_fold_ids or None,
+            available_fold_ids=available_fold_ids,
+        )
+    return available_fold_ids
 
 
 def _profile_requires_intrahour_features(config: dict[str, Any], profile: str) -> bool:
@@ -8198,6 +8256,292 @@ def _write_validation_charter_review(path: Path, frame: pd.DataFrame) -> None:
     )
 
 
+def _validation_charter_proposal_frame(
+    *,
+    control_profile: str,
+    rank_ic_evidence: pd.DataFrame,
+    classification_skill_summary: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "proposal_version",
+        "proposal_status",
+        "active_for_phase1_readiness",
+        "criterion",
+        "criterion_role",
+        "comparison",
+        "proposed_target",
+        "observed_value",
+        "evidence_passed",
+        "evidence_source",
+        "rationale",
+        "official_gate_unchanged",
+    ]
+    proposal = _cfg(config, ["validation", "charter_proposal"], {}) or {}
+    if not bool(proposal.get("enabled", True)):
+        return pd.DataFrame(columns=columns)
+    version = str(proposal.get("version", "v4_draft"))
+    status = str(proposal.get("status", "proposed_not_active"))
+    rows: list[dict[str, Any]] = []
+
+    rank = pd.DataFrame()
+    if not rank_ic_evidence.empty:
+        rank = rank_ic_evidence.loc[
+            (rank_ic_evidence["candidate"].astype(str) == str(control_profile))
+            & rank_ic_evidence["fold_scope"].astype(str).eq("full")
+        ]
+    if not rank.empty:
+        item = rank.iloc[0].to_dict()
+        rank_rules = [
+            (
+                "mean_rank_ic",
+                "gate",
+                ">=",
+                float(proposal.get("min_mean_rank_ic", _cfg(config, ["validation", "target_rank_ic"], 0.03))),
+                _float(item, "observed_mean_rank_ic"),
+                "Aggregate out-of-sample monotonic signal.",
+            ),
+            (
+                "positive_fold_fraction",
+                "gate",
+                ">=",
+                float(
+                    proposal.get(
+                        "min_positive_fold_fraction",
+                        _cfg(config, ["validation", "min_positive_ic_fraction"], 0.75),
+                    )
+                ),
+                _float(item, "positive_fold_fraction"),
+                "Signal should remain positive across market windows.",
+            ),
+            (
+                "positive_fold_sign_test_pvalue",
+                "gate",
+                "<=",
+                float(proposal.get("max_positive_fold_sign_test_pvalue", 0.01)),
+                _float(item, "positive_fold_sign_test_pvalue"),
+                "Fold positivity should be unlikely under a no-skill sign process.",
+            ),
+            (
+                "random_effects_positive_all_blocks",
+                "gate",
+                "==",
+                1.0,
+                float(bool(item.get("random_effects_positive_all_blocks", False))),
+                "Random-effects lower confidence bounds must stay positive across block assumptions.",
+            ),
+            (
+                "rank_ic_std",
+                "monitor",
+                "monitor_only",
+                np.nan,
+                _float(item, "observed_std_rank_ic"),
+                "Absolute fold std remains visible, but the draft does not promote it when its target is below measured noise.",
+            ),
+        ]
+        for criterion, role, comparison, target, observed, rationale in rank_rules:
+            if comparison == ">=":
+                passed = bool(np.isfinite(observed) and observed >= target)
+            elif comparison == "<=":
+                passed = bool(np.isfinite(observed) and observed <= target)
+            elif comparison == "==":
+                passed = bool(np.isfinite(observed) and observed == target)
+            else:
+                passed = np.nan
+            rows.append(
+                {
+                    "proposal_version": version,
+                    "proposal_status": status,
+                    "active_for_phase1_readiness": False,
+                    "criterion": criterion,
+                    "criterion_role": role,
+                    "comparison": comparison,
+                    "proposed_target": target,
+                    "observed_value": observed,
+                    "evidence_passed": passed,
+                    "evidence_source": "rank_ic_aggregate_evidence.csv",
+                    "rationale": rationale,
+                    "official_gate_unchanged": True,
+                }
+            )
+
+    classification = pd.DataFrame()
+    if not classification_skill_summary.empty:
+        classification = classification_skill_summary.loc[
+            (classification_skill_summary["candidate"].astype(str) == str(control_profile))
+            & classification_skill_summary["fold_scope"].astype(str).eq("full")
+            & classification_skill_summary["policy_name"].astype(str).eq("official_threshold")
+        ]
+    if not classification.empty:
+        item = classification.iloc[0].to_dict()
+        skill_cfg = _cfg(config, ["validation", "classification_skill"], {}) or {}
+        class_rules = [
+            (
+                "prauc_lift_vs_prevalence",
+                "gate",
+                ">=",
+                float(
+                    proposal.get(
+                        "min_prauc_lift_vs_prevalence",
+                        skill_cfg.get("min_prauc_lift_vs_prevalence", 1.05),
+                    )
+                ),
+                _float(item, "prauc_lift_vs_prevalence_mean"),
+                "PRAUC must exceed the class-prevalence no-skill baseline.",
+            ),
+            (
+                "precision_lift_vs_prevalence",
+                "gate",
+                ">=",
+                float(
+                    proposal.get(
+                        "min_precision_lift_vs_prevalence",
+                        skill_cfg.get("min_precision_lift_vs_prevalence", 1.05),
+                    )
+                ),
+                _float(item, "precision_lift_vs_prevalence_mean"),
+                "Selected longs must be more precise than unconditional prevalence.",
+            ),
+            (
+                "f1_skill_vs_rate_matched_random",
+                "gate",
+                ">",
+                float(
+                    proposal.get(
+                        "min_f1_skill_vs_rate_random",
+                        skill_cfg.get("min_f1_skill_vs_rate_random", 0.0),
+                    )
+                ),
+                _float(item, "f1_skill_vs_rate_matched_random_mean"),
+                "F1 must add value over random selection at the same prediction rate.",
+            ),
+            (
+                "positive_f1_skill_fold_fraction",
+                "gate",
+                ">=",
+                float(proposal.get("min_positive_f1_skill_fold_fraction", 0.75)),
+                _float(item, "positive_f1_skill_vs_rate_random_fold_rate"),
+                "Rate-normalized F1 skill should persist across folds.",
+            ),
+            (
+                "positive_forward_return_fold_fraction",
+                "gate",
+                ">=",
+                float(
+                    proposal.get(
+                        "min_positive_forward_return_fold_fraction",
+                        skill_cfg.get("min_positive_forward_return_fold_rate", 0.60),
+                    )
+                ),
+                _float(item, "positive_forward_return_fold_rate"),
+                "Selected rows should have positive realized forward return in most folds.",
+            ),
+            (
+                "prediction_long_rate",
+                "gate",
+                "<=",
+                float(
+                    proposal.get(
+                        "max_pred_long_rate",
+                        _cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70),
+                    )
+                ),
+                _float(item, "pred_long_rate_mean"),
+                "Classification skill cannot come from predicting nearly every row as long.",
+            ),
+            (
+                "raw_long_f1",
+                "monitor",
+                "monitor_only",
+                float(_cfg(config, ["validation", "min_long_f1"], 0.45)),
+                _float(item, "f1_mean"),
+                "Raw F1 stays reported, but the draft interprets it beside rate-matched no-skill baselines.",
+            ),
+        ]
+        for criterion, role, comparison, target, observed, rationale in class_rules:
+            if comparison == ">=":
+                passed = bool(np.isfinite(observed) and observed >= target)
+            elif comparison == ">":
+                passed = bool(np.isfinite(observed) and observed > target)
+            elif comparison == "<=":
+                passed = bool(np.isfinite(observed) and observed <= target)
+            else:
+                passed = np.nan
+            rows.append(
+                {
+                    "proposal_version": version,
+                    "proposal_status": status,
+                    "active_for_phase1_readiness": False,
+                    "criterion": criterion,
+                    "criterion_role": role,
+                    "comparison": comparison,
+                    "proposed_target": target,
+                    "observed_value": observed,
+                    "evidence_passed": passed,
+                    "evidence_source": "classification_skill_summary.csv",
+                    "rationale": rationale,
+                    "official_gate_unchanged": True,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _validation_charter_proposal_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Validation Charter Proposal", ""]
+    lines.append(
+        "This is an inactive governance draft. It organizes statistically interpretable companion evidence "
+        "but does not alter the official Phase 1 gates or authorize Phase 2."
+    )
+    if frame.empty:
+        lines.extend(["", "No proposal rows were produced."])
+        return "\n".join(lines)
+    lines.extend(["", "| " + " | ".join(frame.columns) + " |"])
+    lines.append("| " + " | ".join(["---"] * len(frame.columns)) + " |")
+    for _, row in frame.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in frame.columns) + " |")
+    gate_rows = frame.loc[frame["criterion_role"].astype(str).eq("gate")]
+    passed = bool(not gate_rows.empty and gate_rows["evidence_passed"].astype(bool).all())
+    lines.extend(
+        [
+            "",
+            f"- Draft evidence gates passed: `{passed}`",
+            "- Active for Phase 1 readiness: `False`",
+            "- Official gates changed: `False`",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_validation_charter_proposal(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "validation_charter_proposal.csv", index=False)
+    (path / "validation_charter_proposal.md").write_text(
+        _validation_charter_proposal_markdown(frame),
+        encoding="utf-8",
+    )
+    gate_rows = (
+        frame.loc[frame["criterion_role"].astype(str).eq("gate")]
+        if not frame.empty and "criterion_role" in frame.columns
+        else pd.DataFrame()
+    )
+    _write_json(
+        path / "validation_charter_proposal.json",
+        {
+            "proposal_status": (
+                str(frame["proposal_status"].iloc[0])
+                if not frame.empty and "proposal_status" in frame.columns
+                else "not_produced"
+            ),
+            "active_for_phase1_readiness": False,
+            "official_gate_unchanged": True,
+            "draft_evidence_gates_passed": bool(
+                not gate_rows.empty and gate_rows["evidence_passed"].astype(bool).all()
+            ),
+            "rows": frame.to_dict(orient="records"),
+        },
+    )
+
+
 def _score_ks_statistic(positive_scores: pd.Series, negative_scores: pd.Series) -> float:
     pos = pd.to_numeric(positive_scores, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
     neg = pd.to_numeric(negative_scores, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy()
@@ -11300,6 +11644,170 @@ def _seed_audit_entries_to_frames(entries: list[dict[str, Any]]) -> tuple[pd.Dat
     return seed_audit, _seed_stability_frame(seed_audit)
 
 
+def _available_fold_ids_from_entries(
+    entries: list[dict[str, Any]],
+    control_profile: str,
+) -> list[int]:
+    preferred = [
+        entry
+        for entry in entries
+        if str(entry.get("profile", "")) == str(control_profile)
+        and str(entry.get("fold_scope", "")) == "full"
+    ]
+    candidates = preferred or [
+        entry
+        for entry in entries
+        if str(entry.get("fold_scope", "")) == "full"
+    ]
+    fold_ids: set[int] = set()
+    for entry in candidates:
+        predictions = entry.get("predictions")
+        if isinstance(predictions, pd.DataFrame) and not predictions.empty and "fold" in predictions.columns:
+            fold_ids.update(
+                int(value)
+                for value in pd.to_numeric(predictions["fold"], errors="coerce").dropna().unique()
+            )
+    return sorted(fold_ids)
+
+
+def _seed_audit_coverage_frame(
+    entries: list[dict[str, Any]],
+    settings: dict[str, Any],
+    *,
+    available_fold_ids: list[int] | None = None,
+) -> pd.DataFrame:
+    columns = [
+        "enabled",
+        "profile",
+        "seed",
+        "available_fold_count",
+        "configured_fold_count",
+        "configured_fold_ids",
+        "valid_configured_fold_ids",
+        "invalid_configured_fold_ids",
+        "observed_fold_count",
+        "observed_fold_ids",
+        "missing_valid_fold_ids",
+        "temporal_span_fraction",
+        "minimum_temporal_span_fraction",
+        "first_available_fold_covered",
+        "last_available_fold_covered",
+        "coverage_passed",
+        "status",
+    ]
+    seed_cfg = settings.get("seed_audit", {}) or {}
+    enabled = bool(seed_cfg.get("enabled", False))
+    if not enabled:
+        return pd.DataFrame(
+            [
+                {
+                    "enabled": False,
+                    "coverage_passed": True,
+                    "status": "disabled",
+                }
+            ],
+            columns=columns,
+        )
+
+    available = sorted(
+        set(
+            int(fold_id)
+            for fold_id in (
+                available_fold_ids
+                if available_fold_ids is not None
+                else _available_fold_ids_from_entries(entries, str(settings.get("control_profile", "")))
+            )
+        )
+    )
+    if not available:
+        observed_universe: set[int] = set()
+        for entry in entries:
+            predictions = entry.get("predictions")
+            if isinstance(predictions, pd.DataFrame) and not predictions.empty and "fold" in predictions.columns:
+                observed_universe.update(
+                    int(value)
+                    for value in pd.to_numeric(predictions["fold"], errors="coerce").dropna().unique()
+                )
+        available = sorted(observed_universe)
+    configured = list(
+        dict.fromkeys(int(fold_id) for fold_id in seed_cfg.get("fold_ids", []) or available)
+    )
+    available_set = set(available)
+    valid = [fold_id for fold_id in configured if fold_id in available_set]
+    invalid = [fold_id for fold_id in configured if fold_id not in available_set]
+    min_span = float(seed_cfg.get("min_temporal_span_fraction", 0.80))
+    if valid and available and len(available) == 1:
+        span = 1.0
+    elif valid and available:
+        span = float((max(valid) - min(valid)) / (max(available) - min(available)))
+    else:
+        span = 0.0
+    entry_lookup = {
+        (str(entry.get("profile", "")), _seed_from_scope(str(entry.get("fold_scope", "")))): entry
+        for entry in entries
+        if _seed_from_scope(str(entry.get("fold_scope", ""))) is not None
+    }
+    rows: list[dict[str, Any]] = []
+    profiles = [str(profile) for profile in seed_cfg.get("profiles", []) or [settings.get("control_profile", "")]]
+    seeds = [int(seed) for seed in seed_cfg.get("seeds", []) or []]
+    for profile in profiles:
+        for seed in seeds:
+            entry = entry_lookup.get((profile, seed))
+            observed: list[int] = []
+            if entry is not None:
+                predictions = entry.get("predictions")
+                if isinstance(predictions, pd.DataFrame) and not predictions.empty and "fold" in predictions.columns:
+                    observed = sorted(
+                        set(
+                            int(value)
+                            for value in pd.to_numeric(predictions["fold"], errors="coerce").dropna().unique()
+                        )
+                    )
+            missing = [fold_id for fold_id in valid if fold_id not in set(observed)]
+            first_covered = bool(available and min(available) in valid)
+            last_covered = bool(available and max(available) in valid)
+            passed = bool(
+                available
+                and not invalid
+                and not missing
+                and span >= min_span
+                and first_covered
+                and last_covered
+            )
+            if invalid:
+                status = "invalid_configured_fold_ids"
+            elif missing:
+                status = "incomplete_seed_fold_outputs"
+            elif span < min_span or not first_covered or not last_covered:
+                status = "insufficient_temporal_coverage"
+            elif not available:
+                status = "available_fold_universe_missing"
+            else:
+                status = "passed"
+            rows.append(
+                {
+                    "enabled": True,
+                    "profile": profile,
+                    "seed": seed,
+                    "available_fold_count": len(available),
+                    "configured_fold_count": len(configured),
+                    "configured_fold_ids": ",".join(str(value) for value in configured),
+                    "valid_configured_fold_ids": ",".join(str(value) for value in valid),
+                    "invalid_configured_fold_ids": ",".join(str(value) for value in invalid),
+                    "observed_fold_count": len(observed),
+                    "observed_fold_ids": ",".join(str(value) for value in observed),
+                    "missing_valid_fold_ids": ",".join(str(value) for value in missing),
+                    "temporal_span_fraction": span,
+                    "minimum_temporal_span_fraction": min_span,
+                    "first_available_fold_covered": first_covered,
+                    "last_available_fold_covered": last_covered,
+                    "coverage_passed": passed,
+                    "status": status,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _seed_stability_frame(seed_audit: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "profile",
@@ -11397,13 +11905,51 @@ def _seed_audit_markdown(seed_audit: pd.DataFrame, seed_stability: pd.DataFrame)
     return "\n".join(lines)
 
 
-def _write_seed_audit_files(path: Path, seed_audit: pd.DataFrame, seed_stability: pd.DataFrame) -> None:
+def _seed_audit_coverage_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Seed Audit Coverage", ""]
+    lines.append(
+        "Configured seed folds are checked against the available purged walk-forward fold universe. "
+        "Unavailable or missing folds are never treated as completed coverage."
+    )
+    if frame.empty:
+        lines.extend(["", "No seed coverage rows were produced."])
+        return "\n".join(lines)
+    lines.extend(["", "| " + " | ".join(frame.columns) + " |"])
+    lines.append("| " + " | ".join(["---"] * len(frame.columns)) + " |")
+    for _, row in frame.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in frame.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_seed_audit_files(
+    path: Path,
+    seed_audit: pd.DataFrame,
+    seed_stability: pd.DataFrame,
+    seed_coverage: pd.DataFrame | None = None,
+) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    coverage = seed_coverage if seed_coverage is not None else pd.DataFrame()
     seed_audit.to_csv(path / "seed_audit.csv", index=False)
     seed_stability.to_csv(path / "seed_stability.csv", index=False)
+    coverage.to_csv(path / "seed_audit_coverage.csv", index=False)
     (path / "seed_audit.md").write_text(_seed_audit_markdown(seed_audit, seed_stability), encoding="utf-8")
+    (path / "seed_audit_coverage.md").write_text(
+        _seed_audit_coverage_markdown(coverage),
+        encoding="utf-8",
+    )
     _write_json(path / "seed_audit.json", {"rows": seed_audit.to_dict(orient="records")})
     _write_json(path / "seed_stability.json", {"rows": seed_stability.to_dict(orient="records")})
+    _write_json(
+        path / "seed_audit_coverage.json",
+        {
+            "coverage_passed": bool(
+                not coverage.empty and coverage["coverage_passed"].astype(bool).all()
+            )
+            if "coverage_passed" in coverage.columns
+            else False,
+            "rows": coverage.to_dict(orient="records"),
+        },
+    )
 
 
 def _seed_from_scope(fold_scope: str) -> int | None:
@@ -12081,6 +12627,9 @@ def _write_experiment_bundle(
         "seed_audit.csv",
         "seed_audit.md",
         "seed_audit.json",
+        "seed_audit_coverage.csv",
+        "seed_audit_coverage.md",
+        "seed_audit_coverage.json",
         "seed_stability.csv",
         "seed_stability.json",
         "seed_ensemble.csv",
@@ -12217,6 +12766,9 @@ def _write_experiment_bundle(
         "validation_charter_review.csv",
         "validation_charter_review.md",
         "validation_charter_review.json",
+        "validation_charter_proposal.csv",
+        "validation_charter_proposal.md",
+        "validation_charter_proposal.json",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -12274,6 +12826,7 @@ def run_experiment_matrix(
     frame = _selection_frame_before_holdout(frame, settings)
     settings = _preflight_experiment_profiles(settings, frame, config)
     settings = _apply_experiment_policy_guard(settings, config)
+    available_fold_ids = _preflight_fold_plans(frame, settings, config)
     signature = _experiment_signature(config, settings)
     signature_hash = _hash_payload(signature)
     run_id, run_id_source = resolve_experiment_run_id(checkpoint_dir, config, settings, run_id)
@@ -12374,6 +12927,11 @@ def run_experiment_matrix(
     executed_results = [result for result in [*profile_results, *seed_results] if not bool(result.get("skipped", False))]
     skipped_results = [result for result in [*profile_results, *seed_results] if bool(result.get("skipped", False))]
     seed_audit, seed_stability = _seed_audit_entries_to_frames(all_results)
+    seed_audit_coverage = _seed_audit_coverage_frame(
+        all_results,
+        settings,
+        available_fold_ids=available_fold_ids,
+    )
     seed_ensemble = _seed_ensemble_frame(all_results)
     profile_blend = _profile_blend_frame(all_results)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
@@ -12477,7 +13035,7 @@ def run_experiment_matrix(
         settings=settings,
     )
     _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
-    _write_seed_audit_files(run_dir, seed_audit, seed_stability)
+    _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
@@ -12539,6 +13097,7 @@ def run_experiment_matrix(
         "full_profiles": full_profiles,
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
+        "seed_audit_coverage": seed_audit_coverage.to_dict(orient="records"),
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
         **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
         "executed_training_scopes": training_execution["executed_training_scopes"],
@@ -12591,6 +13150,7 @@ def run_experiment_matrix(
         "profile_delta": profile_delta,
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
+        "seed_audit_coverage": seed_audit_coverage,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
@@ -12740,6 +13300,7 @@ def write_experiment_diagnostics(
     comparison = _comparison_frame([*triage_rows, *full_rows])
     profile_delta = _profile_delta_vs_control(profile_entries, settings["control_profile"])
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
+    seed_audit_coverage = _seed_audit_coverage_frame(entries, settings)
     seed_ensemble = _seed_ensemble_frame(entries)
     profile_blend = _profile_blend_frame(entries)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
@@ -12912,6 +13473,12 @@ def write_experiment_diagnostics(
         classification_skill_summary=classification_skill_summary,
         config=diagnostic_config,
     )
+    validation_charter_proposal = _validation_charter_proposal_frame(
+        control_profile=settings["control_profile"],
+        rank_ic_evidence=rank_ic_aggregate_evidence,
+        classification_skill_summary=classification_skill_summary,
+        config=diagnostic_config,
+    )
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
     payoff_policy_robustness = _payoff_policy_robustness_frame(entries, holdout_entries, diagnostic_config)
@@ -12944,6 +13511,8 @@ def write_experiment_diagnostics(
     decision["causal_threshold_policy_summary"] = causal_threshold_policy_summary.to_dict(orient="records")
     decision["classification_skill_summary"] = classification_skill_summary.to_dict(orient="records")
     decision["validation_charter_review"] = validation_charter_review.to_dict(orient="records")
+    decision["validation_charter_proposal"] = validation_charter_proposal.to_dict(orient="records")
+    decision["seed_audit_coverage"] = seed_audit_coverage.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -12958,7 +13527,7 @@ def write_experiment_diagnostics(
     _write_decision_files(report_dir, comparison, decision)
     _write_json(report_dir / "training_execution_summary.json", training_execution)
     _write_profile_delta(report_dir, profile_delta)
-    _write_seed_audit_files(report_dir, seed_audit, seed_stability)
+    _write_seed_audit_files(report_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
@@ -13003,6 +13572,7 @@ def write_experiment_diagnostics(
         classification_skill_by_fold,
     )
     _write_validation_charter_review(report_dir, validation_charter_review)
+    _write_validation_charter_proposal(report_dir, validation_charter_proposal)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
@@ -13172,7 +13742,7 @@ def write_experiment_diagnostics(
     _write_decision_files(run_dir, comparison, decision)
     _write_json(_training_execution_summary_path(run_dir), training_execution)
     _write_profile_delta(run_dir, profile_delta)
-    _write_seed_audit_files(run_dir, seed_audit, seed_stability)
+    _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
@@ -13208,6 +13778,7 @@ def write_experiment_diagnostics(
     _write_causal_threshold_policy(run_dir, causal_threshold_policy_summary, causal_threshold_policy_by_fold)
     _write_classification_skill(run_dir, classification_skill_summary, classification_skill_by_fold)
     _write_validation_charter_review(run_dir, validation_charter_review)
+    _write_validation_charter_proposal(run_dir, validation_charter_proposal)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -13249,6 +13820,7 @@ def write_experiment_diagnostics(
         "profile_delta": profile_delta,
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
+        "seed_audit_coverage": seed_audit_coverage,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
@@ -13291,6 +13863,7 @@ def write_experiment_diagnostics(
         "classification_skill_summary": classification_skill_summary,
         "classification_skill_by_fold": classification_skill_by_fold,
         "validation_charter_review": validation_charter_review,
+        "validation_charter_proposal": validation_charter_proposal,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
