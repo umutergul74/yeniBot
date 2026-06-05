@@ -1822,7 +1822,6 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["full_cv_profiles"] == "auto"
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
-        "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 2
     assert config["experiments"]["candidate_profiles"] == []
@@ -1840,7 +1839,6 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "blend_control_long_pressure_65_35",
-        "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -1890,7 +1888,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "failed CV stability" in notes["baseline_control_plus_futures_positioning_context"]
     assert "did not clear" in notes["baseline_control_plus_futures_funding_context"]
     assert "failed to improve control" in notes["baseline_stable_plus_4h_taker_mean12_ltr_context"]
-    assert "stable-tanh" in notes["baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"]
+    assert "rejected" in notes["baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"]
     reliability = config["validation"]["fold_reliability_gates"]
     assert reliability["enabled"] is True
     assert reliability["min_accepted_folds"] == 12
@@ -2285,9 +2283,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_plus_15m_absorption_efficiency_combo",
     ]:
         assert profile_name in config["experiments"]["experiment_memory"]["rejected_profiles"]
-    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" not in config["experiments"]["experiment_memory"]["rejected_profiles"]
-    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" in config["experiments"]["always_full_profiles"]
-    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" in config["experiments"]["policy_review"]["future_oos_candidates"]
+    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    assert "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh" not in config["experiments"]["always_full_profiles"]
+    assert (
+        "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"
+        not in config["experiments"]["policy_review"]["future_oos_candidates"]
+    )
+    assert config["validation"]["score_reversal_context"]["proposed_profiles"] == []
 
     intrahour_late = profile_config(config, "baseline_stable_plus_15m_late_order_flow")
     intrahour_late_columns = filter_feature_columns(columns, intrahour_late)

@@ -93,6 +93,7 @@ Known lessons:
 - Run `20260528_193824` also identified bad-fold score separation compression/reversal as the main actionable failure mode; prioritize narrow score-separation training or feature hypotheses over broad profile search.
 - Run `20260528_214759` showed that pairwise label-margin loss weight `0.05` improved top-10 lift but worsened mean IC, Rank IC std, positive-fold coverage, worst folds, and official F1. Do not repeat that exact label-margin objective; the next score-separation experiment should target forward-return ordering instead of class-only separation.
 - Run `20260604_141520` showed that the forward-return pairwise loss candidate also failed: it lowered mean IC, worsened std, reduced positive-fold coverage, lowered official F1, and weakened top-10 lift versus the control. The next step is root-cause diagnostics, not another loss-only candidate.
+- Run `20260605_141414` showed that stable-tanh taker-flow gating by stable large-trade context also failed: mean IC fell to `0.0393`, std rose to `0.0962`, positive folds fell to `66.7%`, and the low-pass guard became the strongest reversal suspect. Do not retry direct deletion, raw interaction, or this guarded-transform family without a distinct causal mechanism.
 
 ## Holdout And Future-OOS Policy
 
