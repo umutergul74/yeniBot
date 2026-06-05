@@ -185,8 +185,13 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "threshold_score_quantile_review.csv",
         "rank_ic_variance_decomposition.csv",
         "rank_ic_sampling_uncertainty.csv",
+        "rank_ic_aggregate_evidence.csv",
+        "rank_ic_block_sensitivity.csv",
         "causal_threshold_policy_summary.csv",
         "causal_threshold_policy_by_fold.csv",
+        "classification_skill_summary.csv",
+        "classification_skill_by_fold.csv",
+        "validation_charter_review.csv",
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
@@ -404,7 +409,6 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     std_rank_ic = _metric(control, "std_rank_ic")
     positive_ic_fraction = _metric(control, "positive_ic_fraction")
     fixed_050_f1 = _metric(control, "mean_long_f1")
-    selected_f1 = _metric(control, "test_f1_at_selected_threshold")
     constrained_f1 = _metric(control, "test_f1_at_constrained_threshold")
     selected_pred_rate = _metric(control, "test_pred_long_rate_at_selected_threshold")
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
@@ -422,6 +426,17 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     ic_uncertainty = review.get("rank_ic_uncertainty", {}).get("control", {}) or {}
     if _to_bool(ic_uncertainty.get("target_below_block_bootstrap_noise_floor"), default=False):
         advisories.append("rank_ic_std_target_below_estimated_fold_measurement_noise")
+    ic_evidence = review.get("rank_ic_stability_evidence", {}).get("control", {}) or {}
+    if _to_bool(ic_evidence.get("target_below_noise_floor_all_blocks"), default=False):
+        advisories.append("rank_ic_std_legacy_gate_requires_governance_review")
+    classification_skill = review.get("classification_skill", {}).get("control_official", {}) or {}
+    if not _to_bool(
+        classification_skill.get("f1_target_exceeds_always_long_baseline"),
+        default=True,
+    ):
+        advisories.append("raw_f1_target_below_always_long_no_skill_baseline")
+    if not _to_bool(classification_skill.get("skill_evidence_passed"), default=False):
+        advisories.append("classification_skill_under_guardrails_not_yet_demonstrated")
     causal_threshold = review.get("causal_threshold_policy", {}) or {}
     if int(causal_threshold.get("passed_policy_count") or 0) > 0:
         advisories.append("causal_threshold_policy_cv_candidate_requires_future_unseen_oos")
@@ -598,6 +613,12 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         }
     ):
         recommended_focus.append("improve_threshold_constrained_f1_without_reusing_holdout")
+    if "rank_ic_std_legacy_gate_requires_governance_review" in advisories:
+        recommended_focus.append("review_rank_ic_std_charter_with_multi_block_random_effects_evidence")
+    if "raw_f1_target_below_always_long_no_skill_baseline" in advisories:
+        recommended_focus.append("review_f1_charter_with_no_skill_and_payoff_companion_metrics")
+    if "classification_skill_under_guardrails_not_yet_demonstrated" in advisories:
+        recommended_focus.append("improve_classification_skill_under_prediction_rate_guardrail")
     if "future_unseen_oos_not_ready" in blockers:
         recommended_focus.append("wait_for_new_unseen_bars_before_any_promotion")
     return {
@@ -646,7 +667,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     threshold_forensics = _read_csv(report_path / "threshold_forensics.csv")
     threshold_score_quantile = _read_csv(report_path / "threshold_score_quantile_review.csv")
     rank_ic_variance = _read_csv(report_path / "rank_ic_variance_decomposition.csv")
+    rank_ic_evidence = _read_csv(report_path / "rank_ic_aggregate_evidence.csv")
     causal_threshold_policy = _read_csv(report_path / "causal_threshold_policy_summary.csv")
+    classification_skill = _read_csv(report_path / "classification_skill_summary.csv")
+    validation_charter = _read_csv(report_path / "validation_charter_review.csv")
     score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
@@ -673,6 +697,35 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         ]
         if not matched.empty:
             control_rank_ic_variance = _json_ready(matched.iloc[0].to_dict())
+    control_rank_ic_evidence = {}
+    if not rank_ic_evidence.empty and "candidate" in rank_ic_evidence.columns:
+        matched = rank_ic_evidence.loc[
+            (rank_ic_evidence["candidate"].astype(str) == control_profile)
+            & (
+                rank_ic_evidence["fold_scope"].astype(str).eq("full")
+                if "fold_scope" in rank_ic_evidence.columns
+                else True
+            )
+        ]
+        if not matched.empty:
+            control_rank_ic_evidence = _json_ready(matched.iloc[0].to_dict())
+    control_classification_skill = {}
+    if not classification_skill.empty and "candidate" in classification_skill.columns:
+        matched = classification_skill.loc[
+            (classification_skill["candidate"].astype(str) == control_profile)
+            & (
+                classification_skill["fold_scope"].astype(str).eq("full")
+                if "fold_scope" in classification_skill.columns
+                else True
+            )
+            & (
+                classification_skill["policy_name"].astype(str).eq("official_threshold")
+                if "policy_name" in classification_skill.columns
+                else True
+            )
+        ]
+        if not matched.empty:
+            control_classification_skill = _json_ready(matched.iloc[0].to_dict())
     action, reasons = _next_action(
         missing_files=missing_files,
         missing_profiles=missing_profiles,
@@ -732,6 +785,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "control": control_rank_ic_variance,
             "profile_count": int(len(rank_ic_variance)) if not rank_ic_variance.empty else 0,
         },
+        "rank_ic_stability_evidence": {
+            "control": control_rank_ic_evidence,
+            "candidate_count": int(len(rank_ic_evidence)) if not rank_ic_evidence.empty else 0,
+        },
         "causal_threshold_policy": {
             "best_test_f1_policy": _best_row(causal_threshold_policy, "test_f1_mean"),
             "best_f1_delta_policy": _best_row(causal_threshold_policy, "f1_delta_vs_official"),
@@ -742,6 +799,19 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
                 else 0
             ),
             "policy_count": int(len(causal_threshold_policy)) if not causal_threshold_policy.empty else 0,
+        },
+        "classification_skill": {
+            "control_official": control_classification_skill,
+            "policy_count": int(len(classification_skill)) if not classification_skill.empty else 0,
+        },
+        "validation_charter_review": {
+            "rows": _records(validation_charter),
+            "formal_revision_recommended": bool(
+                not validation_charter.empty
+                and "charter_review_recommended" in validation_charter.columns
+                and validation_charter["charter_review_recommended"].map(_to_bool).any()
+            ),
+            "automatic_gate_change_allowed": False,
         },
         "score_reversal_context": {
             "hypothesis_count": int(len(score_reversal_context)) if not score_reversal_context.empty else 0,
@@ -858,11 +928,29 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- IC block-bootstrap noise floor: `{_fmt(review.get('rank_ic_uncertainty', {}).get('control', {}).get('block_bootstrap_noise_floor_std'))}`",
         f"- Noise-adjusted between-fold IC std: `{_fmt(review.get('rank_ic_uncertainty', {}).get('control', {}).get('estimated_between_fold_std'))}`",
         f"- IC uncertainty conclusion: `{review.get('rank_ic_uncertainty', {}).get('control', {}).get('diagnostic_conclusion', '')}`",
+        f"- Multi-block IC noise floor range: "
+        f"`{_fmt(review.get('rank_ic_stability_evidence', {}).get('control', {}).get('min_noise_floor_std'))}` to "
+        f"`{_fmt(review.get('rank_ic_stability_evidence', {}).get('control', {}).get('max_noise_floor_std'))}`",
+        f"- Random-effects IC positive across all block lengths: "
+        f"`{review.get('rank_ic_stability_evidence', {}).get('control', {}).get('random_effects_positive_all_blocks', '')}`",
+        f"- IC stability evidence conclusion: "
+        f"`{review.get('rank_ic_stability_evidence', {}).get('control', {}).get('evidence_conclusion', '')}`",
         f"- Causal threshold policies: `{review.get('causal_threshold_policy', {}).get('policy_count', 0)}`; "
         f"CV-passed: `{review.get('causal_threshold_policy', {}).get('passed_policy_count', 0)}`",
         f"- Best causal threshold policy: `{review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('policy_name', '')}` "
         f"with F1 `{_fmt(review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('test_f1_mean'))}` "
         f"and outcome `{review.get('causal_threshold_policy', {}).get('best_test_f1_policy', {}).get('diagnostic_outcome', '')}`",
+        f"- Official F1 versus always-long baseline: "
+        f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('f1_mean'))}` versus "
+        f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('always_long_f1_mean'))}`",
+        f"- Official F1 skill versus rate-matched random: "
+        f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('f1_skill_vs_rate_matched_random_mean'))}`",
+        f"- PRAUC lift versus prevalence: "
+        f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('prauc_lift_vs_prevalence_mean'))}`",
+        f"- Classification skill conclusion: "
+        f"`{review.get('classification_skill', {}).get('control_official', {}).get('classification_conclusion', '')}`",
+        f"- Formal validation charter review recommended: "
+        f"`{review.get('validation_charter_review', {}).get('formal_revision_recommended', False)}`",
         f"- Score-reversal context hypotheses: `{review.get('score_reversal_context', {}).get('hypothesis_count', 0)}`",
         f"- Top context hypothesis: `{review.get('score_reversal_context', {}).get('top_hypothesis', {}).get('profile', '')}`",
         "",

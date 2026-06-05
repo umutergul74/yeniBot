@@ -48,6 +48,8 @@ from yenibot.experiments import (
     _bad_fold_signature_frame,
     _causal_score_quantile_mask,
     _causal_threshold_policy_frames,
+    _classification_skill_frames,
+    _rank_ic_stability_evidence_frames,
     _rank_ic_uncertainty_frames,
     _score_separation_forensics_frame,
     _threshold_oracle_gap_frame,
@@ -55,6 +57,7 @@ from yenibot.experiments import (
     _threshold_policy_review_frame,
     _threshold_score_quantile_review_frames,
     _threshold_transfer_review_frames,
+    _validation_charter_review_frame,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -63,7 +66,7 @@ from yenibot.experiments import (
     run_profile_experiment,
     write_experiment_diagnostics,
 )
-from yenibot.features import build_feature_matrix, filter_feature_columns, resolve_feature_profile, select_feature_columns
+from yenibot.features import build_feature_matrix, filter_feature_columns, resolve_feature_profile
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -1018,6 +1021,163 @@ def test_rank_ic_uncertainty_reports_noise_adjusted_std() -> None:
         "material_between_fold_instability_remains_after_noise_adjustment",
         "noise_adjusted_fold_stability_near_target",
     }
+
+
+def test_rank_ic_stability_evidence_uses_multiple_block_lengths() -> None:
+    config = {
+        "project": {"random_seed": 11},
+        "validation": {
+            "max_rank_ic_std": 0.03,
+            "rank_ic_uncertainty": {
+                "enabled": True,
+                "block_lengths": [1, 6, 12],
+                "sensitivity_bootstrap_repeats": 24,
+                "confidence_level": 0.90,
+                "random_seed": 11,
+            },
+        },
+    }
+    rows = []
+    rng = np.random.default_rng(21)
+    for fold in range(6):
+        scores = rng.normal(size=160)
+        returns = 0.30 * scores + rng.normal(scale=0.80, size=160)
+        for idx, (score, forward_return) in enumerate(zip(scores, returns)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(hours=fold * 200 + idx),
+                    "prob_long": score,
+                    "forward_return": forward_return,
+                }
+            )
+    entry = {"profile": "control", "fold_scope": "full", "predictions": pd.DataFrame(rows)}
+
+    evidence, sensitivity = _rank_ic_stability_evidence_frames([entry], config)
+
+    assert set(sensitivity["block_length"]) == {1, 6, 12}
+    assert len(evidence) == 1
+    row = evidence.iloc[0]
+    assert int(row["block_length_count"]) == 3
+    assert float(row["positive_fold_sign_test_pvalue"]) < 0.05
+    assert bool(row["random_effects_positive_all_blocks"]) is True
+    assert row["evidence_conclusion"] in {
+        "positive_aggregate_signal_with_unrealistic_absolute_std_target",
+        "positive_aggregate_signal_with_measurable_heterogeneity",
+    }
+
+
+def test_classification_skill_compares_f1_with_no_skill_baselines() -> None:
+    config = {
+        "validation": {
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70, "min_precision": 0.30},
+            "classification_skill": {
+                "enabled": True,
+                "min_prauc_lift_vs_prevalence": 1.01,
+                "min_precision_lift_vs_prevalence": 1.01,
+                "min_f1_skill_vs_rate_random": 0.0,
+                "min_positive_forward_return_fold_rate": 0.50,
+            },
+        }
+    }
+    rows = []
+    threshold_rows = []
+    for fold in range(3):
+        scores = np.linspace(0.01, 0.99, 100)
+        labels = (scores >= 0.70).astype(int)
+        for split in ("val", "test"):
+            for idx, (score, label) in enumerate(zip(scores, labels)):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-01-01") + pd.Timedelta(hours=fold * 250 + idx),
+                        "label": label,
+                        "prob_long": score,
+                        "forward_return": 0.003 if label else -0.001,
+                        "tb_return": 0.004 if label else 0.0,
+                    }
+                )
+        threshold_rows.append(
+            {
+                "fold": fold,
+                "constrained_threshold": 0.70,
+                "test_f1_at_constrained_threshold": 1.0,
+                "test_precision_at_constrained_threshold": 1.0,
+                "test_recall_at_constrained_threshold": 1.0,
+                "test_pred_long_rate_at_constrained_threshold": 0.30,
+            }
+        )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "row": {"official_threshold_source": "validation_constrained_threshold"},
+            "threshold_metrics": pd.DataFrame(threshold_rows),
+            "calibrated_predictions": pd.DataFrame(),
+        },
+    }
+
+    summary, by_fold = _classification_skill_frames([entry], pd.DataFrame(), config)
+
+    assert len(by_fold) == 3
+    row = summary.iloc[0]
+    assert row["policy_name"] == "official_threshold"
+    assert float(row["f1_mean"]) == pytest.approx(1.0)
+    assert float(row["always_long_f1_mean"]) == pytest.approx(2 * 0.30 / 1.30)
+    assert float(row["f1_skill_vs_rate_matched_random_mean"]) > 0.0
+    assert float(row["prauc_lift_vs_prevalence_mean"]) > 1.0
+    assert bool(row["skill_evidence_passed"]) is True
+
+
+def test_validation_charter_flags_non_discriminative_legacy_targets() -> None:
+    config = {
+        "validation": {
+            "max_rank_ic_std": 0.03,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+        }
+    }
+    rank_evidence = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "observed_std_rank_ic": 0.07,
+                "target_below_noise_floor_all_blocks": True,
+                "random_effects_positive_all_blocks": True,
+                "max_noise_floor_std": 0.09,
+            }
+        ]
+    )
+    classification = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "policy_name": "official_threshold",
+                "f1_mean": 0.43,
+                "pred_long_rate_mean": 0.64,
+                "always_long_f1_mean": 0.48,
+                "f1_target_exceeds_always_long_baseline": False,
+                "f1_target_exceeds_max_rate_random_baseline": True,
+            }
+        ]
+    )
+
+    review = _validation_charter_review_frame(
+        control_profile="control",
+        rank_ic_evidence=rank_evidence,
+        classification_skill_summary=classification,
+        config=config,
+    )
+
+    assert set(review["criterion"]) == {"rank_ic_std", "long_f1"}
+    assert review["charter_review_recommended"].astype(bool).all()
+    assert not review["automatic_gate_change_allowed"].astype(bool).any()
 
 
 def test_score_separation_forensics_flags_bad_fold_signature() -> None:

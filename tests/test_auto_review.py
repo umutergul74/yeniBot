@@ -199,6 +199,35 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         [
             {
                 "candidate": control,
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "observed_mean_rank_ic": 0.05,
+                "observed_std_rank_ic": 0.07,
+                "positive_fold_fraction": 0.80,
+                "min_noise_floor_std": 0.04,
+                "max_noise_floor_std": 0.09,
+                "target_rank_ic_std": 0.03,
+                "target_below_noise_floor_all_blocks": True,
+                "random_effects_positive_all_blocks": True,
+                "evidence_conclusion": "positive_aggregate_signal_with_unrealistic_absolute_std_target",
+            }
+        ]
+    ).to_csv(path / "rank_ic_aggregate_evidence.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "fold_scope": "full",
+                "block_length": 24,
+                "rms_bootstrap_noise_std": 0.06,
+                "random_effects_ci_low": 0.02,
+            }
+        ]
+    ).to_csv(path / "rank_ic_block_sensitivity.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
                 "fold_scope": "full",
                 "policy_name": "causal_fixed_top_60",
                 "test_f1_mean": 0.46,
@@ -220,6 +249,56 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
             }
         ]
     ).to_csv(path / "causal_threshold_policy_by_fold.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "candidate_type": "profile",
+                "fold_scope": "full",
+                "policy_name": "official_threshold",
+                "policy_type": "official",
+                "f1_mean": 0.46,
+                "pred_long_rate_mean": 0.64,
+                "always_long_f1_mean": 0.48,
+                "rate_matched_random_f1_mean": 0.42,
+                "f1_skill_vs_rate_matched_random_mean": 0.04,
+                "prauc_lift_vs_prevalence_mean": 1.10,
+                "precision_lift_vs_prevalence_mean": 1.04,
+                "f1_target_exceeds_always_long_baseline": False,
+                "f1_target_exceeds_max_rate_random_baseline": True,
+                "skill_evidence_passed": False,
+                "classification_conclusion": "standalone_f1_target_below_always_long_no_skill_baseline",
+            }
+        ]
+    ).to_csv(path / "classification_skill_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "fold_scope": "full",
+                "policy_name": "official_threshold",
+                "fold": 0,
+                "f1": 0.46,
+                "always_long_f1": 0.48,
+            }
+        ]
+    ).to_csv(path / "classification_skill_by_fold.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "criterion": "rank_ic_std",
+                "control_profile": control,
+                "charter_review_recommended": True,
+                "automatic_gate_change_allowed": False,
+            },
+            {
+                "criterion": "long_f1",
+                "control_profile": control,
+                "charter_review_recommended": True,
+                "automatic_gate_change_allowed": False,
+            },
+        ]
+    ).to_csv(path / "validation_charter_review.csv", index=False)
     pd.DataFrame(
         [
             {
@@ -290,14 +369,19 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["threshold_score_quantile"]["policy_count"] == 1
     assert review["threshold_score_quantile"]["best_test_f1_policy"]["policy_name"] == "fixed_top_50"
     assert review["rank_ic_uncertainty"]["control"]["estimated_between_fold_std"] == 0.057
+    assert review["rank_ic_stability_evidence"]["control"]["random_effects_positive_all_blocks"] is True
     assert review["causal_threshold_policy"]["passed_policy_count"] == 1
     assert review["causal_threshold_policy"]["best_test_f1_policy"]["policy_name"] == "causal_fixed_top_60"
+    assert review["classification_skill"]["control_official"]["always_long_f1_mean"] == 0.48
+    assert review["validation_charter_review"]["formal_revision_recommended"] is True
     assert review["score_reversal_context"]["hypothesis_count"] == 1
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
     assert review["phase2_readiness"]["long_f1_source"] == "validation_selected_threshold"
     assert "fixed_0_50_f1_below_target_calibration_issue" in review["phase2_readiness"]["advisories"]
+    assert "rank_ic_std_legacy_gate_requires_governance_review" in review["phase2_readiness"]["advisories"]
+    assert "raw_f1_target_below_always_long_no_skill_baseline" in review["phase2_readiness"]["advisories"]
     assert review["phase1_transition_plan"]["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
     assert "do_not_start_phase2_backtest" in review["phase1_transition_plan"]["blocked_actions"]
 

@@ -16,7 +16,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-from scipy.stats import spearmanr
+from scipy.stats import binomtest, norm, spearmanr
 from sklearn.metrics import average_precision_score
 
 from yenibot.diagnostics import (
@@ -4367,7 +4367,7 @@ def _phase1_blocker_root_cause_frame(
         4,
         "future_unseen_oos",
         "governance_gate_not_model_tuning",
-        f"Phase2 blockers={sorted(blockers)}; future OOS ready={not ('future_unseen_oos_not_ready' in blockers)}.",
+        f"Phase2 blockers={sorted(blockers)}; future OOS ready={'future_unseen_oos_not_ready' not in blockers}.",
         "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
     )
     return pd.DataFrame(rows, columns=columns)
@@ -6322,6 +6322,26 @@ def _score_quantile_threshold(frame: pd.DataFrame, selection_rate: float) -> flo
     return float(scores.quantile(max(0.0, min(1.0, 1.0 - rate))))
 
 
+def _moving_block_rank_ic_values(
+    scores: np.ndarray,
+    returns: np.ndarray,
+    *,
+    block_length: int,
+    repeats: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    count = int(len(scores))
+    effective_block = min(max(1, int(block_length)), count)
+    block_count = int(np.ceil(count / effective_block))
+    offsets = np.arange(effective_block)
+    values = np.empty(int(repeats), dtype=float)
+    for repeat in range(int(repeats)):
+        starts = rng.integers(0, count, size=block_count)
+        indices = ((starts[:, None] + offsets[None, :]) % count).reshape(-1)[:count]
+        values[repeat] = float(spearmanr(scores[indices], returns[indices]).statistic)
+    return values[np.isfinite(values)]
+
+
 def _rank_ic_uncertainty_frames(
     entries: list[dict[str, Any]],
     config: dict[str, Any],
@@ -6403,15 +6423,14 @@ def _rank_ic_uncertainty_frames(
             if not np.isfinite(observed):
                 continue
             effective_block = min(block_length, count)
-            block_count = int(np.ceil(count / effective_block))
             rng = np.random.default_rng(base_seed + entry_index * 100_003 + int(fold_raw) * 997)
-            boot_values = np.empty(repeats, dtype=float)
-            offsets = np.arange(effective_block)
-            for repeat in range(repeats):
-                starts = rng.integers(0, count, size=block_count)
-                indices = ((starts[:, None] + offsets[None, :]) % count).reshape(-1)[:count]
-                boot_values[repeat] = float(spearmanr(scores[indices], returns[indices]).statistic)
-            boot_values = boot_values[np.isfinite(boot_values)]
+            boot_values = _moving_block_rank_ic_values(
+                scores,
+                returns,
+                block_length=effective_block,
+                repeats=repeats,
+                rng=rng,
+            )
             independent_se = float((1.0 - observed**2) / np.sqrt(max(count - 1, 1)))
             rows.append(
                 {
@@ -6561,6 +6580,298 @@ def _write_rank_ic_uncertainty(path: Path, summary: pd.DataFrame, by_fold: pd.Da
     _write_json(
         path / "rank_ic_variance_decomposition.json",
         {"summary": summary.to_dict(orient="records"), "by_fold": by_fold.to_dict(orient="records")},
+    )
+
+
+def _random_effects_rank_ic(effect: np.ndarray, variance: np.ndarray, confidence_level: float) -> dict[str, float]:
+    valid = np.isfinite(effect) & np.isfinite(variance) & (variance > 0)
+    values = effect[valid].astype(float)
+    variances = variance[valid].astype(float)
+    count = int(len(values))
+    if count < 2:
+        return {
+            "fixed_effect_mean_rank_ic": np.nan,
+            "random_effects_mean_rank_ic": np.nan,
+            "random_effects_se": np.nan,
+            "random_effects_ci_low": np.nan,
+            "random_effects_ci_high": np.nan,
+            "heterogeneity_q": np.nan,
+            "heterogeneity_i2": np.nan,
+            "between_fold_tau2": np.nan,
+            "between_fold_tau": np.nan,
+        }
+    fixed_weights = 1.0 / variances
+    fixed_mean = float(np.sum(fixed_weights * values) / np.sum(fixed_weights))
+    q_value = float(np.sum(fixed_weights * np.square(values - fixed_mean)))
+    degrees = count - 1
+    c_value = float(np.sum(fixed_weights) - np.sum(np.square(fixed_weights)) / np.sum(fixed_weights))
+    tau2 = float(max((q_value - degrees) / c_value, 0.0)) if c_value > 0 else 0.0
+    random_weights = 1.0 / (variances + tau2)
+    random_mean = float(np.sum(random_weights * values) / np.sum(random_weights))
+    random_se = float(np.sqrt(1.0 / np.sum(random_weights)))
+    z_value = float(norm.ppf(0.5 + confidence_level / 2.0))
+    i2 = float(max((q_value - degrees) / q_value, 0.0)) if q_value > 0 else 0.0
+    return {
+        "fixed_effect_mean_rank_ic": fixed_mean,
+        "random_effects_mean_rank_ic": random_mean,
+        "random_effects_se": random_se,
+        "random_effects_ci_low": random_mean - z_value * random_se,
+        "random_effects_ci_high": random_mean + z_value * random_se,
+        "heterogeneity_q": q_value,
+        "heterogeneity_i2": i2,
+        "between_fold_tau2": tau2,
+        "between_fold_tau": float(np.sqrt(tau2)),
+    }
+
+
+def _rank_ic_stability_evidence_frames(
+    entries: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    sensitivity_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "block_length",
+        "fold_count",
+        "bootstrap_repeats",
+        "observed_mean_rank_ic",
+        "observed_std_rank_ic",
+        "rms_bootstrap_noise_std",
+        "target_rank_ic_std",
+        "target_below_noise_floor",
+        "fixed_effect_mean_rank_ic",
+        "random_effects_mean_rank_ic",
+        "random_effects_se",
+        "random_effects_ci_low",
+        "random_effects_ci_high",
+        "heterogeneity_q",
+        "heterogeneity_i2",
+        "between_fold_tau2",
+        "between_fold_tau",
+        "positive_fold_fraction",
+        "positive_fold_sign_test_pvalue",
+    ]
+    evidence_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "fold_count",
+        "observed_mean_rank_ic",
+        "observed_std_rank_ic",
+        "positive_fold_fraction",
+        "positive_fold_sign_test_pvalue",
+        "block_length_count",
+        "min_noise_floor_std",
+        "max_noise_floor_std",
+        "target_rank_ic_std",
+        "target_below_noise_floor_all_blocks",
+        "random_effects_ci_low_min",
+        "random_effects_ci_low_max",
+        "random_effects_positive_all_blocks",
+        "between_fold_tau_min",
+        "between_fold_tau_max",
+        "heterogeneity_i2_min",
+        "heterogeneity_i2_max",
+        "evidence_conclusion",
+        "recommended_governance_action",
+    ]
+    cfg = _cfg(config, ["validation", "rank_ic_uncertainty"], {}) or {}
+    if not bool(cfg.get("enabled", True)):
+        return pd.DataFrame(columns=evidence_columns), pd.DataFrame(columns=sensitivity_columns)
+    block_lengths = cfg.get("block_lengths", [1, 6, 12, 24, 48]) or [1, 6, 12, 24, 48]
+    lengths = sorted({max(1, int(value)) for value in block_lengths})
+    repeats = max(20, int(cfg.get("sensitivity_bootstrap_repeats", 80)))
+    confidence_level = min(max(float(cfg.get("confidence_level", 0.95)), 0.50), 0.999)
+    base_seed = int(cfg.get("random_seed", _cfg(config, ["project", "random_seed"], 42)))
+    target_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
+    rows: list[dict[str, Any]] = []
+
+    for entry_index, entry in enumerate(entries):
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        test = _test_predictions(predictions)
+        if not {"fold", "prob_long", "forward_return"}.issubset(test.columns):
+            continue
+        fold_data: list[tuple[int, np.ndarray, np.ndarray, float]] = []
+        for fold_raw, part in test.groupby("fold"):
+            clean = (
+                part[["prob_long", "forward_return"]]
+                .apply(pd.to_numeric, errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            if len(clean) < 8:
+                continue
+            scores = clean["prob_long"].to_numpy(dtype=float)
+            returns = clean["forward_return"].to_numpy(dtype=float)
+            observed = float(spearmanr(scores, returns).statistic)
+            if np.isfinite(observed):
+                fold_data.append((int(fold_raw), scores, returns, observed))
+        if len(fold_data) < 2:
+            continue
+        effects = np.asarray([item[3] for item in fold_data], dtype=float)
+        positive_count = int(np.sum(effects > 0.0))
+        sign_pvalue = float(binomtest(positive_count, len(effects), 0.5, alternative="greater").pvalue)
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        for block_length in lengths:
+            variances: list[float] = []
+            for fold, scores, returns, _observed in fold_data:
+                rng = np.random.default_rng(
+                    base_seed
+                    + entry_index * 1_000_003
+                    + int(block_length) * 10_007
+                    + fold * 997
+                )
+                values = _moving_block_rank_ic_values(
+                    scores,
+                    returns,
+                    block_length=block_length,
+                    repeats=repeats,
+                    rng=rng,
+                )
+                variances.append(float(np.var(values, ddof=1)) if len(values) > 1 else np.nan)
+            variance_array = np.asarray(variances, dtype=float)
+            meta = _random_effects_rank_ic(effects, variance_array, confidence_level)
+            rms_noise = float(np.sqrt(np.nanmean(variance_array))) if np.isfinite(variance_array).any() else np.nan
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "candidate_type": candidate_type,
+                    "fold_scope": fold_scope,
+                    "block_length": block_length,
+                    "fold_count": len(fold_data),
+                    "bootstrap_repeats": repeats,
+                    "observed_mean_rank_ic": float(np.mean(effects)),
+                    "observed_std_rank_ic": float(np.std(effects, ddof=0)),
+                    "rms_bootstrap_noise_std": rms_noise,
+                    "target_rank_ic_std": target_std,
+                    "target_below_noise_floor": bool(np.isfinite(rms_noise) and target_std < rms_noise),
+                    **meta,
+                    "positive_fold_fraction": float(positive_count / len(effects)),
+                    "positive_fold_sign_test_pvalue": sign_pvalue,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=evidence_columns), pd.DataFrame(columns=sensitivity_columns)
+    sensitivity = (
+        pd.DataFrame(rows, columns=sensitivity_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "block_length"])
+        .reset_index(drop=True)
+    )
+    evidence_rows: list[dict[str, Any]] = []
+    for (candidate, candidate_type, fold_scope), part in sensitivity.groupby(
+        ["candidate", "candidate_type", "fold_scope"],
+        dropna=False,
+    ):
+        target_below_all = bool(part["target_below_noise_floor"].astype(bool).all())
+        random_positive_all = bool(
+            pd.to_numeric(part["random_effects_ci_low"], errors="coerce").gt(0.0).all()
+        )
+        sign_p = float(pd.to_numeric(part["positive_fold_sign_test_pvalue"], errors="coerce").iloc[0])
+        if target_below_all and random_positive_all and sign_p < 0.01:
+            conclusion = "positive_aggregate_signal_with_unrealistic_absolute_std_target"
+            action = "formal_charter_review_recommended; retain_std_as_monitor_not_absolute_gate"
+        elif random_positive_all and sign_p < 0.05:
+            conclusion = "positive_aggregate_signal_with_measurable_heterogeneity"
+            action = "retain_stability_monitor_and_require_future_unseen_oos"
+        else:
+            conclusion = "aggregate_rank_ic_evidence_not_robust_across_block_lengths"
+            action = "do_not_relax_current_gate"
+        evidence_rows.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "fold_scope": str(fold_scope),
+                "fold_count": int(part["fold_count"].iloc[0]),
+                "observed_mean_rank_ic": float(part["observed_mean_rank_ic"].iloc[0]),
+                "observed_std_rank_ic": float(part["observed_std_rank_ic"].iloc[0]),
+                "positive_fold_fraction": float(part["positive_fold_fraction"].iloc[0]),
+                "positive_fold_sign_test_pvalue": sign_p,
+                "block_length_count": int(part["block_length"].nunique()),
+                "min_noise_floor_std": float(pd.to_numeric(part["rms_bootstrap_noise_std"], errors="coerce").min()),
+                "max_noise_floor_std": float(pd.to_numeric(part["rms_bootstrap_noise_std"], errors="coerce").max()),
+                "target_rank_ic_std": target_std,
+                "target_below_noise_floor_all_blocks": target_below_all,
+                "random_effects_ci_low_min": float(
+                    pd.to_numeric(part["random_effects_ci_low"], errors="coerce").min()
+                ),
+                "random_effects_ci_low_max": float(
+                    pd.to_numeric(part["random_effects_ci_low"], errors="coerce").max()
+                ),
+                "random_effects_positive_all_blocks": random_positive_all,
+                "between_fold_tau_min": float(pd.to_numeric(part["between_fold_tau"], errors="coerce").min()),
+                "between_fold_tau_max": float(pd.to_numeric(part["between_fold_tau"], errors="coerce").max()),
+                "heterogeneity_i2_min": float(pd.to_numeric(part["heterogeneity_i2"], errors="coerce").min()),
+                "heterogeneity_i2_max": float(pd.to_numeric(part["heterogeneity_i2"], errors="coerce").max()),
+                "evidence_conclusion": conclusion,
+                "recommended_governance_action": action,
+            }
+        )
+    evidence = (
+        pd.DataFrame(evidence_rows, columns=evidence_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope"])
+        .reset_index(drop=True)
+    )
+    return evidence, sensitivity
+
+
+def _rank_ic_stability_evidence_markdown(evidence: pd.DataFrame, sensitivity: pd.DataFrame) -> str:
+    lines = ["# Rank IC Stability Evidence", ""]
+    lines.append(
+        "This governance diagnostic checks whether the official absolute Rank IC std target is below "
+        "the finite-fold uncertainty floor across several moving-block lengths. Random-effects estimates "
+        "summarize aggregate IC while explicitly allowing fold heterogeneity. Official Phase 1 gates remain unchanged."
+    )
+    if evidence.empty:
+        lines.extend(["", "No Rank IC stability evidence rows were produced."])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "observed_mean_rank_ic",
+        "observed_std_rank_ic",
+        "positive_fold_fraction",
+        "positive_fold_sign_test_pvalue",
+        "min_noise_floor_std",
+        "max_noise_floor_std",
+        "target_rank_ic_std",
+        "random_effects_ci_low_min",
+        "random_effects_positive_all_blocks",
+        "evidence_conclusion",
+        "recommended_governance_action",
+    ]
+    visible = evidence[[column for column in display_cols if column in evidence.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append(f"Block-sensitivity rows: {len(sensitivity)}. See `rank_ic_block_sensitivity.csv`.")
+    return "\n".join(lines)
+
+
+def _write_rank_ic_stability_evidence(
+    path: Path,
+    evidence: pd.DataFrame,
+    sensitivity: pd.DataFrame,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    evidence.to_csv(path / "rank_ic_aggregate_evidence.csv", index=False)
+    sensitivity.to_csv(path / "rank_ic_block_sensitivity.csv", index=False)
+    (path / "rank_ic_stability_evidence.md").write_text(
+        _rank_ic_stability_evidence_markdown(evidence, sensitivity),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "rank_ic_stability_evidence.json",
+        {"aggregate_evidence": evidence.to_dict(orient="records"), "block_sensitivity": sensitivity.to_dict(orient="records")},
     )
 
 
@@ -6806,7 +7117,6 @@ def _threshold_score_quantile_review_frames(
         f1_pass = f1 >= min_long_f1
         precision_pass = precision >= min_precision
         pred_pass = pred_rate <= max_pred_long_rate
-        fold_pass = f1_pass & precision_pass & pred_pass
         f1_pass_rate = float(f1_pass.mean()) if f1.notna().any() else np.nan
         precision_pass_rate = float(precision_pass.mean()) if precision.notna().any() else np.nan
         pred_pass_rate = float(pred_pass.mean()) if pred_rate.notna().any() else np.nan
@@ -7280,6 +7590,611 @@ def _write_causal_threshold_policy(path: Path, summary: pd.DataFrame, by_fold: p
     _write_json(
         path / "causal_threshold_policy.json",
         {"summary": summary.to_dict(orient="records"), "by_fold": by_fold.to_dict(orient="records")},
+    )
+
+
+def _classification_skill_frames(
+    entries: list[dict[str, Any]],
+    causal_threshold_by_fold: pd.DataFrame,
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    by_fold_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold",
+        "count",
+        "label_prevalence",
+        "average_precision",
+        "prauc_lift_vs_prevalence",
+        "threshold",
+        "f1",
+        "precision",
+        "recall",
+        "pred_long_rate",
+        "always_long_f1",
+        "rate_matched_random_f1",
+        "max_rate_random_f1",
+        "f1_skill_vs_always_long",
+        "f1_skill_vs_rate_matched_random",
+        "precision_lift_vs_prevalence",
+        "selected_actual_long_rate",
+        "selected_label_lift_vs_base",
+        "selected_mean_forward_return",
+        "selected_mean_tb_return",
+        "f1_target",
+        "max_pred_long_rate",
+        "f1_target_exceeds_always_long",
+        "f1_target_exceeds_max_rate_random",
+        "skill_evidence_passed",
+        "selection_guard",
+    ]
+    summary_columns = [
+        "candidate",
+        "candidate_type",
+        "fold_scope",
+        "policy_name",
+        "policy_type",
+        "fold_count",
+        "label_prevalence_mean",
+        "average_precision_mean",
+        "prauc_lift_vs_prevalence_mean",
+        "f1_mean",
+        "precision_mean",
+        "recall_mean",
+        "pred_long_rate_mean",
+        "always_long_f1_mean",
+        "rate_matched_random_f1_mean",
+        "max_rate_random_f1_mean",
+        "f1_skill_vs_always_long_mean",
+        "f1_skill_vs_rate_matched_random_mean",
+        "precision_lift_vs_prevalence_mean",
+        "positive_f1_skill_vs_rate_random_fold_rate",
+        "positive_forward_return_fold_rate",
+        "selected_mean_forward_return_mean",
+        "selected_mean_tb_return_mean",
+        "f1_target",
+        "max_pred_long_rate",
+        "f1_target_exceeds_always_long_baseline",
+        "f1_target_exceeds_max_rate_random_baseline",
+        "skill_evidence_passed",
+        "classification_conclusion",
+        "recommended_governance_action",
+    ]
+    cfg = _cfg(config, ["validation", "classification_skill"], {}) or {}
+    if not bool(cfg.get("enabled", True)):
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+    f1_target = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+    threshold_cfg = _cfg(config, ["validation", "threshold_checks"], {}) or {}
+    max_pred_long_rate = float(threshold_cfg.get("max_pred_long_rate", 0.70))
+    min_prauc_lift = float(cfg.get("min_prauc_lift_vs_prevalence", 1.05))
+    min_precision_lift = float(cfg.get("min_precision_lift_vs_prevalence", 1.05))
+    min_f1_skill = float(cfg.get("min_f1_skill_vs_rate_random", 0.0))
+    min_positive_fwd_rate = float(cfg.get("min_positive_forward_return_fold_rate", 0.60))
+    rows: list[dict[str, Any]] = []
+
+    def append_row(
+        *,
+        candidate: str,
+        candidate_type: str,
+        fold_scope: str,
+        policy_name: str,
+        policy_type: str,
+        fold: int,
+        test: pd.DataFrame,
+        scores: pd.Series,
+        threshold: float,
+        class_metrics: dict[str, float],
+        selection_stats: dict[str, float],
+        selection_guard: str,
+    ) -> None:
+        labels = pd.to_numeric(test["label"], errors="coerce")
+        valid = labels.notna() & pd.to_numeric(scores, errors="coerce").notna()
+        labels = labels.loc[valid].astype(int)
+        clean_scores = pd.to_numeric(scores.loc[valid], errors="coerce")
+        count = int(len(labels))
+        if count == 0:
+            return
+        prevalence = float(labels.mean())
+        average_precision = _safe_average_precision(labels, clean_scores)
+        pred_rate = float(class_metrics["pred_long_rate"])
+        always_long_f1 = float(2.0 * prevalence / (1.0 + prevalence)) if prevalence > 0 else 0.0
+        rate_random_denominator = prevalence + pred_rate
+        rate_matched_random_f1 = (
+            float(2.0 * prevalence * pred_rate / rate_random_denominator)
+            if rate_random_denominator > 0
+            else 0.0
+        )
+        max_rate_denominator = prevalence + max_pred_long_rate
+        max_rate_random_f1 = (
+            float(2.0 * prevalence * max_pred_long_rate / max_rate_denominator)
+            if max_rate_denominator > 0
+            else 0.0
+        )
+        precision_lift = (
+            float(class_metrics["precision"] / prevalence)
+            if prevalence > 0
+            else np.nan
+        )
+        prauc_lift = float(average_precision / prevalence) if prevalence > 0 and np.isfinite(average_precision) else np.nan
+        f1_skill_rate_random = float(class_metrics["f1"] - rate_matched_random_f1)
+        skill_passed = bool(
+            np.isfinite(prauc_lift)
+            and prauc_lift >= min_prauc_lift
+            and np.isfinite(precision_lift)
+            and precision_lift >= min_precision_lift
+            and f1_skill_rate_random > min_f1_skill
+            and pred_rate <= max_pred_long_rate
+            and np.isfinite(selection_stats["mean_forward_return"])
+            and selection_stats["mean_forward_return"] > 0.0
+        )
+        rows.append(
+            {
+                "candidate": candidate,
+                "candidate_type": candidate_type,
+                "fold_scope": fold_scope,
+                "policy_name": policy_name,
+                "policy_type": policy_type,
+                "fold": int(fold),
+                "count": count,
+                "label_prevalence": prevalence,
+                "average_precision": average_precision,
+                "prauc_lift_vs_prevalence": prauc_lift,
+                "threshold": threshold,
+                "f1": float(class_metrics["f1"]),
+                "precision": float(class_metrics["precision"]),
+                "recall": float(class_metrics["recall"]),
+                "pred_long_rate": pred_rate,
+                "always_long_f1": always_long_f1,
+                "rate_matched_random_f1": rate_matched_random_f1,
+                "max_rate_random_f1": max_rate_random_f1,
+                "f1_skill_vs_always_long": float(class_metrics["f1"] - always_long_f1),
+                "f1_skill_vs_rate_matched_random": f1_skill_rate_random,
+                "precision_lift_vs_prevalence": precision_lift,
+                "selected_actual_long_rate": selection_stats["actual_long_rate"],
+                "selected_label_lift_vs_base": selection_stats["label_lift_vs_base"],
+                "selected_mean_forward_return": selection_stats["mean_forward_return"],
+                "selected_mean_tb_return": selection_stats["mean_tb_return"],
+                "f1_target": f1_target,
+                "max_pred_long_rate": max_pred_long_rate,
+                "f1_target_exceeds_always_long": bool(f1_target > always_long_f1),
+                "f1_target_exceeds_max_rate_random": bool(f1_target > max_rate_random_f1),
+                "skill_evidence_passed": skill_passed,
+                "selection_guard": selection_guard,
+            }
+        )
+
+    for entry in entries:
+        fold_scope = str(entry.get("fold_scope", ""))
+        if not _is_stability_scope(fold_scope):
+            continue
+        predictions = entry.get("predictions")
+        if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+            continue
+        if not {"fold", "split", "label", "prob_long"}.issubset(predictions.columns):
+            continue
+        candidate = str(entry.get("profile", ""))
+        candidate_type = _diagnostic_candidate_type(fold_scope)
+        threshold_metrics = _entry_threshold_policy_frame(entry)
+        official_by_fold = (
+            {int(row["fold"]): row.to_dict() for _, row in threshold_metrics.dropna(subset=["fold"]).iterrows()}
+            if not threshold_metrics.empty and "fold" in threshold_metrics.columns
+            else {}
+        )
+        calibrated = (entry.get("diagnostics", {}) or {}).get("calibrated_predictions")
+        for fold_raw, part in predictions.groupby("fold"):
+            fold = int(fold_raw)
+            test = part.loc[part["split"].astype(str) == "test"].copy()
+            test = test.replace([np.inf, -np.inf], np.nan).dropna(subset=["label", "prob_long"])
+            if test.empty:
+                continue
+            metric_row = official_by_fold.get(fold, {})
+            uses_calibration = bool(metric_row.get("official_threshold_uses_calibration", False))
+            score_column = "prob_long"
+            if uses_calibration and isinstance(calibrated, pd.DataFrame) and not calibrated.empty:
+                calibrated_fold = calibrated.loc[
+                    pd.to_numeric(calibrated["fold"], errors="coerce").eq(fold)
+                ].copy()
+                if not calibrated_fold.empty and "prob_long_calibrated" in calibrated_fold.columns:
+                    test = calibrated_fold.replace([np.inf, -np.inf], np.nan).dropna(
+                        subset=["label", "prob_long_calibrated"]
+                    )
+                    score_column = "prob_long_calibrated"
+            threshold = _float(metric_row, "official_threshold")
+            if np.isfinite(threshold):
+                selected_mask = pd.to_numeric(test[score_column], errors="coerce") >= threshold
+                class_metrics = _classification_metrics_for_mask(test["label"], selected_mask)
+                selection_stats = _selection_stats_for_mask(test, selected_mask)
+            else:
+                class_metrics = {
+                    "f1": _float(metric_row, "test_f1_at_official_threshold"),
+                    "precision": _float(metric_row, "test_precision_at_official_threshold"),
+                    "recall": _float(metric_row, "test_recall_at_official_threshold"),
+                    "pred_long_rate": _float(metric_row, "test_pred_long_rate_at_official_threshold"),
+                }
+                if not all(np.isfinite(value) for value in class_metrics.values()):
+                    continue
+                selection_stats = {
+                    "actual_long_rate": np.nan,
+                    "label_lift_vs_base": np.nan,
+                    "mean_forward_return": np.nan,
+                    "mean_tb_return": np.nan,
+                }
+            append_row(
+                candidate=candidate,
+                candidate_type=candidate_type,
+                fold_scope=fold_scope,
+                policy_name="official_threshold",
+                policy_type="official",
+                fold=fold,
+                test=test,
+                scores=test[score_column],
+                threshold=threshold,
+                class_metrics=class_metrics,
+                selection_stats=selection_stats,
+                selection_guard=str(
+                    metric_row.get("official_threshold_source")
+                    or _entry_official_threshold_source(entry)
+                    or "validation_official_threshold"
+                ),
+            )
+
+    if not causal_threshold_by_fold.empty:
+        entry_lookup = {
+            (str(entry.get("profile", "")), str(entry.get("fold_scope", ""))): entry
+            for entry in entries
+        }
+        for _, policy_row in causal_threshold_by_fold.iterrows():
+            candidate = str(policy_row.get("candidate", ""))
+            fold_scope = str(policy_row.get("fold_scope", ""))
+            entry = entry_lookup.get((candidate, fold_scope))
+            if entry is None:
+                continue
+            predictions = entry.get("predictions")
+            fold = int(policy_row["fold"])
+            test = predictions.loc[
+                (pd.to_numeric(predictions["fold"], errors="coerce").eq(fold))
+                & predictions["split"].astype(str).eq("test")
+            ].copy()
+            test = test.replace([np.inf, -np.inf], np.nan).dropna(subset=["label", "prob_long"])
+            if test.empty:
+                continue
+            class_metrics = {
+                "f1": _float(policy_row.to_dict(), "test_f1"),
+                "precision": _float(policy_row.to_dict(), "test_precision"),
+                "recall": _float(policy_row.to_dict(), "test_recall"),
+                "pred_long_rate": _float(policy_row.to_dict(), "test_pred_long_rate"),
+            }
+            selection_stats = {
+                "actual_long_rate": _float(policy_row.to_dict(), "test_actual_long_rate"),
+                "label_lift_vs_base": _float(policy_row.to_dict(), "test_label_lift_vs_base"),
+                "mean_forward_return": _float(policy_row.to_dict(), "test_mean_forward_return"),
+                "mean_tb_return": _float(policy_row.to_dict(), "test_mean_tb_return"),
+            }
+            append_row(
+                candidate=candidate,
+                candidate_type=str(policy_row.get("candidate_type", _diagnostic_candidate_type(fold_scope))),
+                fold_scope=fold_scope,
+                policy_name=str(policy_row.get("policy_name", "")),
+                policy_type="causal_threshold",
+                fold=fold,
+                test=test,
+                scores=test["prob_long"],
+                threshold=_float(policy_row.to_dict(), "mean_causal_threshold"),
+                class_metrics=class_metrics,
+                selection_stats=selection_stats,
+                selection_guard=str(policy_row.get("selection_guard", "causal_past_scores_only_no_test_labels")),
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=summary_columns), pd.DataFrame(columns=by_fold_columns)
+    by_fold = (
+        pd.DataFrame(rows, columns=by_fold_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "policy_type", "policy_name", "fold"])
+        .reset_index(drop=True)
+    )
+    summaries: list[dict[str, Any]] = []
+    for keys, part in by_fold.groupby(
+        ["candidate", "candidate_type", "fold_scope", "policy_name", "policy_type"],
+        dropna=False,
+    ):
+        candidate, candidate_type, fold_scope, policy_name, policy_type = keys
+        numeric = {
+            column: pd.to_numeric(part[column], errors="coerce")
+            for column in [
+                "label_prevalence",
+                "average_precision",
+                "prauc_lift_vs_prevalence",
+                "f1",
+                "precision",
+                "recall",
+                "pred_long_rate",
+                "always_long_f1",
+                "rate_matched_random_f1",
+                "max_rate_random_f1",
+                "f1_skill_vs_always_long",
+                "f1_skill_vs_rate_matched_random",
+                "precision_lift_vs_prevalence",
+                "selected_mean_forward_return",
+                "selected_mean_tb_return",
+            ]
+        }
+        target_above_always = bool(f1_target > float(numeric["always_long_f1"].mean()))
+        target_above_max_rate_random = bool(f1_target > float(numeric["max_rate_random_f1"].mean()))
+        positive_fwd_rate = float((numeric["selected_mean_forward_return"] > 0.0).mean())
+        skill_pass_rate = float(part["skill_evidence_passed"].astype(bool).mean())
+        aggregate_skill_passed = bool(
+            numeric["prauc_lift_vs_prevalence"].mean() >= min_prauc_lift
+            and numeric["precision_lift_vs_prevalence"].mean() >= min_precision_lift
+            and numeric["f1_skill_vs_rate_matched_random"].mean() > min_f1_skill
+            and positive_fwd_rate >= min_positive_fwd_rate
+            and skill_pass_rate >= 0.50
+        )
+        if not target_above_always:
+            conclusion = "standalone_f1_target_below_always_long_no_skill_baseline"
+            action = "retain_official_gate; require_pred_rate_guardrail_and_skill_normalized_companion_metrics"
+        elif not target_above_max_rate_random:
+            conclusion = "f1_target_below_guardrail_matched_random_baseline"
+            action = "formal_charter_review_required_before_using_f1_as_readiness_evidence"
+        elif aggregate_skill_passed:
+            conclusion = "classification_skill_present_under_guardrails"
+            action = "require_future_unseen_oos_confirmation; do_not_promote_from_seen_holdout"
+        else:
+            conclusion = "classification_skill_weak_or_inconsistent_under_guardrails"
+            action = "improve_score_separation_or_payoff_alignment; do_not_optimize_raw_f1_alone"
+        summaries.append(
+            {
+                "candidate": str(candidate),
+                "candidate_type": str(candidate_type),
+                "fold_scope": str(fold_scope),
+                "policy_name": str(policy_name),
+                "policy_type": str(policy_type),
+                "fold_count": int(part["fold"].nunique()),
+                "label_prevalence_mean": float(numeric["label_prevalence"].mean()),
+                "average_precision_mean": float(numeric["average_precision"].mean()),
+                "prauc_lift_vs_prevalence_mean": float(numeric["prauc_lift_vs_prevalence"].mean()),
+                "f1_mean": float(numeric["f1"].mean()),
+                "precision_mean": float(numeric["precision"].mean()),
+                "recall_mean": float(numeric["recall"].mean()),
+                "pred_long_rate_mean": float(numeric["pred_long_rate"].mean()),
+                "always_long_f1_mean": float(numeric["always_long_f1"].mean()),
+                "rate_matched_random_f1_mean": float(numeric["rate_matched_random_f1"].mean()),
+                "max_rate_random_f1_mean": float(numeric["max_rate_random_f1"].mean()),
+                "f1_skill_vs_always_long_mean": float(numeric["f1_skill_vs_always_long"].mean()),
+                "f1_skill_vs_rate_matched_random_mean": float(
+                    numeric["f1_skill_vs_rate_matched_random"].mean()
+                ),
+                "precision_lift_vs_prevalence_mean": float(
+                    numeric["precision_lift_vs_prevalence"].mean()
+                ),
+                "positive_f1_skill_vs_rate_random_fold_rate": float(
+                    (numeric["f1_skill_vs_rate_matched_random"] > 0.0).mean()
+                ),
+                "positive_forward_return_fold_rate": positive_fwd_rate,
+                "selected_mean_forward_return_mean": float(
+                    numeric["selected_mean_forward_return"].mean()
+                ),
+                "selected_mean_tb_return_mean": float(numeric["selected_mean_tb_return"].mean()),
+                "f1_target": f1_target,
+                "max_pred_long_rate": max_pred_long_rate,
+                "f1_target_exceeds_always_long_baseline": target_above_always,
+                "f1_target_exceeds_max_rate_random_baseline": target_above_max_rate_random,
+                "skill_evidence_passed": aggregate_skill_passed,
+                "classification_conclusion": conclusion,
+                "recommended_governance_action": action,
+            }
+        )
+    summary = (
+        pd.DataFrame(summaries, columns=summary_columns)
+        .sort_values(["candidate_type", "candidate", "fold_scope", "policy_type", "policy_name"])
+        .reset_index(drop=True)
+    )
+    return summary, by_fold
+
+
+def _classification_skill_markdown(summary: pd.DataFrame, by_fold: pd.DataFrame) -> str:
+    lines = ["# Classification Skill Audit", ""]
+    lines.append(
+        "Raw F1 is compared with two no-skill references: always predicting long and randomly selecting "
+        "the same fraction of rows. PRAUC is normalized by label prevalence. These are companion diagnostics; "
+        "the official Phase 1 F1 and prediction-rate gates remain unchanged."
+    )
+    if summary.empty:
+        lines.extend(["", "No classification skill rows were produced."])
+        return "\n".join(lines)
+    display_cols = [
+        "candidate",
+        "fold_scope",
+        "policy_name",
+        "f1_mean",
+        "always_long_f1_mean",
+        "rate_matched_random_f1_mean",
+        "f1_skill_vs_rate_matched_random_mean",
+        "prauc_lift_vs_prevalence_mean",
+        "precision_lift_vs_prevalence_mean",
+        "positive_forward_return_fold_rate",
+        "skill_evidence_passed",
+        "classification_conclusion",
+    ]
+    visible = summary[[column for column in display_cols if column in summary.columns]].copy()
+    lines.append("")
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in visible.columns) + " |")
+    lines.append("")
+    lines.append(f"Fold-level rows: {len(by_fold)}. See `classification_skill_by_fold.csv`.")
+    return "\n".join(lines)
+
+
+def _write_classification_skill(
+    path: Path,
+    summary: pd.DataFrame,
+    by_fold: pd.DataFrame,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(path / "classification_skill_summary.csv", index=False)
+    by_fold.to_csv(path / "classification_skill_by_fold.csv", index=False)
+    (path / "classification_skill.md").write_text(
+        _classification_skill_markdown(summary, by_fold),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "classification_skill.json",
+        {"summary": summary.to_dict(orient="records"), "by_fold": by_fold.to_dict(orient="records")},
+    )
+
+
+def _validation_charter_review_frame(
+    *,
+    control_profile: str,
+    rank_ic_evidence: pd.DataFrame,
+    classification_skill_summary: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    columns = [
+        "criterion",
+        "control_profile",
+        "official_target",
+        "observed_value",
+        "official_gate_passed",
+        "reference_baseline",
+        "reference_value",
+        "statistical_validity",
+        "charter_review_recommended",
+        "proposed_companion_evidence",
+        "automatic_gate_change_allowed",
+        "governance_decision",
+    ]
+    rows: list[dict[str, Any]] = []
+    rank = pd.DataFrame()
+    if not rank_ic_evidence.empty:
+        rank = rank_ic_evidence.loc[
+            (rank_ic_evidence["candidate"].astype(str) == str(control_profile))
+            & rank_ic_evidence["fold_scope"].astype(str).eq("full")
+        ]
+    if not rank.empty:
+        row = rank.iloc[0]
+        observed_std = _float(row.to_dict(), "observed_std_rank_ic")
+        target_std = float(_cfg(config, ["validation", "max_rank_ic_std"], 0.03))
+        target_below_noise = bool(row.get("target_below_noise_floor_all_blocks", False))
+        random_positive = bool(row.get("random_effects_positive_all_blocks", False))
+        rows.append(
+            {
+                "criterion": "rank_ic_std",
+                "control_profile": control_profile,
+                "official_target": f"< {target_std}",
+                "observed_value": observed_std,
+                "official_gate_passed": bool(np.isfinite(observed_std) and observed_std < target_std),
+                "reference_baseline": "multi_block_bootstrap_noise_floor_max",
+                "reference_value": _float(row.to_dict(), "max_noise_floor_std"),
+                "statistical_validity": (
+                    "absolute_target_below_measured_noise_floor_across_all_blocks"
+                    if target_below_noise
+                    else "absolute_target_above_at_least_one_measured_noise_floor"
+                ),
+                "charter_review_recommended": target_below_noise and random_positive,
+                "proposed_companion_evidence": (
+                    "random_effects_ci; positive_fold_sign_test; between_fold_tau; heterogeneity_i2; future_unseen_oos"
+                ),
+                "automatic_gate_change_allowed": False,
+                "governance_decision": (
+                    "formal_review_recommended_keep_official_gate_unchanged"
+                    if target_below_noise and random_positive
+                    else "retain_current_gate_and_monitor"
+                ),
+            }
+        )
+
+    classification = pd.DataFrame()
+    if not classification_skill_summary.empty:
+        classification = classification_skill_summary.loc[
+            (classification_skill_summary["candidate"].astype(str) == str(control_profile))
+            & classification_skill_summary["fold_scope"].astype(str).eq("full")
+            & classification_skill_summary["policy_name"].astype(str).eq("official_threshold")
+        ]
+    if not classification.empty:
+        row = classification.iloc[0]
+        observed_f1 = _float(row.to_dict(), "f1_mean")
+        target_f1 = float(_cfg(config, ["validation", "min_long_f1"], 0.45))
+        pred_rate = _float(row.to_dict(), "pred_long_rate_mean")
+        max_rate = float(_cfg(config, ["validation", "threshold_checks", "max_pred_long_rate"], 0.70))
+        target_above_always = bool(row.get("f1_target_exceeds_always_long_baseline", False))
+        target_above_max_rate_random = bool(row.get("f1_target_exceeds_max_rate_random_baseline", False))
+        rows.append(
+            {
+                "criterion": "long_f1",
+                "control_profile": control_profile,
+                "official_target": f"> {target_f1}; pred_long_rate <= {max_rate}",
+                "observed_value": observed_f1,
+                "official_gate_passed": bool(
+                    np.isfinite(observed_f1)
+                    and observed_f1 > target_f1
+                    and np.isfinite(pred_rate)
+                    and pred_rate <= max_rate
+                ),
+                "reference_baseline": "always_long_f1_mean",
+                "reference_value": _float(row.to_dict(), "always_long_f1_mean"),
+                "statistical_validity": (
+                    "standalone_f1_target_not_above_always_long_baseline_but_rate_guardrail_adds_constraint"
+                    if not target_above_always
+                    else (
+                        "target_not_above_max_rate_random_baseline"
+                        if not target_above_max_rate_random
+                        else "target_above_reported_no_skill_baselines"
+                    )
+                ),
+                "charter_review_recommended": not target_above_always or not target_above_max_rate_random,
+                "proposed_companion_evidence": (
+                    "f1_skill_vs_rate_matched_random; prauc_lift_vs_prevalence; "
+                    "precision_lift_vs_prevalence; positive_forward_return_fold_rate"
+                ),
+                "automatic_gate_change_allowed": False,
+                "governance_decision": (
+                    "formal_review_recommended_keep_official_gate_unchanged"
+                    if not target_above_always or not target_above_max_rate_random
+                    else "retain_current_gate_with_skill_companions"
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _validation_charter_review_markdown(frame: pd.DataFrame) -> str:
+    lines = ["# Validation Charter Review", ""]
+    lines.append(
+        "This report tests whether the original Phase 1 thresholds remain statistically discriminative. "
+        "It never changes a gate automatically. Any charter revision requires an explicit reviewed config and documentation commit."
+    )
+    if frame.empty:
+        lines.extend(["", "No validation charter rows were produced."])
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("| " + " | ".join(frame.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(frame.columns)) + " |")
+    for _, row in frame.iterrows():
+        lines.append("| " + " | ".join(str(row[column]).replace("\n", " ") for column in frame.columns) + " |")
+    return "\n".join(lines)
+
+
+def _write_validation_charter_review(path: Path, frame: pd.DataFrame) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path / "validation_charter_review.csv", index=False)
+    (path / "validation_charter_review.md").write_text(
+        _validation_charter_review_markdown(frame),
+        encoding="utf-8",
+    )
+    _write_json(
+        path / "validation_charter_review.json",
+        {
+            "formal_revision_recommended": bool(
+                not frame.empty and frame["charter_review_recommended"].astype(bool).any()
+            ),
+            "automatic_gate_change_allowed": False,
+            "rows": frame.to_dict(orient="records"),
+        },
     )
 
 
@@ -11287,10 +12202,21 @@ def _write_experiment_bundle(
         "rank_ic_variance_decomposition.md",
         "rank_ic_variance_decomposition.json",
         "rank_ic_sampling_uncertainty.csv",
+        "rank_ic_aggregate_evidence.csv",
+        "rank_ic_block_sensitivity.csv",
+        "rank_ic_stability_evidence.md",
+        "rank_ic_stability_evidence.json",
         "causal_threshold_policy_summary.csv",
         "causal_threshold_policy_by_fold.csv",
         "causal_threshold_policy.md",
         "causal_threshold_policy.json",
+        "classification_skill_summary.csv",
+        "classification_skill_by_fold.csv",
+        "classification_skill.md",
+        "classification_skill.json",
+        "validation_charter_review.csv",
+        "validation_charter_review.md",
+        "validation_charter_review.json",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
         "payoff_alignment.md",
@@ -11967,9 +12893,24 @@ def write_experiment_diagnostics(
         entries,
         diagnostic_config,
     )
+    rank_ic_aggregate_evidence, rank_ic_block_sensitivity = _rank_ic_stability_evidence_frames(
+        entries,
+        diagnostic_config,
+    )
     causal_threshold_policy_summary, causal_threshold_policy_by_fold = _causal_threshold_policy_frames(
         entries,
         diagnostic_config,
+    )
+    classification_skill_summary, classification_skill_by_fold = _classification_skill_frames(
+        entries,
+        causal_threshold_policy_by_fold,
+        diagnostic_config,
+    )
+    validation_charter_review = _validation_charter_review_frame(
+        control_profile=settings["control_profile"],
+        rank_ic_evidence=rank_ic_aggregate_evidence,
+        classification_skill_summary=classification_skill_summary,
+        config=diagnostic_config,
     )
     payoff_alignment = _payoff_alignment_frame(entries, holdout_entries, diagnostic_config)
     payoff_alignment_summary = _payoff_alignment_summary_frame(payoff_alignment)
@@ -11999,7 +12940,10 @@ def write_experiment_diagnostics(
     decision["threshold_transfer_review"] = threshold_transfer_review.to_dict(orient="records")
     decision["threshold_score_quantile_review"] = threshold_score_quantile_review.to_dict(orient="records")
     decision["rank_ic_variance_decomposition"] = rank_ic_variance_decomposition.to_dict(orient="records")
+    decision["rank_ic_aggregate_evidence"] = rank_ic_aggregate_evidence.to_dict(orient="records")
     decision["causal_threshold_policy_summary"] = causal_threshold_policy_summary.to_dict(orient="records")
+    decision["classification_skill_summary"] = classification_skill_summary.to_dict(orient="records")
+    decision["validation_charter_review"] = validation_charter_review.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -12043,11 +12987,22 @@ def write_experiment_diagnostics(
         rank_ic_variance_decomposition,
         rank_ic_sampling_uncertainty,
     )
+    _write_rank_ic_stability_evidence(
+        report_dir,
+        rank_ic_aggregate_evidence,
+        rank_ic_block_sensitivity,
+    )
     _write_causal_threshold_policy(
         report_dir,
         causal_threshold_policy_summary,
         causal_threshold_policy_by_fold,
     )
+    _write_classification_skill(
+        report_dir,
+        classification_skill_summary,
+        classification_skill_by_fold,
+    )
+    _write_validation_charter_review(report_dir, validation_charter_review)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(report_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(report_dir, entries)
@@ -12249,7 +13204,10 @@ def write_experiment_diagnostics(
     _write_threshold_transfer_review(run_dir, threshold_transfer_review, threshold_transfer_by_fold)
     _write_threshold_score_quantile_review(run_dir, threshold_score_quantile_review, threshold_score_quantile_by_fold)
     _write_rank_ic_uncertainty(run_dir, rank_ic_variance_decomposition, rank_ic_sampling_uncertainty)
+    _write_rank_ic_stability_evidence(run_dir, rank_ic_aggregate_evidence, rank_ic_block_sensitivity)
     _write_causal_threshold_policy(run_dir, causal_threshold_policy_summary, causal_threshold_policy_by_fold)
+    _write_classification_skill(run_dir, classification_skill_summary, classification_skill_by_fold)
+    _write_validation_charter_review(run_dir, validation_charter_review)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
     _write_payoff_policy_robustness(run_dir, payoff_policy_robustness, payoff_policy_robustness_summary)
     _write_profile_diagnostic_summaries(run_dir, entries)
@@ -12326,8 +13284,13 @@ def write_experiment_diagnostics(
         "threshold_score_quantile_by_fold": threshold_score_quantile_by_fold,
         "rank_ic_variance_decomposition": rank_ic_variance_decomposition,
         "rank_ic_sampling_uncertainty": rank_ic_sampling_uncertainty,
+        "rank_ic_aggregate_evidence": rank_ic_aggregate_evidence,
+        "rank_ic_block_sensitivity": rank_ic_block_sensitivity,
         "causal_threshold_policy_summary": causal_threshold_policy_summary,
         "causal_threshold_policy_by_fold": causal_threshold_policy_by_fold,
+        "classification_skill_summary": classification_skill_summary,
+        "classification_skill_by_fold": classification_skill_by_fold,
+        "validation_charter_review": validation_charter_review,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,

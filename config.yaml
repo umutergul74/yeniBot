@@ -1764,8 +1764,16 @@ validation:
     enabled: true
     block_length: 24
     bootstrap_repeats: 120
+    block_lengths: [1, 6, 12, 24, 48]
+    sensitivity_bootstrap_repeats: 80
     confidence_level: 0.95
     random_seed: 42
+  classification_skill:
+    enabled: true
+    min_prauc_lift_vs_prevalence: 1.05
+    min_precision_lift_vs_prevalence: 1.05
+    min_f1_skill_vs_rate_random: 0.00
+    min_positive_forward_return_fold_rate: 0.60
   causal_threshold_policy:
     enabled: true
     rolling_window: 1080
