@@ -217,6 +217,22 @@ Use focused commits with one of these prefixes:
 
 Always check `git status` before committing. Never revert user changes unless explicitly requested.
 
+## Code Architecture Discipline
+
+- New experiment code belongs under `yenibot/experiment/`; do not grow
+  `yenibot/experiments.py` beyond its compatibility-facade role.
+- Import notebook-facing experiment APIs from `yenibot.experiment`.
+- Keep experiment modules responsibility-focused and below the architecture
+  guardrail enforced by `tests/test_experiment_architecture.py`.
+- Do not create circular dependencies between experiment modules.
+- Training and diagnostics orchestration must update their atomic workflow
+  status files so interrupted or failed stages can be located from the run
+  directory.
+- Do not silently swallow selected profiles, invalid fold ids, missing
+  predictions, incomplete reports, or artifact-write failures.
+- Preserve existing report schemas and compatibility imports during internal
+  refactors unless a tested migration is deliberately committed.
+
 ## Absolute Prohibitions
 
 - Do not build Phase 2 backtest, execution, trade management, live bot, or order-routing code before all Phase 1 gates pass.

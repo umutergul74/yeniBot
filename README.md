@@ -52,6 +52,20 @@ pip install -r requirements.txt
 pytest
 ```
 
+## Code Architecture
+
+The experiment system is split by responsibility under `yenibot/experiment/`.
+New code should import notebook-facing APIs from `yenibot.experiment`;
+`yenibot/experiments.py` remains only as a backward-compatible facade.
+
+Long-running notebook 04 and 05 workflows write atomic status files into the
+experiment run directory. These record the current stage and a compact
+traceback when a workflow fails, making Colab interruptions and report errors
+easier to locate.
+
+See [docs/architecture.md](docs/architecture.md) for module ownership,
+dependency rules, and failure-localization paths.
+
 ## Phase 1 Gate
 
 Proceed only when diagnostics show:
