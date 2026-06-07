@@ -32,6 +32,10 @@ Run notebooks in strict order:
 4. `04_training_walk_forward.ipynb`
 5. `05_diagnostics_validation.ipynb`
 
+Notebook 05 also freezes the pre-anchor candidate artifact manifest, verifies
+model/scaler/HMM hashes, and runs the no-refit future-OOS evaluator once enough
+fresh labeled bars exist. Fresh-bar readiness alone is not a Phase 2 pass.
+
 After any `git pull` in Colab, use `Runtime -> Restart session` before re-running cells. Python keeps imported modules in memory and will otherwise use stale code.
 
 Feature-engineering changes, including changes to `features.structure_stability`,

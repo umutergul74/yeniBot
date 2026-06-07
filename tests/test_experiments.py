@@ -2212,6 +2212,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["preferred_new_bars"] == 2160
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["allow_holdout_roll_forward"] is False
+    assert config["validation"]["charter"]["active_version"] == "v3_legacy"
+    assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "proposed_not_active"
+    frozen = config["experiments"]["frozen_candidates"]
+    assert frozen["primary_candidate_id"] == "control_fold_ensemble_v1"
+    assert frozen["candidates"][0]["profile"] == config["experiments"]["control_profile"]
+    assert config["experiments"]["future_oos_validation"]["min_rows"] == 720
+    assert config["experiments"]["future_oos_validation"]["gates"]["min_rank_ic"] == 0.03
     robustness = config["experiments"]["policy_review"]["robustness"]
     assert robustness["enabled"] is True
     assert robustness["min_rows"] == 720
@@ -3706,6 +3713,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase2_readiness.md").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_transition_plan.json").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "phase1_transition_plan.md").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "validation_charter_status.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "frozen_candidate_manifest.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "future_oos_readiness.json").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "future_oos_evaluation.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_registry_snapshot.jsonl").exists()
     assert "phase1_transition_plan" in diagnostics["decision"]
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",
@@ -3725,6 +3737,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/prediction_error_audit.csv" in archive.namelist()
         assert "matrix/historical_experiment_memory_audit.csv" in archive.namelist()
         assert "matrix/phase1_decision_ladder.json" in archive.namelist()
+        assert "matrix/validation_charter_status.json" in archive.namelist()
+        assert "matrix/frozen_candidate_manifest.json" in archive.namelist()
+        assert "matrix/future_oos_readiness.json" in archive.namelist()
+        assert "matrix/future_oos_evaluation.csv" in archive.namelist()
+        assert "matrix/experiment_registry_snapshot.jsonl" in archive.namelist()
         assert "matrix/profile_calibrated_threshold_summary.csv" in archive.namelist()
         assert "matrix/fold_stability_forensics.csv" in archive.namelist()
         assert "matrix/fold_stability_summary.csv" in archive.namelist()

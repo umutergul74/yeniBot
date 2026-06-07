@@ -194,6 +194,12 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "seed_audit_coverage.csv",
         "validation_charter_review.csv",
         "validation_charter_proposal.csv",
+        "validation_charter_status.json",
+        "frozen_candidate_manifest.json",
+        "frozen_candidate_index.csv",
+        "future_oos_readiness.json",
+        "future_oos_evaluation.csv",
+        "experiment_registry_snapshot.jsonl",
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
@@ -379,6 +385,7 @@ def _next_action(
     policy: dict[str, Any],
     cv_promotable: list[dict[str, Any]],
     decision: dict[str, Any],
+    future_oos: dict[str, Any],
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     if missing_files:
@@ -390,6 +397,16 @@ def _next_action(
     if not bool(decision.get("holdout_boundary_passed", True)):
         reasons.append("holdout_boundary_audit_failed")
         return "rerun_training_with_holdout_split", reasons
+    if bool(policy.get("future_oos_ready", False)) and not bool(
+        future_oos.get("evaluation_completed", False)
+    ):
+        reasons.append("future_oos_ready_but_not_evaluated")
+        return "run_no_refit_future_oos_evaluator", reasons
+    if bool(future_oos.get("evaluation_completed", False)) and not bool(
+        future_oos.get("primary_candidate_passed", False)
+    ):
+        reasons.append("frozen_primary_candidate_failed_future_oos")
+        return "retire_failed_frozen_candidate_and_open_new_research_anchor", reasons
     if cv_promotable:
         reasons.append("candidate_passed_cv_gates")
         if not bool(policy.get("future_oos_ready", False)):
@@ -405,7 +422,6 @@ def _next_action(
 
 def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     control = review.get("cv", {}).get("control", {}) or {}
-    policy = review.get("holdout", {}).get("policy", {}) or {}
     completeness = review.get("report_completeness", {}) or {}
     mean_rank_ic = _metric(control, "mean_rank_ic")
     std_rank_ic = _metric(control, "std_rank_ic")
@@ -416,6 +432,9 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
     seed_coverage = review.get("seed_audit_coverage", {}) or {}
+    future_oos = review.get("future_oos", {}).get("readiness", {}) or {}
+    frozen_candidate = review.get("frozen_candidate", {}) or {}
+    charter = review.get("validation_charter_status", {}) or {}
     official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
     advisories: list[str] = []
     if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
@@ -511,10 +530,31 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "check": "future_unseen_oos_ready",
-            "passed": bool(policy.get("future_oos_ready", False)),
-            "value": policy.get("future_oos_ready", False),
+            "passed": bool(future_oos.get("ready_for_evaluation", False)),
+            "value": future_oos.get("ready_for_evaluation", False),
             "target": True,
             "blocker": "future_unseen_oos_not_ready",
+        },
+        {
+            "check": "frozen_candidate_manifest",
+            "passed": bool(frozen_candidate.get("available", False)),
+            "value": frozen_candidate.get("available", False),
+            "target": True,
+            "blocker": "frozen_candidate_manifest_unavailable",
+        },
+        {
+            "check": "future_unseen_oos_evaluated",
+            "passed": bool(future_oos.get("evaluation_completed", False)),
+            "value": future_oos.get("evaluation_completed", False),
+            "target": True,
+            "blocker": "future_unseen_oos_not_evaluated",
+        },
+        {
+            "check": "future_unseen_oos_passed",
+            "passed": bool(future_oos.get("primary_candidate_passed", False)),
+            "value": future_oos.get("primary_candidate_passed", False),
+            "target": True,
+            "blocker": "future_unseen_oos_candidate_failed",
         },
     ]
     blockers = [str(item["blocker"]) for item in checks if not bool(item["passed"])]
@@ -525,6 +565,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         "blockers": blockers,
         "advisories": advisories,
         "long_f1_source": official_long_f1_source,
+        "active_validation_charter": charter.get("active_version", "v3_legacy"),
         "checks": checks,
         "next_action": (
             "freeze_phase1_candidate_and_prepare_phase2_design"
@@ -538,6 +579,7 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     control = review.get("cv", {}).get("control", {}) or {}
     phase2 = review.get("phase2_readiness", {}) or {}
     policy = review.get("holdout", {}).get("policy", {}) or {}
+    future_evaluation = review.get("future_oos", {}).get("readiness", {}) or {}
     report_complete = bool(review.get("report_completeness", {}).get("complete", False))
     leakage_ok = _to_bool(control.get("mtf_leakage_passed"), default=False)
     stationarity_ok = _to_bool(control.get("stationarity_policy_passed"), default=False)
@@ -654,12 +696,25 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
             "threshold_issue_counts": review.get("forensics", {}).get("threshold_issue_counts", {}),
         },
         "future_oos": {
-            "ready": bool(policy.get("future_oos_ready", False)),
+            "ready": bool(future_evaluation.get("ready_for_evaluation", False)),
+            "evaluation_completed": bool(future_evaluation.get("evaluation_completed", False)),
+            "primary_candidate_passed": bool(
+                future_evaluation.get("primary_candidate_passed", False)
+            ),
             "min_ready_at": policy.get("min_ready_at"),
             "preferred_ready_at": policy.get("preferred_ready_at"),
-            "new_bars_since_anchor": policy.get("new_bars_since_anchor"),
-            "min_new_bars_remaining": policy.get("min_new_bars_remaining"),
-            "preferred_new_bars_remaining": policy.get("preferred_new_bars_remaining"),
+            "new_bars_since_anchor": future_evaluation.get(
+                "new_labeled_rows",
+                policy.get("new_bars_since_anchor"),
+            ),
+            "min_new_bars_remaining": future_evaluation.get(
+                "min_rows_remaining",
+                policy.get("min_new_bars_remaining"),
+            ),
+            "preferred_new_bars_remaining": future_evaluation.get(
+                "preferred_rows_remaining",
+                policy.get("preferred_new_bars_remaining"),
+            ),
         },
     }
 
@@ -684,6 +739,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     validation_charter = _read_csv(report_path / "validation_charter_review.csv")
     validation_charter_proposal = _read_csv(report_path / "validation_charter_proposal.csv")
     score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
+    validation_charter_status = _read_json(report_path / "validation_charter_status.json")
+    frozen_candidate = _read_json(report_path / "frozen_candidate_manifest.json")
+    future_oos_readiness = _read_json(report_path / "future_oos_readiness.json")
+    future_oos_evaluation = _read_csv(report_path / "future_oos_evaluation.csv")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(report_path)
     missing_profiles = _selected_missing_profiles(report_path)
@@ -749,6 +808,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         policy=policy,
         cv_promotable=cv_promotable,
         decision=decision,
+        future_oos=future_oos_readiness,
     )
     review = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -786,7 +846,11 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "future_oos": {
             "candidate_count": int(len(policy_plan)) if not policy_plan.empty else 0,
             "best_candidate_plan_row": _best_future_candidate(policy_plan),
+            "readiness": future_oos_readiness,
+            "evaluation_rows": _records(future_oos_evaluation),
         },
+        "frozen_candidate": frozen_candidate,
+        "validation_charter_status": validation_charter_status,
         "forensics": _forensics_summary(
             fold_stability_summary=fold_stability_summary,
             fold_stability_forensics=fold_stability_forensics,
@@ -1002,6 +1066,14 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Validation charter proposal status: "
         f"`{review.get('validation_charter_proposal', {}).get('proposal_status', 'not_produced')}` "
         f"(active: `{review.get('validation_charter_proposal', {}).get('active_for_phase1_readiness', False)}`)",
+        f"- Active validation charter: "
+        f"`{review.get('validation_charter_status', {}).get('active_version', 'v3_legacy')}`",
+        f"- Frozen candidate available: "
+        f"`{review.get('frozen_candidate', {}).get('available', False)}`",
+        f"- Future OOS evaluation completed: "
+        f"`{review.get('future_oos', {}).get('readiness', {}).get('evaluation_completed', False)}`",
+        f"- Future OOS primary candidate passed: "
+        f"`{review.get('future_oos', {}).get('readiness', {}).get('primary_candidate_passed', False)}`",
         f"- Score-reversal context hypotheses: `{review.get('score_reversal_context', {}).get('hypothesis_count', 0)}`",
         f"- Top context hypothesis: `{review.get('score_reversal_context', {}).get('top_hypothesis', {}).get('profile', '')}`",
         "",

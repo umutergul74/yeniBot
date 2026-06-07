@@ -1787,6 +1787,26 @@ validation:
     min_positive_f1_skill_fold_fraction: 0.75
     min_positive_forward_return_fold_fraction: 0.60
     max_pred_long_rate: 0.70
+  charter:
+    active_version: v3_legacy
+    activation_policy: "explicit_reviewed_config_and_documentation_commit_only"
+    versions:
+      v3_legacy:
+        status: active
+        description: "Original Phase 1 acceptance gates. Kept active until an explicit governance commit changes the charter."
+      v4_draft:
+        status: proposed_not_active
+        description: "Evidence-based draft that treats raw fold std and raw F1 as monitored diagnostics, never as an automatic silent relaxation."
+        min_mean_rank_ic: 0.03
+        min_positive_fold_fraction: 0.75
+        max_positive_fold_sign_test_pvalue: 0.01
+        require_random_effects_lower_ci_positive: true
+        min_prauc_lift_vs_prevalence: 1.05
+        min_precision_lift_vs_prevalence: 1.05
+        min_f1_skill_vs_rate_random: 0.00
+        max_pred_long_rate: 0.70
+        require_positive_selected_forward_return: true
+        require_future_oos_pass: true
   causal_threshold_policy:
     enabled: true
     rolling_window: 1080
@@ -1911,6 +1931,45 @@ experiments:
         - {name: etf_to_halving_cycle, start: "2024-01-11 00:00:00+00:00", end: "2024-08-31 23:00:00+00:00"}
         - {name: late_2024_to_q1_2025, start: "2024-09-01 00:00:00+00:00", end: "2025-03-31 23:00:00+00:00"}
         - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
+  frozen_candidates:
+    enabled: true
+    protocol_version: v1
+    anchor_run_id: "20260522_135424"
+    anchor_data_end: "2026-05-13 08:00:00+00:00"
+    primary_candidate_id: control_fold_ensemble_v1
+    artifact_policy: "reference_and_hash_existing_pre_anchor_fold_artifacts; never refit during future OOS evaluation"
+    candidates:
+      - candidate_id: control_fold_ensemble_v1
+        candidate_type: profile
+        profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+        fold_scope: full
+        status: preregistered
+      - candidate_id: control_long_pressure_65_35_v1
+        candidate_type: blend
+        blend_method: prob_weighted
+        profiles:
+          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+          - baseline_no_4h_tier1_4h_large_trade_pressure_long
+        weights: [0.65, 0.35]
+        fold_scope: full
+        status: preregistered_benchmark
+  future_oos_validation:
+    enabled: true
+    min_rows: 720
+    preferred_rows: 2160
+    block_length: 24
+    bootstrap_repeats: 500
+    confidence_level: 0.95
+    random_seed: 42
+    gates:
+      min_rank_ic: 0.03
+      min_rank_ic_lower_ci: 0.00
+      min_top_10_lift: 1.05
+      min_top_10_forward_return: 0.00
+      min_prauc_lift_vs_prevalence: 1.05
+      min_precision_lift_vs_prevalence: 1.05
+      min_f1_skill_vs_rate_random: 0.00
+      max_pred_long_rate: 0.70
   experiment_memory:
     enabled: true
     reject_retests: true

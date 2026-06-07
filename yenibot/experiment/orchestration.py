@@ -28,6 +28,8 @@ from yenibot.experiment.classification import (
     _write_validation_charter_review,
 )
 
+from yenibot.experiment.charter import write_validation_charter_status
+
 from yenibot.experiment.common import (
     _cfg,
     _hash_payload,
@@ -102,6 +104,9 @@ from yenibot.experiment.execution import (
     workflow_checkpoint,
 )
 
+from yenibot.experiment.frozen import freeze_candidate_manifests
+from yenibot.experiment.future_oos import evaluate_future_oos
+
 from yenibot.experiment.folds import (
     _fold_stability_forensics_frame,
     _fold_stability_summary_frame,
@@ -150,6 +155,8 @@ from yenibot.experiment.rank_ic import (
     _write_rank_ic_stability_evidence,
     _write_rank_ic_uncertainty,
 )
+
+from yenibot.experiment.registry import append_experiment_registry
 
 from yenibot.experiment.root_cause import (
     _bad_fold_mechanism_summary_frame,
@@ -1138,7 +1145,53 @@ def write_experiment_diagnostics(
         diagnostic_config,
         payoff_policy_robustness_summary,
     )
+    workflow_checkpoint("freeze_candidate_protocol")
+    validation_charter_status = write_validation_charter_status(
+        report_dir,
+        diagnostic_config,
+    )
+    frozen_candidate_manifests, frozen_candidate_index = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=report_dir,
+        entries=entries,
+        config=diagnostic_config,
+    )
+    workflow_checkpoint(
+        "evaluate_future_oos",
+        frozen_candidate_count=len(frozen_candidate_manifests),
+    )
+    future_oos_evaluation, future_oos_readiness = evaluate_future_oos(
+        run_dir=run_dir,
+        report_dir=report_dir,
+        config=diagnostic_config,
+        manifests=frozen_candidate_manifests,
+    )
+    registry_record = append_experiment_registry(
+        registry_path=experiment_root(checkpoint_dir) / "experiment_registry.jsonl",
+        snapshot_path=report_dir / "experiment_registry_snapshot.jsonl",
+        event={
+            "event_type": "phase1_diagnostics",
+            "run_id": run_dir.name,
+            "control_profile": settings["control_profile"],
+            "training_signature_hash": str(run_manifest.get("experiment_signature_hash", "")),
+            "frozen_candidate_manifest_hashes": {
+                item["candidate_id"]: item["manifest_hash"]
+                for item in frozen_candidate_manifests
+            },
+            "future_oos": {
+                "ready_for_evaluation": future_oos_readiness.get("ready_for_evaluation"),
+                "evaluation_completed": future_oos_readiness.get("evaluation_completed"),
+                "primary_candidate_passed": future_oos_readiness.get("primary_candidate_passed"),
+                "latest_available_data_end": future_oos_readiness.get("latest_available_data_end"),
+            },
+        },
+    )
     decision["future_oos_candidate_plan"] = future_oos_candidate_plan.to_dict(orient="records")
+    decision["validation_charter_status"] = validation_charter_status.to_dict(orient="records")
+    decision["frozen_candidate_index"] = frozen_candidate_index.to_dict(orient="records")
+    decision["future_oos_evaluation"] = future_oos_evaluation.to_dict(orient="records")
+    decision["future_oos_readiness"] = future_oos_readiness
+    decision["experiment_registry_event_id"] = registry_record["event_id"]
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     decision["fold_stability_summary"] = fold_stability_summary.to_dict(orient="records")
     decision["bad_fold_signature"] = bad_fold_signature.to_dict(orient="records")
@@ -1517,6 +1570,7 @@ def write_experiment_diagnostics(
         "classification_skill_by_fold": classification_skill_by_fold,
         "validation_charter_review": validation_charter_review,
         "validation_charter_proposal": validation_charter_proposal,
+        "validation_charter_status": validation_charter_status,
         "payoff_alignment": payoff_alignment,
         "payoff_alignment_summary": payoff_alignment_summary,
         "payoff_policy_robustness": payoff_policy_robustness,
@@ -1528,6 +1582,9 @@ def write_experiment_diagnostics(
         "frozen_policy_monitoring_plan": frozen_policy_monitoring_plan,
         "experiment_policy_guard": experiment_policy_guard,
         "future_oos_candidate_plan": future_oos_candidate_plan,
+        "frozen_candidate_index": frozen_candidate_index,
+        "future_oos_evaluation": future_oos_evaluation,
+        "future_oos_readiness": future_oos_readiness,
         "holdout_evaluation": holdout_evaluation,
         "holdout_score_bands": holdout_score_bands,
         "holdout_thresholds": holdout_thresholds,

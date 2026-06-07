@@ -105,6 +105,11 @@ Holdout is a one-shot validation gate, not a development playground.
 - Use `future_oos_monitor` to count fresh unseen bars after the anchor.
 - Promotion is blocked until `future_unseen_oos_ready` is true and the candidate was pre-registered before that future-OOS window.
 - Observed-best holdout rows are diagnostic only. They can inform future hypotheses, not immediate promotion.
+- Frozen future-OOS candidates must be recorded in `frozen_candidate_manifest.json`.
+- Every referenced model, scaler, HMM, feature order, training signature, threshold source, and fit cutoff must be content-hashed before future-OOS scoring.
+- Future-OOS evaluation is prediction-only. It must perform zero fit operations and fail closed on missing or modified artifacts.
+- Enough new bars is only readiness to evaluate. Phase 2 remains blocked until the frozen primary candidate is actually evaluated and passes its pre-registered future-OOS gates.
+- Keep an append-only `experiment_registry.jsonl`; do not rewrite historical decision records.
 
 ## Phase 1 Readiness Gates
 
@@ -119,6 +124,11 @@ Phase 2 is blocked until `auto_review.py` reports all readiness checks passing:
 7. `mtf_leakage`: MTF leakage audit passes.
 8. `stationarity_policy`: stationarity policy audit passes.
 9. `future_unseen_oos_ready`: enough fresh unseen bars exist after the anchor.
+10. `frozen_candidate_manifest`: the pre-anchor candidate artifacts are complete and hash-verified.
+11. `future_unseen_oos_evaluated`: the frozen candidate has been scored on the fresh window without refitting.
+12. `future_unseen_oos_passed`: the pre-registered future-OOS evidence gates pass.
+
+The active validation charter remains `v3_legacy` until an explicit reviewed config and documentation commit changes it. `v4_draft` is a governance proposal only. Diagnostics may show that legacy std/F1 targets are statistically weak, but code must never activate a replacement charter automatically.
 
 If Rank IC is near `0.01`, features are inadequate. Do not respond by tuning model hyperparameters first.
 
@@ -167,6 +177,12 @@ Required diagnostic artifacts include:
 - `seed_audit_coverage.csv`
 - `validation_charter_review.csv`
 - `validation_charter_proposal.csv`
+- `validation_charter_status.json`
+- `frozen_candidate_manifest.json`
+- `frozen_candidate_index.csv`
+- `future_oos_readiness.json`
+- `future_oos_evaluation.csv`
+- `experiment_registry_snapshot.jsonl`
 - `holdout_evaluation.csv`
 - `holdout_policy_decision.csv`
 - `future_oos_candidate_plan.csv`

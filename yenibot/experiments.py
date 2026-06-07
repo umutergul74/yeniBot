@@ -18,4 +18,8 @@ from yenibot.experiment.drift import *  # noqa: F401,F403
 from yenibot.experiment.payoff import *  # noqa: F401,F403
 from yenibot.experiment.ensembles import *  # noqa: F401,F403
 from yenibot.experiment.artifacts import *  # noqa: F401,F403
+from yenibot.experiment.charter import *  # noqa: F401,F403
+from yenibot.experiment.frozen import *  # noqa: F401,F403
+from yenibot.experiment.future_oos import *  # noqa: F401,F403
+from yenibot.experiment.registry import *  # noqa: F401,F403
 from yenibot.experiment.orchestration import *  # noqa: F401,F403

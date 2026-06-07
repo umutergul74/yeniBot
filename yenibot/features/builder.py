@@ -294,7 +294,6 @@ def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: 
         total_buy = float(taker_buy.sum())
         first_half = part.iloc[: max(1, count // 2)]
         second_half = part.iloc[max(1, count // 2) :]
-        early_volume = float(first_half["volume"].sum())
         late_volume = float(second_half["volume"].sum())
         early_cvd = float(first_half["true_cvd_delta"].sum())
         late_cvd = float(second_half["true_cvd_delta"].sum())

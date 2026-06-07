@@ -50,6 +50,10 @@ New code imports public APIs from `yenibot.experiment`.
 | `ensembles.py` | Seed audits, profile blends, deltas |
 | `artifacts.py` | Slim/full bundle packaging |
 | `execution.py` | Atomic workflow status and failure traces |
+| `charter.py` | Explicit versioned validation-charter governance |
+| `frozen.py` | Content-addressed pre-anchor candidate manifests |
+| `future_oos.py` | Artifact-verified, no-refit future-OOS scoring |
+| `registry.py` | Append-only experiment decision history |
 | `orchestration.py` | Top-level notebook-facing workflows |
 
 The architecture test rejects circular imports and experiment modules over
@@ -80,6 +84,14 @@ Each file is atomically replaced and records:
 
 If Colab disconnects abruptly, status can remain `running`; `current_stage`
 still identifies the interrupted phase.
+
+## Future-OOS Flow
+
+1. Notebook 05 freezes existing pre-anchor artifacts and their hashes.
+2. The evaluator waits until the configured minimum fresh labeled rows exist.
+3. It verifies every artifact hash, then runs transform/predict only.
+4. It writes future evidence separately from the active Phase 1 charter.
+5. Phase 2 remains blocked unless both the active charter and future-OOS checks pass.
 
 ## Change Rules
 

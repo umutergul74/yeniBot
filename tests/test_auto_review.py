@@ -395,6 +395,54 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         ),
         encoding="utf-8",
     )
+    (path / "validation_charter_status.json").write_text(
+        json.dumps(
+            {
+                "active_version": "v3_legacy",
+                "official_gate_unchanged": True,
+                "automatic_activation_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (path / "frozen_candidate_manifest.json").write_text(
+        json.dumps(
+            {
+                "candidate_id": "control_fold_ensemble_v1",
+                "available": True,
+                "manifest_hash": "fixture",
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "candidate_id": "control_fold_ensemble_v1",
+                "candidate_type": "profile",
+                "available": True,
+            }
+        ]
+    ).to_csv(path / "frozen_candidate_index.csv", index=False)
+    (path / "future_oos_readiness.json").write_text(
+        json.dumps(
+            {
+                "ready_for_evaluation": future_oos_ready,
+                "evaluation_completed": False,
+                "primary_candidate_passed": False,
+                "new_labeled_rows": 250,
+                "min_rows_remaining": 470,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        columns=["candidate_id", "rank_ic", "evidence_passed"]
+    ).to_csv(path / "future_oos_evaluation.csv", index=False)
+    (path / "experiment_registry_snapshot.jsonl").write_text(
+        json.dumps({"event_id": "fixture", "run_id": "test_run"}) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None:
