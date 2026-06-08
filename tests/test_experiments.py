@@ -2204,7 +2204,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["status"] == "failed_clean_holdout_review"
     assert config["experiments"]["policy_review"]["threshold_deployment_allowed"] is False
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
-        "blend_control_long_pressure_65_35",
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
@@ -2217,6 +2217,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     frozen = config["experiments"]["frozen_candidates"]
     assert frozen["primary_candidate_id"] == "control_fold_ensemble_v1"
     assert frozen["candidates"][0]["profile"] == config["experiments"]["control_profile"]
+    assert frozen["candidates"][0]["required_for_evaluation"] is True
+    assert frozen["candidates"][1]["required_for_evaluation"] is False
+    assert frozen["candidates"][1]["evaluation_role"] == "optional_historical_benchmark"
     assert config["experiments"]["future_oos_validation"]["min_rows"] == 720
     assert config["experiments"]["future_oos_validation"]["gates"]["min_rank_ic"] == 0.03
     robustness = config["experiments"]["policy_review"]["robustness"]
@@ -3718,6 +3721,14 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "future_oos_readiness.json").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "future_oos_evaluation.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_registry_snapshot.jsonl").exists()
+    registry_rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / "reports" / "experiments" / "matrix" / "experiment_registry_snapshot.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert registry_rows[-1]["training_signature_hash"]
     assert "phase1_transition_plan" in diagnostics["decision"]
     assert diagnostics["decision"]["recommendation"] in {
         "keep_control_profile",

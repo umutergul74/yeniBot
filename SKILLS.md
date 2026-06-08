@@ -109,6 +109,8 @@ Holdout is a one-shot validation gate, not a development playground.
 - Every referenced model, scaler, HMM, feature order, training signature, threshold source, and fit cutoff must be content-hashed before future-OOS scoring.
 - Future-OOS evaluation is prediction-only. It must perform zero fit operations and fail closed on missing or modified artifacts.
 - Enough new bars is only readiness to evaluate. Phase 2 remains blocked until the frozen primary candidate is actually evaluated and passes its pre-registered future-OOS gates.
+- Future-OOS readiness, evaluation, and pass are sequential states. Before the minimum row count is reached, evaluation/pass checks must be reported as pending rather than as additional failures.
+- Optional historical benchmark candidates may remain unavailable without invalidating the required primary candidate. They must be reported as warnings and must never be substituted for the primary candidate.
 - Keep an append-only `experiment_registry.jsonl`; do not rewrite historical decision records.
 
 ## Phase 1 Readiness Gates

@@ -435,6 +435,10 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     future_oos = review.get("future_oos", {}).get("readiness", {}) or {}
     frozen_candidate = review.get("frozen_candidate", {}) or {}
     charter = review.get("validation_charter_status", {}) or {}
+    future_ready = bool(future_oos.get("ready_for_evaluation", False))
+    frozen_candidate_available = bool(frozen_candidate.get("available", False))
+    future_evaluated = bool(future_oos.get("evaluation_completed", False))
+    future_passed = future_oos.get("primary_candidate_passed") is True
     official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
     advisories: list[str] = []
     if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
@@ -530,34 +534,51 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "check": "future_unseen_oos_ready",
-            "passed": bool(future_oos.get("ready_for_evaluation", False)),
-            "value": future_oos.get("ready_for_evaluation", False),
+            "passed": future_ready,
+            "value": future_ready,
             "target": True,
             "blocker": "future_unseen_oos_not_ready",
+            "applicable": True,
         },
         {
             "check": "frozen_candidate_manifest",
-            "passed": bool(frozen_candidate.get("available", False)),
-            "value": frozen_candidate.get("available", False),
+            "passed": frozen_candidate_available,
+            "value": frozen_candidate_available,
             "target": True,
             "blocker": "frozen_candidate_manifest_unavailable",
+            "applicable": True,
         },
         {
             "check": "future_unseen_oos_evaluated",
-            "passed": bool(future_oos.get("evaluation_completed", False)),
-            "value": future_oos.get("evaluation_completed", False),
+            "passed": future_evaluated if future_ready and frozen_candidate_available else None,
+            "value": future_oos.get("evaluation_completed"),
             "target": True,
             "blocker": "future_unseen_oos_not_evaluated",
+            "applicable": future_ready and frozen_candidate_available,
         },
         {
             "check": "future_unseen_oos_passed",
-            "passed": bool(future_oos.get("primary_candidate_passed", False)),
-            "value": future_oos.get("primary_candidate_passed", False),
+            "passed": future_passed if future_evaluated else None,
+            "value": future_oos.get("primary_candidate_passed"),
             "target": True,
             "blocker": "future_unseen_oos_candidate_failed",
+            "applicable": future_evaluated,
         },
     ]
-    blockers = [str(item["blocker"]) for item in checks if not bool(item["passed"])]
+    for item in checks:
+        applicable = bool(item.get("applicable", True))
+        item["status"] = (
+            "pending"
+            if not applicable
+            else "passed"
+            if bool(item["passed"])
+            else "failed"
+        )
+    blockers = [
+        str(item["blocker"])
+        for item in checks
+        if bool(item.get("applicable", True)) and not bool(item["passed"])
+    ]
     ready = not blockers
     return {
         "ready_for_phase2": ready,

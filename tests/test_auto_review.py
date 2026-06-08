@@ -469,6 +469,15 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["phase2_readiness"]["ready_for_phase2"] is False
     assert "rank_ic_std_above_phase1_target" in review["phase2_readiness"]["blockers"]
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
+    assert "future_unseen_oos_not_ready" in review["phase2_readiness"]["blockers"]
+    assert "future_unseen_oos_not_evaluated" not in review["phase2_readiness"]["blockers"]
+    assert "future_unseen_oos_candidate_failed" not in review["phase2_readiness"]["blockers"]
+    future_checks = {
+        row["check"]: row for row in review["phase2_readiness"]["checks"]
+    }
+    assert future_checks["future_unseen_oos_ready"]["status"] == "failed"
+    assert future_checks["future_unseen_oos_evaluated"]["status"] == "pending"
+    assert future_checks["future_unseen_oos_passed"]["status"] == "pending"
     assert review["phase2_readiness"]["long_f1_source"] == "validation_selected_threshold"
     assert "fixed_0_50_f1_below_target_calibration_issue" in review["phase2_readiness"]["advisories"]
     assert "rank_ic_std_legacy_gate_requires_governance_review" in review["phase2_readiness"]["advisories"]

@@ -1173,7 +1173,7 @@ def write_experiment_diagnostics(
             "event_type": "phase1_diagnostics",
             "run_id": run_dir.name,
             "control_profile": settings["control_profile"],
-            "training_signature_hash": str(run_manifest.get("experiment_signature_hash", "")),
+            "training_signature_hash": str(run_manifest.get("signature_hash", "")),
             "frozen_candidate_manifest_hashes": {
                 item["candidate_id"]: item["manifest_hash"]
                 for item in frozen_candidate_manifests

@@ -1909,7 +1909,7 @@ experiments:
     threshold_deployment_allowed: false
     note: "Clean holdout run 20260522_135424 invalidated this frozen top_10 score-band as an active review candidate: forward return was negative. Keep it as a benchmark only; do not deploy or promote from the same holdout."
     future_oos_candidates:
-      - blend_control_long_pressure_65_35
+      - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     future_oos_monitor:
       enabled: true
       anchor_run_id: "20260522_135424"
@@ -1944,6 +1944,8 @@ experiments:
         profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
         fold_scope: full
         status: preregistered
+        evaluation_role: primary
+        required_for_evaluation: true
       - candidate_id: control_long_pressure_65_35_v1
         candidate_type: blend
         blend_method: prob_weighted
@@ -1953,6 +1955,8 @@ experiments:
         weights: [0.65, 0.35]
         fold_scope: full
         status: preregistered_benchmark
+        evaluation_role: optional_historical_benchmark
+        required_for_evaluation: false
   future_oos_validation:
     enabled: true
     min_rows: 720

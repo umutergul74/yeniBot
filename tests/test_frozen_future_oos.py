@@ -150,6 +150,41 @@ def test_frozen_manifest_hashes_artifacts_and_detects_tampering(tmp_path: Path) 
     assert any("model_fold_000.pt" in error for error in errors)
 
 
+def test_optional_frozen_benchmark_does_not_invalidate_primary(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    _, entry = _fake_scope(run_dir)
+    config = _config(tmp_path)
+    config["experiments"]["frozen_candidates"]["candidates"].extend(
+        [
+            {
+                "candidate_id": "optional_blend_v1",
+                "candidate_type": "blend",
+                "profiles": ["control", "missing_benchmark"],
+                "weights": [0.65, 0.35],
+                "fold_scope": "full",
+                "status": "preregistered_benchmark",
+                "evaluation_role": "optional_historical_benchmark",
+                "required_for_evaluation": False,
+            }
+        ]
+    )
+
+    manifests, index = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "report",
+        entries=[entry],
+        config=config,
+    )
+
+    primary = next(item for item in manifests if item["candidate_id"] == "control_v1")
+    optional = next(item for item in manifests if item["candidate_id"] == "optional_blend_v1")
+    assert primary["required_for_evaluation"] is True
+    assert primary["available"] is True
+    assert optional["required_for_evaluation"] is False
+    assert optional["available"] is False
+    assert index["required_for_evaluation"].tolist() == [True, False]
+
+
 def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path, min_rows=20)
     data_dir = Path(config["paths"]["data_dir"]) / "processed"
@@ -177,6 +212,8 @@ def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) ->
 
     assert evaluation.empty
     assert status["ready_for_evaluation"] is False
+    assert status["evaluation_state"] == "waiting_for_min_rows"
+    assert status["primary_candidate_passed"] is None
     assert status["fit_operations_performed"] == 0
 
 
@@ -232,6 +269,78 @@ def test_future_oos_scores_frozen_predictions_without_refit(tmp_path: Path, monk
     assert status["fit_operations_performed"] == 0
     assert bool(evaluation.loc[0, "no_refit_verified"]) is True
     assert evaluation.loc[0, "rank_ic"] > 0.9
+
+
+def test_future_oos_ignores_unavailable_optional_candidate(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path, min_rows=20)
+    data_dir = Path(config["paths"]["data_dir"]) / "processed"
+    data_dir.mkdir(parents=True)
+    timestamps = pd.date_range("2024-01-01", periods=80, freq="h", tz="UTC")
+    pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "feature": np.arange(80, dtype=float),
+            "label": np.arange(80) % 2,
+            "fwd_return_10h": np.where(np.arange(80) % 2, 0.01, -0.01),
+        }
+    ).to_parquet(data_dir / "labeled_1h.parquet", index=False)
+    future_timestamps = timestamps[timestamps > pd.Timestamp("2024-01-02", tz="UTC")]
+    future = pd.DataFrame(
+        {
+            "timestamp": future_timestamps,
+            "prob_long": np.where(np.arange(len(future_timestamps)) % 2, 0.9, 0.1),
+            "label": np.arange(len(future_timestamps)) % 2,
+            "forward_return": np.where(
+                np.arange(len(future_timestamps)) % 2,
+                0.01,
+                -0.01,
+            ),
+        }
+    )
+    monkeypatch.setattr(future_oos_module, "verify_frozen_manifest_artifacts", lambda *_, **__: [])
+    monkeypatch.setattr(
+        future_oos_module,
+        "_profile_predictions",
+        lambda **_: {"control": future.copy()},
+    )
+    manifests = [
+        {
+            "candidate_id": "control_v1",
+            "candidate_type": "profile",
+            "profiles": ["control"],
+            "components": [{}],
+            "available": True,
+            "required_for_evaluation": True,
+            "threshold": {"value": 0.55, "source": "validation_threshold"},
+            "manifest_hash": "primary",
+        },
+        {
+            "candidate_id": "optional_blend_v1",
+            "candidate_type": "blend",
+            "profiles": ["control", "missing_benchmark"],
+            "components": [{}],
+            "available": False,
+            "required_for_evaluation": False,
+            "unavailable_reasons": ["missing_profile_scope:missing_benchmark:full"],
+            "threshold": {"value": 0.5, "source": "fallback"},
+            "manifest_hash": "optional",
+        },
+    ]
+
+    evaluation, status = evaluate_future_oos(
+        run_dir=tmp_path / "run",
+        report_dir=tmp_path / "report",
+        config=config,
+        manifests=manifests,
+    )
+
+    assert evaluation["candidate_id"].tolist() == ["control_v1"]
+    assert status["evaluation_completed"] is True
+    assert status["required_candidate_errors"] == []
+    assert status["artifact_integrity_errors"] == []
+    assert status["optional_candidate_warnings"] == [
+        "optional_blend_v1:missing_profile_scope:missing_benchmark:full"
+    ]
 
 
 def test_registry_is_append_only_and_deduplicates_events(tmp_path: Path) -> None:

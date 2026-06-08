@@ -142,12 +142,15 @@ def freeze_candidate_manifests(
     frozen_cfg = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
     enabled = bool(frozen_cfg.get("enabled", False))
     anchor_value = frozen_cfg.get("anchor_data_end")
+    primary_id = str(frozen_cfg.get("primary_candidate_id", ""))
     if not enabled or not anchor_value:
         index = pd.DataFrame(
             columns=[
                 "candidate_id",
                 "candidate_type",
                 "candidate_status",
+                "evaluation_role",
+                "required_for_evaluation",
                 "available",
                 "profile_count",
                 "model_count",
@@ -182,6 +185,9 @@ def freeze_candidate_manifests(
         candidate_id = str(spec.get("candidate_id", "")).strip()
         candidate_type = str(spec.get("candidate_type", "profile"))
         fold_scope = str(spec.get("fold_scope", "full"))
+        required_for_evaluation = bool(
+            spec.get("required_for_evaluation", candidate_id == primary_id)
+        )
         components: list[dict[str, Any]] = []
         errors: list[str] = []
         profiles = (
@@ -227,6 +233,13 @@ def freeze_candidate_manifests(
             "candidate_id": candidate_id,
             "candidate_type": candidate_type,
             "candidate_status": str(spec.get("status", "preregistered")),
+            "evaluation_role": str(
+                spec.get(
+                    "evaluation_role",
+                    "primary" if candidate_id == primary_id else "optional_benchmark",
+                )
+            ),
+            "required_for_evaluation": required_for_evaluation,
             "source_run_id": run_path.name,
             "anchor_run_id": str(frozen_cfg.get("anchor_run_id", "")),
             "anchor_data_end": anchor.isoformat(),
@@ -261,6 +274,8 @@ def freeze_candidate_manifests(
             "candidate_id": item["candidate_id"],
             "candidate_type": item["candidate_type"],
             "candidate_status": item["candidate_status"],
+            "evaluation_role": item["evaluation_role"],
+            "required_for_evaluation": item["required_for_evaluation"],
             "available": item["available"],
             "profile_count": len(item["profiles"]),
             "model_count": sum(int(component.get("model_count", 0)) for component in item["components"]),
@@ -279,7 +294,6 @@ def freeze_candidate_manifests(
         encoding="utf-8",
     )
     _write_json(report_path / "frozen_candidate_manifests.json", {"candidates": manifests})
-    primary_id = str(frozen_cfg.get("primary_candidate_id", ""))
     primary = next((item for item in manifests if item["candidate_id"] == primary_id), {})
     _write_json(report_path / "frozen_candidate_manifest.json", primary)
     return manifests, index

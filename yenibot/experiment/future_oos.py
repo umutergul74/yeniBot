@@ -248,6 +248,7 @@ def evaluate_future_oos(
     future_cfg = _cfg(config, ["experiments", "future_oos_validation"], {}) or {}
     frozen_cfg = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
     anchor_value = frozen_cfg.get("anchor_data_end")
+    primary_id = str(frozen_cfg.get("primary_candidate_id", ""))
     min_rows = int(future_cfg.get("min_rows", 720))
     preferred_rows = int(future_cfg.get("preferred_rows", 2160))
     if not bool(future_cfg.get("enabled", False)) or not anchor_value:
@@ -258,11 +259,14 @@ def evaluate_future_oos(
             "enabled": bool(future_cfg.get("enabled", False)),
             "ready_for_evaluation": False,
             "evaluation_completed": False,
-            "primary_candidate_passed": False,
+            "evaluation_state": "protocol_disabled",
+            "primary_candidate_passed": None,
             "promotion_allowed": False,
             "promotion_block_reason": "future_oos_protocol_disabled_or_missing_anchor",
             "fit_operations_performed": 0,
             "artifact_integrity_errors": [],
+            "required_candidate_errors": [],
+            "optional_candidate_warnings": [],
         }
         evaluation.to_csv(report_path / "future_oos_evaluation.csv", index=False)
         (report_path / "future_oos_evaluation.md").write_text(
@@ -280,12 +284,40 @@ def evaluate_future_oos(
     labeled_path = data_dir / "processed" / "labeled_1h.parquet"
     rows: list[dict[str, Any]] = []
     prediction_frames: list[pd.DataFrame] = []
-    errors: list[str] = []
+    artifact_integrity_errors: list[str] = []
+    required_candidate_errors: list[str] = []
+    optional_candidate_warnings: list[str] = []
+
+    primary_manifest = next(
+        (
+            manifest
+            for manifest in manifests
+            if str(manifest.get("candidate_id", "")) == primary_id
+        ),
+        None,
+    )
+    if primary_manifest is None:
+        required_candidate_errors.append(f"missing_primary_candidate_manifest:{primary_id}")
+    for manifest in manifests:
+        if bool(manifest.get("available", False)):
+            continue
+        candidate_id = str(manifest.get("candidate_id", ""))
+        messages = [
+            f"{candidate_id}:{reason}"
+            for reason in manifest.get("unavailable_reasons", []) or ["candidate_unavailable"]
+        ]
+        required = bool(
+            manifest.get("required_for_evaluation", candidate_id == primary_id)
+        )
+        if required:
+            required_candidate_errors.extend(messages)
+        else:
+            optional_candidate_warnings.extend(messages)
 
     if not labeled_path.exists():
         future_count = 0
         latest = None
-        errors.append(f"missing_labeled_data:{labeled_path}")
+        required_candidate_errors.append(f"missing_labeled_data:{labeled_path}")
         labeled = pd.DataFrame()
     else:
         labeled = pd.read_parquet(labeled_path).copy()
@@ -306,16 +338,19 @@ def evaluate_future_oos(
         future_start = anchor + pd.Timedelta(hours=1)
         for manifest in manifests:
             if not bool(manifest.get("available", False)):
-                errors.extend(
-                    f"{manifest.get('candidate_id')}:{reason}"
-                    for reason in manifest.get("unavailable_reasons", []) or []
-                )
                 continue
+            candidate_id = str(manifest.get("candidate_id", ""))
+            required = bool(
+                manifest.get("required_for_evaluation", candidate_id == primary_id)
+            )
             integrity_errors = verify_frozen_manifest_artifacts(manifest, run_dir=run_path)
             if integrity_errors:
-                errors.extend(
-                    f"{manifest.get('candidate_id')}:{reason}" for reason in integrity_errors
-                )
+                messages = [f"{candidate_id}:{reason}" for reason in integrity_errors]
+                if required:
+                    artifact_integrity_errors.extend(messages)
+                    required_candidate_errors.extend(messages)
+                else:
+                    optional_candidate_warnings.extend(messages)
                 continue
             components = _profile_predictions(
                 manifest=manifest,
@@ -326,7 +361,11 @@ def evaluate_future_oos(
             )
             predictions = _candidate_predictions(manifest, components)
             if predictions.empty:
-                errors.append(f"{manifest.get('candidate_id')}:no_predictions")
+                message = f"{candidate_id}:no_predictions"
+                if required:
+                    required_candidate_errors.append(message)
+                else:
+                    optional_candidate_warnings.append(message)
                 continue
             predictions["candidate_id"] = manifest["candidate_id"]
             prediction_frames.append(predictions)
@@ -355,14 +394,31 @@ def evaluate_future_oos(
                 "manifest_hash",
             ]
         )
-    primary_id = str(frozen_cfg.get("primary_candidate_id", ""))
     primary = evaluation.loc[evaluation["candidate_id"].astype(str) == primary_id]
-    primary_passed = bool(
-        not primary.empty and primary["evidence_passed"].astype(bool).iloc[0]
+    evaluation_completed = bool(ready and not primary.empty)
+    primary_passed = (
+        bool(primary["evidence_passed"].astype(bool).iloc[0])
+        if evaluation_completed
+        else None
     )
     charter_active = str(
         _cfg(config, ["validation", "charter", "active_version"], "v3_legacy")
     )
+    if not ready:
+        evaluation_state = "waiting_for_min_rows"
+        promotion_block_reason = "future_oos_not_ready"
+    elif required_candidate_errors:
+        evaluation_state = "blocked_required_candidate"
+        promotion_block_reason = "required_candidate_unavailable_or_modified"
+    elif not evaluation_completed:
+        evaluation_state = "evaluation_incomplete"
+        promotion_block_reason = "future_oos_evaluation_missing"
+    elif primary_passed:
+        evaluation_state = "evaluated_passed"
+        promotion_block_reason = ""
+    else:
+        evaluation_state = "evaluated_failed"
+        promotion_block_reason = "future_oos_candidate_failed"
     status = {
         "enabled": bool(future_cfg.get("enabled", False)),
         "anchor_data_end": anchor.isoformat(),
@@ -373,28 +429,31 @@ def evaluate_future_oos(
         "min_rows_remaining": max(0, min_rows - future_count),
         "preferred_rows_remaining": max(0, preferred_rows - future_count),
         "ready_for_evaluation": ready,
-        "evaluation_completed": bool(ready and not evaluation.empty),
+        "evaluation_completed": evaluation_completed,
+        "evaluation_state": evaluation_state,
         "primary_candidate_id": primary_id,
         "primary_candidate_passed": primary_passed,
         "active_charter_version": charter_active,
-        "promotion_allowed": bool(primary_passed and charter_active != "v3_legacy"),
-        "promotion_block_reason": (
-            "future_oos_not_ready"
-            if not ready
-            else "future_oos_evaluation_missing_or_failed"
-            if not primary_passed
-            else "draft_charter_not_active"
-            if charter_active == "v3_legacy"
-            else ""
-        ),
+        "promotion_allowed": bool(primary_passed),
+        "promotion_block_reason": promotion_block_reason,
         "fit_operations_performed": 0,
-        "artifact_integrity_errors": errors,
+        "artifact_integrity_errors": artifact_integrity_errors,
+        "required_candidate_errors": required_candidate_errors,
+        "optional_candidate_warnings": optional_candidate_warnings,
     }
     evaluation.to_csv(report_path / "future_oos_evaluation.csv", index=False)
-    (report_path / "future_oos_evaluation.md").write_text(
-        _table_markdown("Future OOS Evaluation", evaluation),
-        encoding="utf-8",
-    )
+    markdown = _table_markdown("Future OOS Evaluation", evaluation)
+    if evaluation.empty:
+        markdown = (
+            "# Future OOS Evaluation\n\n"
+            f"- State: `{evaluation_state}`\n"
+            f"- Fresh labeled rows: `{future_count}` / `{min_rows}` minimum\n"
+            f"- Rows remaining: `{max(0, min_rows - future_count)}`\n"
+            f"- Required candidate errors: `{len(required_candidate_errors)}`\n"
+            f"- Optional candidate warnings: `{len(optional_candidate_warnings)}`\n"
+            "- Model scoring performed: `False`\n"
+        )
+    (report_path / "future_oos_evaluation.md").write_text(markdown, encoding="utf-8")
     _write_json(
         report_path / "future_oos_evaluation.json",
         {"status": status, "rows": evaluation.to_dict(orient="records")},
