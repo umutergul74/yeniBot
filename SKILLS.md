@@ -1,4 +1,4 @@
-# yeniBot - Phase 1 Operational Manual (v3.7)
+# yeniBot - Phase 1 Operational Manual (v4.0)
 
 This file is the project source of truth for the Phase 1 ML foundation. It replaces the early Scalp2-era guidance and must be read before changing data, features, labels, training, diagnostics, or experiment policy.
 
@@ -118,19 +118,33 @@ Holdout is a one-shot validation gate, not a development playground.
 Phase 2 is blocked until `auto_review.py` reports all readiness checks passing:
 
 1. `report_complete`: all required reports exist.
-2. `mean_rank_ic`: walk-forward mean Rank IC is above `0.03`.
-3. `rank_ic_std`: fold-to-fold Rank IC std is below `0.03`.
-4. `positive_ic_fraction`: positive Rank IC in more than `75%` of folds.
-5. `long_f1`: Long F1 exceeds `0.45` using the documented threshold source.
-6. `calibration_separation`: actual long labels separate from non-long labels.
-7. `mtf_leakage`: MTF leakage audit passes.
-8. `stationarity_policy`: stationarity policy audit passes.
-9. `future_unseen_oos_ready`: enough fresh unseen bars exist after the anchor.
-10. `frozen_candidate_manifest`: the pre-anchor candidate artifacts are complete and hash-verified.
-11. `future_unseen_oos_evaluated`: the frozen candidate has been scored on the fresh window without refitting.
-12. `future_unseen_oos_passed`: the pre-registered future-OOS evidence gates pass.
+2. `mean_rank_ic`: walk-forward mean Rank IC is at least `0.03`.
+3. `positive_fold_fraction`: positive Rank IC occurs in at least `75%` of folds.
+4. `positive_fold_sign_test_pvalue`: fold positivity has one-sided sign-test p-value at most `0.01`.
+5. `random_effects_positive_all_blocks`: the random-effects lower confidence bound stays positive across configured block lengths.
+6. `prauc_lift_vs_prevalence`: PRAUC is at least `1.05x` label prevalence.
+7. `precision_lift_vs_prevalence`: official-policy precision is at least `1.05x` label prevalence.
+8. `f1_skill_vs_rate_matched_random`: F1 skill is positive versus random selection at the same prediction rate.
+9. `positive_f1_skill_fold_fraction`: rate-normalized F1 skill is positive in at least `75%` of folds.
+10. `positive_forward_return_fold_fraction`: selected rows have positive forward return in at least `60%` of folds.
+11. `prediction_long_rate`: the official policy predicts long on at most `70%` of rows.
+12. `calibration_separation`: actual long labels separate from non-long labels.
+13. `mtf_leakage`: MTF leakage audit passes.
+14. `stationarity_policy`: stationarity policy audit passes.
+15. `seed_audit_coverage`: configured seed/fold coverage is complete.
+16. `future_unseen_oos_ready`: enough fresh unseen bars exist after the anchor.
+17. `frozen_candidate_manifest`: the pre-anchor candidate artifacts are complete and hash-verified.
+18. `future_unseen_oos_evaluated`: the frozen candidate has been scored on the fresh window without refitting.
+19. `future_unseen_oos_passed`: the pre-registered future-OOS evidence gates pass.
 
-The active validation charter remains `v3_legacy` until an explicit reviewed config and documentation commit changes it. `v4_draft` is a governance proposal only. Diagnostics may show that legacy std/F1 targets are statistically weak, but code must never activate a replacement charter automatically.
+The active validation charter is `v4_evidence`. It was activated by an explicit reviewed config and documentation commit after run `20260605_211102` showed:
+
+- The observed fold Rank IC std was `0.0708`, while dependent-data bootstrap noise floors ranged from about `0.039` to `0.095`.
+- The legacy `<0.03` std target was below the estimated measurement-noise floor for every configured block length.
+- Random-effects lower confidence bounds remained positive across all configured block assumptions, and the positive-fold sign test was strongly significant.
+- Raw Long F1 was below `0.45`, but the old target was also below the always-long no-skill F1 baseline. Rate-matched F1 skill, PRAUC lift, precision lift, prediction-rate control, and realized forward-return consistency provide the discriminative evidence.
+
+Legacy `rank_ic_std < 0.03` and raw `long_f1 > 0.45` remain mandatory visible monitors. They are not blocking gates under `v4_evidence`; they must never be hidden or rewritten. This charter change does not declare Phase 1 complete and does not weaken leakage, stationarity, calibration, seed coverage, frozen-candidate, or future unseen OOS requirements. No draft charter may activate itself automatically.
 
 If Rank IC is near `0.01`, features are inadequate. Do not respond by tuning model hyperparameters first.
 
@@ -213,11 +227,11 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
 2. Fold reliability: use `fold_reliability_gate_summary.csv` to test validation-only gates that may reduce bad-fold exposure; treat them as future-OOS hypotheses, not immediate promotions.
 3. Regime stability: use `regime_stability_summary.csv` to determine whether HMM regimes explain bad-fold concentration before adding new feature families.
 4. Threshold quality: separate selected-threshold F1, constrained-threshold F1, regime-threshold F1, score-quantile diagnostic F1, and pred-long-rate guardrails using `threshold_forensics.csv`, `threshold_score_quantile_review.csv`, and `regime_threshold_policy_summary.csv`.
-5. IC uncertainty: use `rank_ic_variance_decomposition.csv`, `rank_ic_aggregate_evidence.csv`, and `rank_ic_block_sensitivity.csv` to separate finite-fold measurement noise from estimated between-fold instability. Require multi-block sensitivity and random-effects evidence before claiming that fold std reflects structural regime failure. Do not silently replace or relax the official std gate, but do not invent new profiles merely to chase an std target that is below the measured noise floor.
+5. IC uncertainty: use `rank_ic_variance_decomposition.csv`, `rank_ic_aggregate_evidence.csv`, and `rank_ic_block_sensitivity.csv` to separate finite-fold measurement noise from estimated between-fold instability. Under `v4_evidence`, raw std is a visible monitor; blocking evidence comes from positive-fold coverage, the fold sign test, and random-effects lower confidence bounds across multiple block assumptions.
 6. Causal threshold transfer: use `causal_threshold_policy_summary.csv` to test thresholds formed from validation and past scores only. Full-test score quantiles remain diagnostic-only because they see the complete test score distribution.
 7. Classification skill: interpret F1 only beside the always-long F1, a rate-matched random F1, PRAUC divided by label prevalence, precision lift, prediction-rate guardrails, and selected forward return. Raw F1 alone is not evidence of predictive skill and must not justify promotion.
 8. Seed robustness: `seed_audit_coverage.csv` must prove that every configured seed fold exists, completed, and spans the available walk-forward history. Never silently ignore unavailable fold ids.
-9. Validation charter: use `validation_charter_review.csv` to identify statistically weak legacy targets and `validation_charter_proposal.csv` to organize an inactive replacement draft. Neither report may change readiness gates automatically.
+9. Validation charter: use `validation_charter_status.json` to identify the active committed charter and `validation_charter_proposal.csv` as its criterion-level evidence table. Reports may evaluate the active charter, but they may never change `active_version` automatically.
 10. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
 11. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
 

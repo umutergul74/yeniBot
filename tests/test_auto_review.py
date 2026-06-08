@@ -519,6 +519,84 @@ def test_auto_review_uses_official_calibrated_threshold_when_available(tmp_path)
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
 
 
+def test_auto_review_uses_explicit_active_evidence_charter_without_legacy_blockers(
+    tmp_path,
+) -> None:
+    _write_minimal_report(tmp_path)
+    gate_criteria = [
+        "mean_rank_ic",
+        "positive_fold_fraction",
+        "positive_fold_sign_test_pvalue",
+        "random_effects_positive_all_blocks",
+        "prauc_lift_vs_prevalence",
+        "precision_lift_vs_prevalence",
+        "f1_skill_vs_rate_matched_random",
+        "positive_f1_skill_fold_fraction",
+        "positive_forward_return_fold_fraction",
+        "prediction_long_rate",
+    ]
+    rows = [
+        {
+            "proposal_version": "v4_evidence",
+            "proposal_status": "active",
+            "active_for_phase1_readiness": True,
+            "criterion": criterion,
+            "criterion_role": "gate",
+            "comparison": ">=",
+            "proposed_target": 0.0,
+            "observed_value": 1.0,
+            "evidence_passed": True,
+            "evidence_source": "fixture",
+            "rationale": "fixture",
+            "official_gate_unchanged": False,
+        }
+        for criterion in gate_criteria
+    ]
+    rows.extend(
+        [
+            {
+                "proposal_version": "v4_evidence",
+                "proposal_status": "active",
+                "active_for_phase1_readiness": True,
+                "criterion": criterion,
+                "criterion_role": "monitor",
+                "comparison": "monitor_only",
+                "proposed_target": float("nan"),
+                "observed_value": value,
+                "evidence_passed": float("nan"),
+                "evidence_source": "fixture",
+                "rationale": "legacy monitor",
+                "official_gate_unchanged": False,
+            }
+            for criterion, value in [("rank_ic_std", 0.07), ("raw_long_f1", 0.43)]
+        ]
+    )
+    pd.DataFrame(rows).to_csv(tmp_path / "validation_charter_proposal.csv", index=False)
+    (tmp_path / "validation_charter_status.json").write_text(
+        json.dumps(
+            {
+                "active_version": "v4_evidence",
+                "active_definition": {"required_gate_criteria": gate_criteria},
+                "official_gate_unchanged": False,
+                "automatic_activation_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    review = review_experiment_report(tmp_path)
+
+    blockers = review["phase2_readiness"]["blockers"]
+    assert "rank_ic_std_above_phase1_target" not in blockers
+    assert "long_f1_below_phase1_target" not in blockers
+    assert blockers == ["future_unseen_oos_not_ready"]
+    checks = {row["check"]: row for row in review["phase2_readiness"]["checks"]}
+    assert checks["rank_ic_std"]["status"] == "monitor"
+    assert checks["raw_long_f1"]["status"] == "monitor"
+    assert review["phase2_readiness"]["active_validation_charter"] == "v4_evidence"
+    assert review["phase2_readiness"]["long_f1_source"] == "evidence_based_classification_skill"
+
+
 def test_auto_review_flags_missing_selected_profiles(tmp_path) -> None:
     _write_minimal_report(tmp_path, missing_selected=True)
 

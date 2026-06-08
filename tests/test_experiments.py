@@ -1252,6 +1252,73 @@ def test_validation_charter_proposal_is_inactive_and_uses_skill_evidence() -> No
     }
 
 
+def test_validation_charter_proposal_reflects_explicit_active_version() -> None:
+    rank_evidence = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "observed_mean_rank_ic": 0.06,
+                "observed_std_rank_ic": 0.07,
+                "positive_fold_fraction": 0.85,
+                "positive_fold_sign_test_pvalue": 0.001,
+                "random_effects_positive_all_blocks": True,
+            }
+        ]
+    )
+    classification = pd.DataFrame(
+        [
+            {
+                "candidate": "control",
+                "fold_scope": "full",
+                "policy_name": "official_threshold",
+                "prauc_lift_vs_prevalence_mean": 1.12,
+                "precision_lift_vs_prevalence_mean": 1.10,
+                "f1_skill_vs_rate_matched_random_mean": 0.03,
+                "positive_f1_skill_vs_rate_random_fold_rate": 0.80,
+                "positive_forward_return_fold_rate": 0.70,
+                "pred_long_rate_mean": 0.64,
+                "f1_mean": 0.43,
+            }
+        ]
+    )
+    config = {
+        "validation": {
+            "target_rank_ic": 0.03,
+            "min_positive_ic_fraction": 0.75,
+            "min_long_f1": 0.45,
+            "threshold_checks": {"max_pred_long_rate": 0.70},
+            "classification_skill": {
+                "min_prauc_lift_vs_prevalence": 1.05,
+                "min_precision_lift_vs_prevalence": 1.05,
+                "min_f1_skill_vs_rate_random": 0.0,
+                "min_positive_forward_return_fold_rate": 0.60,
+            },
+            "charter_proposal": {
+                "enabled": True,
+                "version": "v4_evidence",
+                "status": "active",
+                "min_positive_f1_skill_fold_fraction": 0.75,
+            },
+            "charter": {
+                "active_version": "v4_evidence",
+                "versions": {"v4_evidence": {"status": "active"}},
+            },
+        }
+    }
+
+    proposal = _validation_charter_proposal_frame(
+        control_profile="control",
+        rank_ic_evidence=rank_evidence,
+        classification_skill_summary=classification,
+        config=config,
+    )
+
+    assert proposal["active_for_phase1_readiness"].astype(bool).all()
+    assert not proposal["official_gate_unchanged"].astype(bool).any()
+    assert proposal.loc[proposal["criterion_role"].eq("gate"), "evidence_passed"].astype(bool).all()
+
+
 def test_score_separation_forensics_flags_bad_fold_signature() -> None:
     config = {
         "validation": {
@@ -2212,8 +2279,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["preferred_new_bars"] == 2160
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["allow_holdout_roll_forward"] is False
-    assert config["validation"]["charter"]["active_version"] == "v3_legacy"
-    assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "proposed_not_active"
+    assert config["validation"]["charter"]["active_version"] == "v4_evidence"
+    assert config["validation"]["charter"]["versions"]["v3_legacy"]["status"] == "superseded_monitor_only"
+    assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "superseded_not_active"
+    assert config["validation"]["charter"]["versions"]["v4_evidence"]["status"] == "active"
     frozen = config["experiments"]["frozen_candidates"]
     assert frozen["primary_candidate_id"] == "control_fold_ensemble_v1"
     assert frozen["candidates"][0]["profile"] == config["experiments"]["control_profile"]

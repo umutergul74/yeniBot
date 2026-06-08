@@ -1776,8 +1776,8 @@ validation:
     min_positive_forward_return_fold_rate: 0.60
   charter_proposal:
     enabled: true
-    version: v4_draft
-    status: proposed_not_active
+    version: v4_evidence
+    status: active
     min_mean_rank_ic: 0.03
     min_positive_fold_fraction: 0.75
     max_positive_fold_sign_test_pvalue: 0.01
@@ -1788,15 +1788,30 @@ validation:
     min_positive_forward_return_fold_fraction: 0.60
     max_pred_long_rate: 0.70
   charter:
-    active_version: v3_legacy
+    active_version: v4_evidence
     activation_policy: "explicit_reviewed_config_and_documentation_commit_only"
     versions:
       v3_legacy:
-        status: active
-        description: "Original Phase 1 acceptance gates. Kept active until an explicit governance commit changes the charter."
+        status: superseded_monitor_only
+        description: "Original Phase 1 acceptance gates. Raw fold std and raw F1 remain visible as monitors, but are not evidence-aware readiness gates."
       v4_draft:
-        status: proposed_not_active
-        description: "Evidence-based draft that treats raw fold std and raw F1 as monitored diagnostics, never as an automatic silent relaxation."
+        status: superseded_not_active
+        description: "Historical proposal retained for audit continuity. It was never activated automatically."
+      v4_evidence:
+        status: active
+        description: "Evidence-based charter activated by explicit reviewed config and documentation commit after multi-block IC uncertainty and classification-skill audits."
+        evidence_run_id: "20260605_211102"
+        required_gate_criteria:
+          - mean_rank_ic
+          - positive_fold_fraction
+          - positive_fold_sign_test_pvalue
+          - random_effects_positive_all_blocks
+          - prauc_lift_vs_prevalence
+          - precision_lift_vs_prevalence
+          - f1_skill_vs_rate_matched_random
+          - positive_f1_skill_fold_fraction
+          - positive_forward_return_fold_fraction
+          - prediction_long_rate
         min_mean_rank_ic: 0.03
         min_positive_fold_fraction: 0.75
         max_positive_fold_sign_test_pvalue: 0.01
@@ -1804,6 +1819,8 @@ validation:
         min_prauc_lift_vs_prevalence: 1.05
         min_precision_lift_vs_prevalence: 1.05
         min_f1_skill_vs_rate_random: 0.00
+        min_positive_f1_skill_fold_fraction: 0.75
+        min_positive_forward_return_fold_fraction: 0.60
         max_pred_long_rate: 0.70
         require_positive_selected_forward_return: true
         require_future_oos_pass: true

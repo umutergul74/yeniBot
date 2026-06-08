@@ -131,6 +131,25 @@ def test_validation_charter_rejects_active_version_pointing_to_draft(tmp_path: P
         write_validation_charter_status(tmp_path, config)
 
 
+def test_validation_charter_accepts_explicit_active_evidence_version(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["validation"]["charter"]["active_version"] = "v4_evidence"
+    config["validation"]["charter"]["versions"]["v3_legacy"]["status"] = "superseded_monitor_only"
+    config["validation"]["charter"]["versions"]["v4_evidence"] = {
+        "status": "active",
+        "required_gate_criteria": ["mean_rank_ic"],
+    }
+
+    frame = write_validation_charter_status(tmp_path, config)
+
+    active = frame.loc[frame["active_for_phase1_readiness"]]
+    assert active["version"].tolist() == ["v4_evidence"]
+    payload = json.loads((tmp_path / "validation_charter_status.json").read_text())
+    assert payload["automatic_activation_allowed"] is False
+    assert payload["official_gate_unchanged"] is False
+    assert payload["active_definition"]["required_gate_criteria"] == ["mean_rank_ic"]
+
+
 def test_frozen_manifest_hashes_artifacts_and_detects_tampering(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     scope, entry = _fake_scope(run_dir)

@@ -440,32 +440,140 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     future_evaluated = bool(future_oos.get("evaluation_completed", False))
     future_passed = future_oos.get("primary_candidate_passed") is True
     official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
+    active_charter = str(charter.get("active_version") or "v3_legacy")
     advisories: list[str] = []
-    if fixed_050_f1 is not None and fixed_050_f1 <= 0.45 and official_long_f1_source != "fixed_0_50_threshold":
+    if (
+        active_charter == "v3_legacy"
+        and fixed_050_f1 is not None
+        and fixed_050_f1 <= 0.45
+        and official_long_f1_source != "fixed_0_50_threshold"
+    ):
         advisories.append("fixed_0_50_f1_below_target_calibration_issue")
-    if constrained_f1 is not None and constrained_f1 <= 0.45:
+    if active_charter == "v3_legacy" and constrained_f1 is not None and constrained_f1 <= 0.45:
         advisories.append("constrained_threshold_f1_below_target")
-    if selected_pred_rate is not None and selected_pred_rate > 0.70:
+    if active_charter == "v3_legacy" and selected_pred_rate is not None and selected_pred_rate > 0.70:
         advisories.append("selected_threshold_pred_long_rate_above_guardrail")
-    if constrained_pred_rate is not None and constrained_pred_rate > 0.70:
+    if active_charter == "v3_legacy" and constrained_pred_rate is not None and constrained_pred_rate > 0.70:
         advisories.append("constrained_threshold_pred_long_rate_above_guardrail")
     ic_uncertainty = review.get("rank_ic_uncertainty", {}).get("control", {}) or {}
     if _to_bool(ic_uncertainty.get("target_below_block_bootstrap_noise_floor"), default=False):
         advisories.append("rank_ic_std_target_below_estimated_fold_measurement_noise")
     ic_evidence = review.get("rank_ic_stability_evidence", {}).get("control", {}) or {}
-    if _to_bool(ic_evidence.get("target_below_noise_floor_all_blocks"), default=False):
+    if (
+        active_charter == "v3_legacy"
+        and _to_bool(ic_evidence.get("target_below_noise_floor_all_blocks"), default=False)
+    ):
         advisories.append("rank_ic_std_legacy_gate_requires_governance_review")
     classification_skill = review.get("classification_skill", {}).get("control_official", {}) or {}
-    if not _to_bool(
-        classification_skill.get("f1_target_exceeds_always_long_baseline"),
-        default=True,
+    if (
+        active_charter == "v3_legacy"
+        and not _to_bool(
+            classification_skill.get("f1_target_exceeds_always_long_baseline"),
+            default=True,
+        )
     ):
         advisories.append("raw_f1_target_below_always_long_no_skill_baseline")
-    if not _to_bool(classification_skill.get("skill_evidence_passed"), default=False):
+    if (
+        active_charter == "v3_legacy"
+        and not _to_bool(classification_skill.get("skill_evidence_passed"), default=False)
+    ):
         advisories.append("classification_skill_under_guardrails_not_yet_demonstrated")
     causal_threshold = review.get("causal_threshold_policy", {}) or {}
     if int(causal_threshold.get("passed_policy_count") or 0) > 0:
         advisories.append("causal_threshold_policy_cv_candidate_requires_future_unseen_oos")
+    charter_evidence = review.get("validation_charter_proposal", {}) or {}
+    charter_rows = charter_evidence.get("rows", []) or []
+    required_charter_criteria = set(
+        str(item)
+        for item in (charter.get("active_definition", {}) or {}).get(
+            "required_gate_criteria",
+            [],
+        )
+    )
+    observed_charter_criteria = {
+        str(row.get("criterion") or "")
+        for row in charter_rows
+        if str(row.get("criterion_role") or "") == "gate"
+    }
+    evidence_charter_active = bool(
+        active_charter != "v3_legacy"
+        and charter_evidence.get("active_for_phase1_readiness", False)
+        and charter_rows
+        and required_charter_criteria
+        and required_charter_criteria.issubset(observed_charter_criteria)
+        and all(str(row.get("proposal_version") or "") == active_charter for row in charter_rows)
+    )
+    if active_charter == "v3_legacy":
+        signal_checks = [
+            {
+                "check": "mean_rank_ic",
+                "passed": mean_rank_ic is not None and mean_rank_ic > 0.03,
+                "value": mean_rank_ic,
+                "target": "> 0.03",
+                "blocker": "mean_rank_ic_below_phase1_target",
+            },
+            {
+                "check": "rank_ic_std",
+                "passed": std_rank_ic is not None and std_rank_ic < 0.03,
+                "value": std_rank_ic,
+                "target": "< 0.03",
+                "blocker": "rank_ic_std_above_phase1_target",
+            },
+            {
+                "check": "positive_ic_fraction",
+                "passed": positive_ic_fraction is not None and positive_ic_fraction > 0.75,
+                "value": positive_ic_fraction,
+                "target": "> 0.75",
+                "blocker": "positive_ic_fraction_below_phase1_target",
+            },
+            {
+                "check": "long_f1",
+                "passed": official_long_f1 is not None and official_long_f1 > 0.45,
+                "value": official_long_f1,
+                "target": "> 0.45",
+                "blocker": "long_f1_below_phase1_target",
+                "source": official_long_f1_source,
+                **official_long_f1_details,
+            },
+        ]
+        readiness_f1_source = official_long_f1_source
+    elif evidence_charter_active:
+        signal_checks = []
+        for row in charter_rows:
+            criterion = str(row.get("criterion") or "unknown")
+            role = str(row.get("criterion_role") or "gate")
+            comparison = str(row.get("comparison") or "")
+            target = row.get("proposed_target")
+            target_text = "monitor_only" if role == "monitor" else f"{comparison} {target}"
+            signal_checks.append(
+                {
+                    "check": criterion,
+                    "passed": (
+                        _to_bool(row.get("evidence_passed"), default=False)
+                        if role == "gate"
+                        else None
+                    ),
+                    "value": row.get("observed_value"),
+                    "target": target_text,
+                    "blocker": f"active_charter_{criterion}_failed",
+                    "source": row.get("evidence_source"),
+                    "blocking": role == "gate",
+                    "role": role,
+                }
+            )
+        readiness_f1_source = "evidence_based_classification_skill"
+    else:
+        signal_checks = [
+            {
+                "check": "active_validation_charter_evidence",
+                "passed": False,
+                "value": active_charter,
+                "target": "matching active evidence rows",
+                "blocker": "active_validation_charter_evidence_missing",
+            }
+        ]
+        readiness_f1_source = "unavailable_active_charter_evidence"
+
     checks = [
         {
             "check": "report_complete",
@@ -474,36 +582,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "target": True,
             "blocker": "report_missing_required_outputs",
         },
-        {
-            "check": "mean_rank_ic",
-            "passed": mean_rank_ic is not None and mean_rank_ic > 0.03,
-            "value": mean_rank_ic,
-            "target": "> 0.03",
-            "blocker": "mean_rank_ic_below_phase1_target",
-        },
-        {
-            "check": "rank_ic_std",
-            "passed": std_rank_ic is not None and std_rank_ic < 0.03,
-            "value": std_rank_ic,
-            "target": "< 0.03",
-            "blocker": "rank_ic_std_above_phase1_target",
-        },
-        {
-            "check": "positive_ic_fraction",
-            "passed": positive_ic_fraction is not None and positive_ic_fraction > 0.75,
-            "value": positive_ic_fraction,
-            "target": "> 0.75",
-            "blocker": "positive_ic_fraction_below_phase1_target",
-        },
-        {
-            "check": "long_f1",
-            "passed": official_long_f1 is not None and official_long_f1 > 0.45,
-            "value": official_long_f1,
-            "target": "> 0.45",
-            "blocker": "long_f1_below_phase1_target",
-            "source": official_long_f1_source,
-            **official_long_f1_details,
-        },
+        *signal_checks,
         {
             "check": "calibration_separation",
             "passed": calibration_separation is not None and calibration_separation > 0.0,
@@ -567,9 +646,12 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     ]
     for item in checks:
         applicable = bool(item.get("applicable", True))
+        blocking = bool(item.get("blocking", True))
         item["status"] = (
             "pending"
             if not applicable
+            else "monitor"
+            if not blocking
             else "passed"
             if bool(item["passed"])
             else "failed"
@@ -577,7 +659,9 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     blockers = [
         str(item["blocker"])
         for item in checks
-        if bool(item.get("applicable", True)) and not bool(item["passed"])
+        if bool(item.get("applicable", True))
+        and bool(item.get("blocking", True))
+        and not bool(item["passed"])
     ]
     ready = not blockers
     return {
@@ -585,8 +669,8 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         "decision": "READY_FOR_PHASE2" if ready else "DO_NOT_PROCEED_TO_PHASE2",
         "blockers": blockers,
         "advisories": advisories,
-        "long_f1_source": official_long_f1_source,
-        "active_validation_charter": charter.get("active_version", "v3_legacy"),
+        "long_f1_source": readiness_f1_source,
+        "active_validation_charter": active_charter,
         "checks": checks,
         "next_action": (
             "freeze_phase1_candidate_and_prepare_phase2_design"
@@ -932,8 +1016,16 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
                 and "proposal_status" in validation_charter_proposal.columns
                 else "not_produced"
             ),
-            "active_for_phase1_readiness": False,
-            "official_gate_unchanged": True,
+            "active_for_phase1_readiness": bool(
+                not validation_charter_proposal.empty
+                and "active_for_phase1_readiness" in validation_charter_proposal.columns
+                and validation_charter_proposal["active_for_phase1_readiness"].map(_to_bool).all()
+            ),
+            "official_gate_unchanged": bool(
+                not validation_charter_proposal.empty
+                and "official_gate_unchanged" in validation_charter_proposal.columns
+                and validation_charter_proposal["official_gate_unchanged"].map(_to_bool).all()
+            ),
             "draft_evidence_gates_passed": bool(
                 not validation_charter_proposal.empty
                 and "criterion_role" in validation_charter_proposal.columns

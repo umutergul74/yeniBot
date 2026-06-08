@@ -62,22 +62,30 @@ def write_validation_charter_status(
     report_dir: str | Path,
     config: dict[str, Any],
 ) -> pd.DataFrame:
-    """Write an explicit dual-charter status without changing active gates."""
+    """Write the explicitly configured validation-charter status."""
 
     path = Path(report_dir)
     path.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(_charter_rows(config))
     active = frame.loc[frame["active_for_phase1_readiness"].astype(bool)].iloc[0]
+    charter = _cfg(config, ["validation", "charter"], {}) or {}
+    versions = charter.get("versions", {}) or {}
+    active_definition = versions.get(str(active["version"]), {}) or {}
     payload = {
         "active_version": str(active["version"]),
+        "active_definition": active_definition,
         "official_gate_unchanged": bool(active["official_gate_unchanged"]),
         "automatic_activation_allowed": False,
         "versions": frame.to_dict(orient="records"),
     }
     frame.to_csv(path / "validation_charter_status.csv", index=False)
+    governance_note = (
+        "The active charter was selected explicitly in committed config and documentation. "
+        "No draft charter can activate itself automatically."
+    )
     (path / "validation_charter_status.md").write_text(
         _table_markdown("Validation Charter Status", frame)
-        + "\n\nNo draft charter can change Phase 1 readiness automatically.\n",
+        + f"\n\n{governance_note}\n",
         encoding="utf-8",
     )
     _write_json(path / "validation_charter_status.json", payload)

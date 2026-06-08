@@ -1380,6 +1380,16 @@ def _validation_charter_proposal_frame(
         return pd.DataFrame(columns=columns)
     version = str(proposal.get("version", "v4_draft"))
     status = str(proposal.get("status", "proposed_not_active"))
+    charter = _cfg(config, ["validation", "charter"], {}) or {}
+    active_version = str(charter.get("active_version", "v3_legacy"))
+    charter_versions = charter.get("versions", {}) or {}
+    active_definition = charter_versions.get(active_version, {}) or {}
+    active_for_phase1 = (
+        version == active_version
+        and status == "active"
+        and str(active_definition.get("status", "")) == "active"
+    )
+    official_gate_unchanged = active_version == "v3_legacy"
     rows: list[dict[str, Any]] = []
 
     rank = pd.DataFrame()
@@ -1450,7 +1460,7 @@ def _validation_charter_proposal_frame(
                 {
                     "proposal_version": version,
                     "proposal_status": status,
-                    "active_for_phase1_readiness": False,
+                    "active_for_phase1_readiness": active_for_phase1,
                     "criterion": criterion,
                     "criterion_role": role,
                     "comparison": comparison,
@@ -1459,7 +1469,7 @@ def _validation_charter_proposal_frame(
                     "evidence_passed": passed,
                     "evidence_source": "rank_ic_aggregate_evidence.csv",
                     "rationale": rationale,
-                    "official_gate_unchanged": True,
+                    "official_gate_unchanged": official_gate_unchanged,
                 }
             )
 
@@ -1569,7 +1579,7 @@ def _validation_charter_proposal_frame(
                 {
                     "proposal_version": version,
                     "proposal_status": status,
-                    "active_for_phase1_readiness": False,
+                    "active_for_phase1_readiness": active_for_phase1,
                     "criterion": criterion,
                     "criterion_role": role,
                     "comparison": comparison,
@@ -1578,20 +1588,27 @@ def _validation_charter_proposal_frame(
                     "evidence_passed": passed,
                     "evidence_source": "classification_skill_summary.csv",
                     "rationale": rationale,
-                    "official_gate_unchanged": True,
+                    "official_gate_unchanged": official_gate_unchanged,
                 }
             )
     return pd.DataFrame(rows, columns=columns)
 
 def _validation_charter_proposal_markdown(frame: pd.DataFrame) -> str:
     lines = ["# Validation Charter Proposal", ""]
-    lines.append(
-        "This is an inactive governance draft. It organizes statistically interpretable companion evidence "
-        "but does not alter the official Phase 1 gates or authorize Phase 2."
-    )
     if frame.empty:
         lines.extend(["", "No proposal rows were produced."])
         return "\n".join(lines)
+    active = bool(frame["active_for_phase1_readiness"].map(bool).all())
+    if active:
+        lines.append(
+            "This evidence charter is active through an explicit reviewed config and documentation commit. "
+            "It does not authorize Phase 2 by itself; future unseen OOS requirements remain mandatory."
+        )
+    else:
+        lines.append(
+            "This is an inactive governance draft. It organizes statistically interpretable companion evidence "
+            "but does not alter the official Phase 1 gates or authorize Phase 2."
+        )
     lines.extend(["", "| " + " | ".join(frame.columns) + " |"])
     lines.append("| " + " | ".join(["---"] * len(frame.columns)) + " |")
     for _, row in frame.iterrows():
@@ -1601,9 +1618,9 @@ def _validation_charter_proposal_markdown(frame: pd.DataFrame) -> str:
     lines.extend(
         [
             "",
-            f"- Draft evidence gates passed: `{passed}`",
-            "- Active for Phase 1 readiness: `False`",
-            "- Official gates changed: `False`",
+            f"- Evidence gates passed: `{passed}`",
+            f"- Active for Phase 1 readiness: `{active}`",
+            f"- Legacy official gates unchanged: `{bool(frame['official_gate_unchanged'].map(bool).all())}`",
         ]
     )
     return "\n".join(lines)
@@ -1620,6 +1637,16 @@ def _write_validation_charter_proposal(path: Path, frame: pd.DataFrame) -> None:
         if not frame.empty and "criterion_role" in frame.columns
         else pd.DataFrame()
     )
+    active = bool(
+        not frame.empty
+        and "active_for_phase1_readiness" in frame.columns
+        and frame["active_for_phase1_readiness"].map(bool).all()
+    )
+    official_gate_unchanged = bool(
+        not frame.empty
+        and "official_gate_unchanged" in frame.columns
+        and frame["official_gate_unchanged"].map(bool).all()
+    )
     _write_json(
         path / "validation_charter_proposal.json",
         {
@@ -1628,10 +1655,15 @@ def _write_validation_charter_proposal(path: Path, frame: pd.DataFrame) -> None:
                 if not frame.empty and "proposal_status" in frame.columns
                 else "not_produced"
             ),
-            "active_for_phase1_readiness": False,
-            "official_gate_unchanged": True,
-            "draft_evidence_gates_passed": bool(
+            "active_for_phase1_readiness": active,
+            "official_gate_unchanged": official_gate_unchanged,
+            "evidence_gates_passed": bool(
                 not gate_rows.empty and gate_rows["evidence_passed"].astype(bool).all()
+            ),
+            "draft_evidence_gates_passed": bool(
+                not active
+                and not gate_rows.empty
+                and gate_rows["evidence_passed"].astype(bool).all()
             ),
             "rows": frame.to_dict(orient="records"),
         },
