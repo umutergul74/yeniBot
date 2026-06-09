@@ -205,6 +205,16 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "historical_experiment_memory_audit.csv",
         "score_reversal_context_audit.csv",
         "phase1_decision_ladder.json",
+        "model_performance_dashboard.md",
+        "model_performance_summary.json",
+        "model_performance_scorecard.csv",
+        "model_metric_definitions.csv",
+        "model_calibration_reliability.csv",
+        "model_precision_recall_curve.csv",
+        "model_scorecard.png",
+        "rank_ic_stability.png",
+        "classification_quality.png",
+        "score_band_payoff.png",
     ]
     return [name for name in required if not (report_dir / name).exists()]
 
@@ -698,6 +708,7 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
     phase2_long_f1_source = str(phase2.get("long_f1_source") or "")
+    active_charter = str(phase2.get("active_validation_charter") or "v3_legacy")
     official_f1, fallback_source, _ = _official_long_f1(control)
     if not phase2_long_f1_source:
         phase2_long_f1_source = fallback_source
@@ -744,8 +755,11 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         "run_05_cpu_slim_only_to_monitor_reports",
         "wait_for_future_unseen_oos_before_promotion",
         "use_phase1_predictions_for_score_band_diagnostics_only",
-        "work_on_rank_ic_std_and_f1_blockers_inside_phase1",
     ]
+    if active_charter == "v3_legacy":
+        allowed_actions.append("work_on_rank_ic_std_and_f1_blockers_inside_phase1")
+    else:
+        allowed_actions.append("refresh_01_02_03_then_run_05_when_future_oos_rows_are_available")
     if research_ready:
         allowed_actions.append("prepare_phase2_design_document_without_backtest_or_execution_code")
     blocked_actions = [
@@ -755,6 +769,8 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         "do_not_tune_weights_against_current_holdout",
         "do_not_relax_phase1_success_criteria_silently",
     ]
+    if active_charter != "v3_legacy":
+        blocked_actions.append("do_not_retrain_or_modify_the_frozen_candidate_before_future_oos")
     recommended_focus = []
     blockers = set(str(item) for item in phase2.get("blockers", []) or [])
     if "rank_ic_std_above_phase1_target" in blockers:
@@ -1026,8 +1042,21 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
                 and "official_gate_unchanged" in validation_charter_proposal.columns
                 and validation_charter_proposal["official_gate_unchanged"].map(_to_bool).all()
             ),
+            "evidence_gates_passed": bool(
+                not validation_charter_proposal.empty
+                and "criterion_role" in validation_charter_proposal.columns
+                and "evidence_passed" in validation_charter_proposal.columns
+                and validation_charter_proposal.loc[
+                    validation_charter_proposal["criterion_role"].astype(str).eq("gate"),
+                    "evidence_passed",
+                ].map(_to_bool).all()
+            ),
             "draft_evidence_gates_passed": bool(
                 not validation_charter_proposal.empty
+                and "active_for_phase1_readiness" in validation_charter_proposal.columns
+                and not validation_charter_proposal[
+                    "active_for_phase1_readiness"
+                ].map(_to_bool).all()
                 and "criterion_role" in validation_charter_proposal.columns
                 and "evidence_passed" in validation_charter_proposal.columns
                 and validation_charter_proposal.loc[

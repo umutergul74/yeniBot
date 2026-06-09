@@ -212,6 +212,16 @@ Required diagnostic artifacts include:
 - `historical_experiment_memory_audit.csv`
 - `score_reversal_context_audit.csv`
 - `phase1_decision_ladder.json`
+- `model_performance_dashboard.md`
+- `model_performance_summary.json`
+- `model_performance_scorecard.csv`
+- `model_metric_definitions.csv`
+- `model_calibration_reliability.csv`
+- `model_precision_recall_curve.csv`
+- `model_scorecard.png`
+- `rank_ic_stability.png`
+- `classification_quality.png`
+- `score_band_payoff.png`
 
 The auto-review command for a report directory is:
 
@@ -234,6 +244,34 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
 9. Validation charter: use `validation_charter_status.json` to identify the active committed charter and `validation_charter_proposal.csv` as its criterion-level evidence table. Reports may evaluate the active charter, but they may never change `active_version` automatically.
 10. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
 11. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
+
+## Executive Model Dashboard
+
+The Phase 1 report must make the model's state understandable without hiding
+technical risk behind a single score.
+
+- `model_scorecard.png` is the first-look summary. It must distinguish
+  `MODEL EVIDENCE` from `PHASE 2 READY`; these are not the same decision.
+- `rank_ic_stability.png` shows every walk-forward OOS fold, negative folds,
+  the mean IC, and the active mean-IC gate.
+- `classification_quality.png` contains the precision-recall curve and
+  reliability diagram. Always compare precision with label prevalence.
+- `score_band_payoff.png` shows both label lift and forward return by score
+  concentration. A high label lift with non-positive return is not economic
+  evidence.
+- `model_performance_scorecard.csv` is the machine-readable source for the
+  dashboard. It must include discrimination, temporal robustness,
+  statistical confidence, imbalanced classification, calibration,
+  score-band payoff, seed robustness, integrity, and future-OOS readiness.
+- `model_metric_definitions.csv` must explain every executive metric and its
+  healthy interpretation.
+- Legacy raw Rank IC std and raw Long F1 remain visible monitors. The dashboard
+  must place them beside dependent-data uncertainty, rate-matched F1 skill,
+  PRAUC lift, precision lift, and prediction-rate guardrails.
+- Do not add Sharpe, drawdown, turnover, fee-adjusted return, or PnL to Phase 1
+  model evidence. Those require the Phase 2 backtest and execution assumptions.
+- Seen-holdout charts must be labeled diagnostic-only. Never present them as
+  final promotion evidence.
 
 Do not chase every holdout-best row. A holdout-best row seen after the fact is a hypothesis generator only.
 

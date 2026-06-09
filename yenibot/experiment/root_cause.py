@@ -105,6 +105,8 @@ def _phase1_blocker_action_plan_frame(
     readiness = phase2_readiness or {}
     checks = readiness.get("checks", {}) or {}
     blockers = {str(item) for item in readiness.get("blockers", []) or []}
+    active_charter = str(readiness.get("active_validation_charter") or "v3_legacy")
+    evidence_charter_active = active_charter != "v3_legacy"
     rows: list[dict[str, Any]] = []
 
     target_rank_ic = float(_cfg(config, ["validation", "target_rank_ic"], 0.03))
@@ -236,23 +238,31 @@ def _phase1_blocker_action_plan_frame(
     )
 
     rank_ic_std = _float(control, "std_rank_ic")
-    std_passed = bool(np.isfinite(rank_ic_std) and rank_ic_std <= max_rank_ic_std)
+    legacy_std_passed = bool(np.isfinite(rank_ic_std) and rank_ic_std <= max_rank_ic_std)
+    std_passed = bool(evidence_charter_active or legacy_std_passed)
     worst_fold = control_stability.get("worst_fold", "NA") if control_stability else "NA"
     worst_ic = control_stability.get("worst_fold_rank_ic", np.nan) if control_stability else np.nan
     top5_var = control_stability.get("top_5_variance_contribution", np.nan) if control_stability else np.nan
     add_row(
         priority=3,
         blocker="fold_stability",
-        severity="critical" if not std_passed else "ok",
+        severity="monitor" if evidence_charter_active else "critical" if not std_passed else "ok",
         metric_value=rank_ic_std,
-        target=f"std_rank_ic<={max_rank_ic_std:.3f}",
+        target=(
+            f"monitor_only; legacy std_rank_ic<={max_rank_ic_std:.3f}"
+            if evidence_charter_active
+            else f"std_rank_ic<={max_rank_ic_std:.3f}"
+        ),
         passed=std_passed,
         evidence=(
             f"Control Rank IC std={_fmt_metric(rank_ic_std)}; worst fold={worst_fold} "
             f"Rank IC={_fmt_metric(worst_ic)}; top-5 variance contribution={_fmt_metric(top5_var)}."
         ),
         recommended_action=(
-            "Use fold_stability_forensics to isolate recurring bad-fold regimes. Do not create new broad profiles or tune "
+            "Keep fold stability visible as a risk monitor. Do not retrain or create a new profile while the frozen "
+            "future-OOS candidate is awaiting evaluation."
+            if evidence_charter_active
+            else "Use fold_stability_forensics to isolate recurring bad-fold regimes. Do not create new broad profiles or tune "
             "against holdout; any new hypothesis must be pre-registered and checked on CV/future OOS."
         ),
         allowed_now=True,
@@ -267,7 +277,11 @@ def _phase1_blocker_action_plan_frame(
             "fold_reliability_gate.csv;fold_reliability_gate_summary.csv;"
             "regime_stability_forensics.csv;regime_stability_summary.csv"
         ),
-        notes="This is the main remaining statistical blocker after mean IC improved.",
+        notes=(
+            "The active evidence charter evaluates fold sign consistency and random-effects confidence bounds; raw std remains visible."
+            if evidence_charter_active
+            else "This is the main remaining statistical blocker after mean IC improved."
+        ),
     )
 
     official_f1 = _float(control, "test_f1_at_official_threshold", _float(control, "test_f1_at_guarded_threshold"))
@@ -283,7 +297,31 @@ def _phase1_blocker_action_plan_frame(
     guarded_rate = _float(control, "test_pred_long_rate_at_guarded_threshold")
     selected_rate = _float(control, "test_pred_long_rate_at_selected_threshold")
     guarded_source = str(control.get("guarded_threshold_source", ""))
-    threshold_passed = bool(np.isfinite(official_f1) and official_f1 > min_long_f1 and official_rate <= max_pred_rate)
+    legacy_threshold_passed = bool(
+        np.isfinite(official_f1)
+        and official_f1 > min_long_f1
+        and official_rate <= max_pred_rate
+    )
+    active_classification_blockers = {
+        blocker
+        for blocker in blockers
+        if blocker.startswith("active_charter_")
+        and any(
+            token in blocker
+            for token in (
+                "prauc",
+                "precision",
+                "f1_skill",
+                "forward_return",
+                "prediction_long_rate",
+            )
+        )
+    }
+    threshold_passed = bool(
+        not active_classification_blockers
+        if evidence_charter_active
+        else legacy_threshold_passed
+    )
     issue_counts = (
         control_thresholds["primary_issue"].value_counts().to_dict()
         if not control_thresholds.empty and "primary_issue" in control_thresholds.columns
@@ -292,9 +330,13 @@ def _phase1_blocker_action_plan_frame(
     add_row(
         priority=4,
         blocker="official_threshold_f1",
-        severity="critical" if not threshold_passed else "ok",
+        severity="monitor" if evidence_charter_active else "critical" if not threshold_passed else "ok",
         metric_value=official_f1,
-        target=f"official_f1>{min_long_f1:.2f}; pred_long_rate<={max_pred_rate:.2f}",
+        target=(
+            f"raw_f1_monitor; active skill and pred_long_rate<={max_pred_rate:.2f}"
+            if evidence_charter_active
+            else f"official_f1>{min_long_f1:.2f}; pred_long_rate<={max_pred_rate:.2f}"
+        ),
         passed=threshold_passed,
         evidence=(
             f"Official F1={_fmt_metric(official_f1)} from {official_source or 'NA'}; "
@@ -305,7 +347,10 @@ def _phase1_blocker_action_plan_frame(
             f"threshold issue counts={issue_counts}."
         ),
         recommended_action=(
-            "Optimize score separation/calibration on CV only. Selected-threshold F1 is not official when it exceeds "
+            "Keep threshold transfer and raw F1 visible as risk diagnostics. Do not alter the frozen threshold policy "
+            "before future unseen OOS evaluation."
+            if evidence_charter_active
+            else "Optimize score separation/calibration on CV only. Selected-threshold F1 is not official when it exceeds "
             "the pred-long-rate guardrail."
         ),
         allowed_now=True,
@@ -319,7 +364,11 @@ def _phase1_blocker_action_plan_frame(
             "score_separation_forensics.csv;probability_quality_forensics.csv;probability_quality_summary.csv;"
             "feature_drift_forensics.csv;profile_comparison.csv;phase2_readiness.json"
         ),
-        notes="This prevents an unrealistically broad long gate from masking deployment risk.",
+        notes=(
+            "The active charter uses rate-matched F1 skill, PRAUC/precision lift, realized return consistency, and the prediction-rate guardrail."
+            if evidence_charter_active
+            else "This prevents an unrealistically broad long gate from masking deployment risk."
+        ),
     )
 
     top10_lift = _float(control, "top_10_lift_global")
@@ -955,6 +1004,17 @@ def _phase1_blocker_root_cause_frame(
     rows: list[dict[str, Any]] = []
     readiness = phase2_readiness or {}
     blockers = {str(item) for item in readiness.get("blockers", []) or []}
+    active_charter = str(readiness.get("active_validation_charter") or "v3_legacy")
+    evidence_charter_active = active_charter != "v3_legacy"
+    model_blockers = {
+        blocker
+        for blocker in blockers
+        if blocker
+        not in {
+            "future_unseen_oos_not_ready",
+            "future_unseen_oos_not_evaluated",
+        }
+    }
     action_by_blocker = {
         str(row.get("blocker")): row.to_dict()
         for _, row in phase1_blocker_action_plan.iterrows()
@@ -998,44 +1058,83 @@ def _phase1_blocker_root_cause_frame(
             }
         )
 
-    add(
-        1,
-        "fold_stability",
-        str(control_mechanism.get("dominant_mechanism") or "score_ranking_reversal_not_label_balance"),
-        (
-            f"Control bad-fold signature={control_mechanism.get('likely_signature', '')}; "
-            f"top suspect={control_mechanism.get('top_drift_family', '')}/"
-            f"{control_mechanism.get('top_suspect_feature', '')}; "
-            f"related rejected feature hypotheses={repeated_count}."
-        ),
-        "Pause broad profile search. Use bad-fold mechanism and prediction_error_audit before designing a new pre-registered hypothesis.",
+    fold_evidence = (
+        f"Control bad-fold signature={control_mechanism.get('likely_signature', '')}; "
+        f"top suspect={control_mechanism.get('top_drift_family', '')}/"
+        f"{control_mechanism.get('top_suspect_feature', '')}; "
+        f"related rejected feature hypotheses={repeated_count}."
     )
-    add(
-        2,
-        "official_threshold_f1",
-        str(control_oracle.get("root_cause_hint") or "threshold_gap_secondary_to_score_separation"),
-        (
-            f"Oracle F1 mean={_fmt_metric(control_oracle.get('oracle_f1_mean'))}; "
-            f"official F1 mean={_fmt_metric(control_oracle.get('official_f1_mean'))}; "
-            f"official pass fold rate={_fmt_metric(control_oracle.get('official_pass_fold_rate'))}; "
-            f"selected pred-long guardrail fail rate={_fmt_metric(control_oracle.get('selected_pred_rate_guardrail_fail_rate'))}."
-        ),
-        "Separate threshold-transfer work from score-separation work; do not count broad selected F1 as a Phase 1 pass.",
+    threshold_evidence = (
+        f"Oracle F1 mean={_fmt_metric(control_oracle.get('oracle_f1_mean'))}; "
+        f"official F1 mean={_fmt_metric(control_oracle.get('official_f1_mean'))}; "
+        f"official pass fold rate={_fmt_metric(control_oracle.get('official_pass_fold_rate'))}; "
+        f"selected pred-long guardrail fail rate="
+        f"{_fmt_metric(control_oracle.get('selected_pred_rate_guardrail_fail_rate'))}."
     )
-    add(
-        3,
-        "historical_experiment_memory",
-        "repeated_direct_ablation_risk",
-        f"{repeated_count} current drift rows match already rejected profile families or direct ablations.",
-        "Before proposing a new profile, require historical_experiment_memory_audit to show the idea is not a repeated rejected method.",
-    )
-    add(
-        4,
-        "future_unseen_oos",
-        "governance_gate_not_model_tuning",
-        f"Phase2 blockers={sorted(blockers)}; future OOS ready={'future_unseen_oos_not_ready' not in blockers}.",
-        "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
-    )
+    if evidence_charter_active and not model_blockers:
+        add(
+            1,
+            "future_unseen_oos",
+            "governance_gate_not_model_tuning",
+            (
+                f"Phase2 blockers={sorted(blockers)}; future OOS ready="
+                f"{'future_unseen_oos_not_ready' not in blockers}."
+            ),
+            "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
+        )
+        add(
+            2,
+            "monitor_fold_stability",
+            str(control_mechanism.get("dominant_mechanism") or "score_ranking_reversal_not_label_balance"),
+            fold_evidence,
+            "Monitor without retraining while the frozen future-OOS candidate is pending.",
+        )
+        add(
+            3,
+            "monitor_threshold_quality",
+            str(control_oracle.get("root_cause_hint") or "threshold_gap_secondary_to_score_separation"),
+            threshold_evidence,
+            "Monitor threshold transfer, but do not change the frozen policy before unseen evaluation.",
+        )
+        add(
+            4,
+            "historical_experiment_memory",
+            "repeated_direct_ablation_risk",
+            f"{repeated_count} current drift rows match already rejected profile families or direct ablations.",
+            "Before proposing a new profile, require historical_experiment_memory_audit to show the idea is not a repeated rejected method.",
+        )
+    else:
+        add(
+            1,
+            "fold_stability",
+            str(control_mechanism.get("dominant_mechanism") or "score_ranking_reversal_not_label_balance"),
+            fold_evidence,
+            "Use bad-fold mechanism and prediction_error_audit before designing a new pre-registered hypothesis.",
+        )
+        add(
+            2,
+            "official_threshold_f1",
+            str(control_oracle.get("root_cause_hint") or "threshold_gap_secondary_to_score_separation"),
+            threshold_evidence,
+            "Separate threshold-transfer work from score-separation work.",
+        )
+        add(
+            3,
+            "historical_experiment_memory",
+            "repeated_direct_ablation_risk",
+            f"{repeated_count} current drift rows match already rejected profile families or direct ablations.",
+            "Before proposing a new profile, require historical_experiment_memory_audit to show the idea is not a repeated rejected method.",
+        )
+        add(
+            4,
+            "future_unseen_oos",
+            "governance_gate_not_model_tuning",
+            (
+                f"Phase2 blockers={sorted(blockers)}; future OOS ready="
+                f"{'future_unseen_oos_not_ready' not in blockers}."
+            ),
+            "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
+        )
     return pd.DataFrame(rows, columns=columns)
 
 def _phase1_decision_ladder_payload(
@@ -1048,6 +1147,13 @@ def _phase1_decision_ladder_payload(
 ) -> dict[str, Any]:
     readiness = phase2_readiness or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
+    active_charter = str(readiness.get("active_validation_charter") or "v3_legacy")
+    only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
+        {
+            "future_unseen_oos_not_ready",
+            "future_unseen_oos_not_evaluated",
+        }
+    )
     run_04_now = bool(
         not phase1_blocker_root_cause.empty
         and phase1_blocker_root_cause.get("run_04_now", pd.Series(dtype=bool)).astype(bool).any()
@@ -1073,9 +1179,17 @@ def _phase1_decision_ladder_payload(
         if not bad_fold_mechanism_summary.empty
         else None,
     )
-    threshold_transfer_blocker = bool(control_oracle.get("threshold_transfer_blocker", False))
-    score_reversal_blocker = str(mechanism.get("dominant_mechanism", "")).startswith("score_ranking_reversal")
-    if run_04_now:
+    threshold_transfer_blocker = bool(
+        not only_future_oos_blocked
+        and control_oracle.get("threshold_transfer_blocker", False)
+    )
+    score_reversal_blocker = bool(
+        not only_future_oos_blocked
+        and str(mechanism.get("dominant_mechanism", "")).startswith("score_ranking_reversal")
+    )
+    if only_future_oos_blocked:
+        recommended_next_action = "refresh_data_and_run_05_when_future_oos_minimum_is_available"
+    elif run_04_now:
         recommended_next_action = "run_04_only_after_pre_registered_hypothesis"
     elif threshold_transfer_blocker:
         recommended_next_action = "run_05_threshold_transfer_diagnostics_only"
@@ -1092,7 +1206,11 @@ def _phase1_decision_ladder_payload(
         "run_02_03_required_now": False,
         "full_zip_required_now": False,
         "next_notebook": "04" if run_04_now else "05",
-        "root_cause": str(control_root.get("root_cause") or mechanism.get("dominant_mechanism") or ""),
+        "root_cause": (
+            "future_oos_governance_gate"
+            if only_future_oos_blocked
+            else str(control_root.get("root_cause") or mechanism.get("dominant_mechanism") or "")
+        ),
         "threshold_oracle_hint": str(control_oracle.get("root_cause_hint") or ""),
         "threshold_transfer_blocker": threshold_transfer_blocker,
         "threshold_work_required": threshold_transfer_blocker,
@@ -1102,6 +1220,8 @@ def _phase1_decision_ladder_payload(
         "why_no_04": (
             ""
             if run_04_now
+            else "frozen candidate must remain unchanged until future unseen OOS evaluation"
+            if only_future_oos_blocked
             else "no pre-registered feature or training hypothesis cleared the root-cause and memory audits"
         ),
         "decision": (

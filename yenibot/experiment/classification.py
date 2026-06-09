@@ -1216,6 +1216,9 @@ def _validation_charter_review_frame(
     columns = [
         "criterion",
         "control_profile",
+        "active_charter",
+        "criterion_role",
+        "review_status",
         "official_target",
         "observed_value",
         "official_gate_passed",
@@ -1227,6 +1230,9 @@ def _validation_charter_review_frame(
         "automatic_gate_change_allowed",
         "governance_decision",
     ]
+    charter = _cfg(config, ["validation", "charter"], {}) or {}
+    active_charter = str(charter.get("active_version", "v3_legacy"))
+    evidence_charter_active = active_charter != "v3_legacy"
     rows: list[dict[str, Any]] = []
     rank = pd.DataFrame()
     if not rank_ic_evidence.empty:
@@ -1244,7 +1250,18 @@ def _validation_charter_review_frame(
             {
                 "criterion": "rank_ic_std",
                 "control_profile": control_profile,
-                "official_target": f"< {target_std}",
+                "active_charter": active_charter,
+                "criterion_role": "monitor" if evidence_charter_active else "gate",
+                "review_status": (
+                    "resolved_by_active_evidence_charter"
+                    if evidence_charter_active
+                    else "formal_review_pending"
+                ),
+                "official_target": (
+                    f"legacy monitor < {target_std}"
+                    if evidence_charter_active
+                    else f"< {target_std}"
+                ),
                 "observed_value": observed_std,
                 "official_gate_passed": bool(np.isfinite(observed_std) and observed_std < target_std),
                 "reference_baseline": "multi_block_bootstrap_noise_floor_max",
@@ -1254,13 +1271,19 @@ def _validation_charter_review_frame(
                     if target_below_noise
                     else "absolute_target_above_at_least_one_measured_noise_floor"
                 ),
-                "charter_review_recommended": target_below_noise and random_positive,
+                "charter_review_recommended": (
+                    False
+                    if evidence_charter_active
+                    else target_below_noise and random_positive
+                ),
                 "proposed_companion_evidence": (
                     "random_effects_ci; positive_fold_sign_test; between_fold_tau; heterogeneity_i2; future_unseen_oos"
                 ),
                 "automatic_gate_change_allowed": False,
                 "governance_decision": (
-                    "formal_review_recommended_keep_official_gate_unchanged"
+                    "resolved_active_charter_uses_random_effects_and_sign_test;legacy_std_monitor_only"
+                    if evidence_charter_active
+                    else "formal_review_recommended_keep_official_gate_unchanged"
                     if target_below_noise and random_positive
                     else "retain_current_gate_and_monitor"
                 ),
@@ -1286,7 +1309,18 @@ def _validation_charter_review_frame(
             {
                 "criterion": "long_f1",
                 "control_profile": control_profile,
-                "official_target": f"> {target_f1}; pred_long_rate <= {max_rate}",
+                "active_charter": active_charter,
+                "criterion_role": "monitor" if evidence_charter_active else "gate",
+                "review_status": (
+                    "resolved_by_active_evidence_charter"
+                    if evidence_charter_active
+                    else "formal_review_pending"
+                ),
+                "official_target": (
+                    f"legacy monitor > {target_f1}; active pred_long_rate <= {max_rate}"
+                    if evidence_charter_active
+                    else f"> {target_f1}; pred_long_rate <= {max_rate}"
+                ),
                 "observed_value": observed_f1,
                 "official_gate_passed": bool(
                     np.isfinite(observed_f1)
@@ -1305,14 +1339,20 @@ def _validation_charter_review_frame(
                         else "target_above_reported_no_skill_baselines"
                     )
                 ),
-                "charter_review_recommended": not target_above_always or not target_above_max_rate_random,
+                "charter_review_recommended": (
+                    False
+                    if evidence_charter_active
+                    else not target_above_always or not target_above_max_rate_random
+                ),
                 "proposed_companion_evidence": (
                     "f1_skill_vs_rate_matched_random; prauc_lift_vs_prevalence; "
                     "precision_lift_vs_prevalence; positive_forward_return_fold_rate"
                 ),
                 "automatic_gate_change_allowed": False,
                 "governance_decision": (
-                    "formal_review_recommended_keep_official_gate_unchanged"
+                    "resolved_active_charter_uses_skill_normalized_metrics;legacy_raw_f1_monitor_only"
+                    if evidence_charter_active
+                    else "formal_review_recommended_keep_official_gate_unchanged"
                     if not target_above_always or not target_above_max_rate_random
                     else "retain_current_gate_with_skill_companions"
                 ),
@@ -1323,8 +1363,8 @@ def _validation_charter_review_frame(
 def _validation_charter_review_markdown(frame: pd.DataFrame) -> str:
     lines = ["# Validation Charter Review", ""]
     lines.append(
-        "This report tests whether the original Phase 1 thresholds remain statistically discriminative. "
-        "It never changes a gate automatically. Any charter revision requires an explicit reviewed config and documentation commit."
+        "This report audits whether legacy Phase 1 thresholds remain statistically discriminative and records "
+        "how the explicitly active charter treats them. It never changes a gate automatically."
     )
     if frame.empty:
         lines.extend(["", "No validation charter rows were produced."])
@@ -1348,6 +1388,16 @@ def _write_validation_charter_review(path: Path, frame: pd.DataFrame) -> None:
         {
             "formal_revision_recommended": bool(
                 not frame.empty and frame["charter_review_recommended"].astype(bool).any()
+            ),
+            "review_status": (
+                str(frame["review_status"].iloc[0])
+                if not frame.empty and "review_status" in frame.columns
+                else "not_produced"
+            ),
+            "active_charter": (
+                str(frame["active_charter"].iloc[0])
+                if not frame.empty and "active_charter" in frame.columns
+                else "unknown"
             ),
             "automatic_gate_change_allowed": False,
             "rows": frame.to_dict(orient="records"),
@@ -1444,7 +1494,7 @@ def _validation_charter_proposal_frame(
                 "monitor_only",
                 np.nan,
                 _float(item, "observed_std_rank_ic"),
-                "Absolute fold std remains visible, but the draft does not promote it when its target is below measured noise.",
+                "Absolute fold std remains visible, but the active evidence charter does not use an infeasible below-noise target as a blocker.",
             ),
         ]
         for criterion, role, comparison, target, observed, rationale in rank_rules:
@@ -1563,7 +1613,7 @@ def _validation_charter_proposal_frame(
                 "monitor_only",
                 float(_cfg(config, ["validation", "min_long_f1"], 0.45)),
                 _float(item, "f1_mean"),
-                "Raw F1 stays reported, but the draft interprets it beside rate-matched no-skill baselines.",
+                "Raw F1 stays reported, while the active evidence charter evaluates it beside rate-matched no-skill baselines.",
             ),
         ]
         for criterion, role, comparison, target, observed, rationale in class_rules:

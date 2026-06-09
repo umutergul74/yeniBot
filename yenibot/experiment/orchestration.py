@@ -104,6 +104,11 @@ from yenibot.experiment.execution import (
     workflow_checkpoint,
 )
 
+from yenibot.experiment.dashboard import (
+    attach_active_charter_status,
+    write_model_performance_dashboard,
+)
+
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 
@@ -1358,6 +1363,24 @@ def write_experiment_diagnostics(
         historical_experiment_memory_audit=pre_historical_experiment_memory_audit,
         decision_ladder=pre_phase1_decision_ladder,
     )
+    # Prewrite the executive dashboard so report completeness verifies the
+    # tables and visuals themselves. The final active-charter decision
+    # overwrites these provisional files immediately after auto-review.
+    write_model_performance_dashboard(
+        report_dir,
+        entries=entries,
+        comparison=comparison,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        rank_ic_aggregate_evidence=rank_ic_aggregate_evidence,
+        classification_skill_summary=classification_skill_summary,
+        probability_quality_summary=probability_quality_summary,
+        payoff_alignment=payoff_alignment,
+        seed_stability=seed_stability,
+        phase2_readiness={},
+        future_oos_readiness=future_oos_readiness,
+        control_profile=settings["control_profile"],
+    )
     from yenibot.automation import write_auto_review
 
     workflow_checkpoint("run_auto_review", report_dir=report_dir)
@@ -1378,6 +1401,11 @@ def write_experiment_diagnostics(
     decision["phase1_transition_plan_path"] = str(phase1_transition_plan_path)
     decision["phase1_transition_plan_md_path"] = str(phase1_transition_plan_md_path)
     decision["phase1_transition_plan"] = auto_review["review"].get("phase1_transition_plan", {})
+    comparison = attach_active_charter_status(
+        comparison,
+        phase2_readiness=decision["phase2_readiness"],
+        control_profile=settings["control_profile"],
+    )
     phase1_blocker_action_plan = _phase1_blocker_action_plan_frame(
         comparison=comparison,
         profile_blend=profile_blend,
@@ -1432,6 +1460,22 @@ def write_experiment_diagnostics(
     decision["prediction_error_audit"] = prediction_error_audit.to_dict(orient="records")
     decision["historical_experiment_memory_audit"] = historical_experiment_memory_audit.to_dict(orient="records")
     decision["phase1_decision_ladder"] = phase1_decision_ladder
+    model_performance_dashboard = write_model_performance_dashboard(
+        report_dir,
+        entries=entries,
+        comparison=comparison,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        rank_ic_aggregate_evidence=rank_ic_aggregate_evidence,
+        classification_skill_summary=classification_skill_summary,
+        probability_quality_summary=probability_quality_summary,
+        payoff_alignment=payoff_alignment,
+        seed_stability=seed_stability,
+        phase2_readiness=decision["phase2_readiness"],
+        future_oos_readiness=future_oos_readiness,
+        control_profile=settings["control_profile"],
+    )
+    decision["model_performance_summary"] = model_performance_dashboard["summary"]
     _write_phase1_blocker_action_plan(report_dir, phase1_blocker_action_plan)
     _write_root_cause_reports(
         report_dir,
@@ -1444,6 +1488,21 @@ def write_experiment_diagnostics(
     )
     _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
+    write_model_performance_dashboard(
+        run_dir,
+        entries=entries,
+        comparison=comparison,
+        fold_stability_forensics=fold_stability_forensics,
+        fold_stability_summary=fold_stability_summary,
+        rank_ic_aggregate_evidence=rank_ic_aggregate_evidence,
+        classification_skill_summary=classification_skill_summary,
+        probability_quality_summary=probability_quality_summary,
+        payoff_alignment=payoff_alignment,
+        seed_stability=seed_stability,
+        phase2_readiness=decision["phase2_readiness"],
+        future_oos_readiness=future_oos_readiness,
+        control_profile=settings["control_profile"],
+    )
     _write_json(_training_execution_summary_path(run_dir), training_execution)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
@@ -1522,6 +1581,7 @@ def write_experiment_diagnostics(
     return {
         "run_id": run_dir.name,
         "run_dir": run_dir,
+        "report_dir": str(report_dir),
         "comparison": comparison,
         "profile_delta": profile_delta,
         "seed_audit": seed_audit,
@@ -1537,6 +1597,8 @@ def write_experiment_diagnostics(
         "prediction_error_audit": prediction_error_audit,
         "historical_experiment_memory_audit": historical_experiment_memory_audit,
         "phase1_decision_ladder": phase1_decision_ladder,
+        "model_performance_scorecard": model_performance_dashboard["scorecard"],
+        "model_performance_summary": model_performance_dashboard["summary"],
         "fold_stability_forensics": fold_stability_forensics,
         "fold_stability_summary": fold_stability_summary,
         "score_separation_forensics": score_separation_forensics,

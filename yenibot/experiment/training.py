@@ -757,14 +757,20 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "passed_phase1_constrained_threshold",
             "passed_phase1_guarded_threshold",
             "passed_phase1_official_threshold",
+            "passed_phase1_legacy_v3",
+            "active_validation_charter",
+            "model_evidence_passed_active_charter",
+            "phase2_ready",
+            "phase1_status",
             "promotable",
             "reject_reason",
         ]
-        visible = comparison[display_cols].copy()
-        lines.append("| " + " | ".join(display_cols) + " |")
-        lines.append("| " + " | ".join(["---"] * len(display_cols)) + " |")
+        visible_cols = [column for column in display_cols if column in comparison.columns]
+        visible = comparison[visible_cols].copy()
+        lines.append("| " + " | ".join(visible_cols) + " |")
+        lines.append("| " + " | ".join(["---"] * len(visible_cols)) + " |")
         for _, row in visible.iterrows():
-            values = [str(row[column]) for column in display_cols]
+            values = [str(row[column]) for column in visible_cols]
             lines.append("| " + " | ".join(values) + " |")
     lines.extend(["", "## Decision", "", json.dumps(_json_ready(decision), indent=2, sort_keys=True)])
     return "\n".join(lines)

@@ -199,6 +199,16 @@ def _write_experiment_bundle(
         "phase2_readiness.json",
         "phase1_transition_plan.md",
         "phase1_transition_plan.json",
+        "model_performance_dashboard.md",
+        "model_performance_summary.json",
+        "model_performance_scorecard.csv",
+        "model_metric_definitions.csv",
+        "model_calibration_reliability.csv",
+        "model_precision_recall_curve.csv",
+        "model_scorecard.png",
+        "rank_ic_stability.png",
+        "classification_quality.png",
+        "score_band_payoff.png",
         "decision_report.json",
         "best_candidate.json",
     ]
@@ -219,7 +229,7 @@ def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: 
     latest_slim_path = output_dir / "phase1_latest_experiment_slim_bundle.zip"
     with zipfile.ZipFile(slim_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(report_dir.glob("*")):
-            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".jsonl", ".md"}:
+            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".jsonl", ".md", ".png"}:
                 archive.write(path, f"{run_id}/{path.name}")
     shutil.copyfile(slim_path, latest_slim_path)
     return slim_path, latest_slim_path

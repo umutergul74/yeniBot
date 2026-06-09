@@ -3864,6 +3864,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/next_actions.json" in archive.namelist()
         assert "matrix/phase2_readiness.json" in archive.namelist()
         assert "matrix/phase1_transition_plan.json" in archive.namelist()
+        assert "matrix/model_performance_dashboard.md" in archive.namelist()
+        assert "matrix/model_performance_scorecard.csv" in archive.namelist()
+        assert "matrix/model_scorecard.png" in archive.namelist()
+        assert "matrix/rank_ic_stability.png" in archive.namelist()
+        assert "matrix/classification_quality.png" in archive.namelist()
+        assert "matrix/score_band_payoff.png" in archive.namelist()
     with zipfile.ZipFile(tmp_path / "reports" / "phase1_experiment_slim_bundle_matrix.zip") as archive:
         names = set(archive.namelist())
     assert "matrix/profile_comparison.csv" in names
@@ -3908,6 +3914,12 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/holdout_reservation.csv" in names
     assert "matrix/holdout_boundary_audit.csv" in names
     assert "matrix/holdout_policy_consistency.csv" in names
+    assert "matrix/model_performance_dashboard.md" in names
+    assert "matrix/model_performance_scorecard.csv" in names
+    assert "matrix/model_scorecard.png" in names
+    assert "matrix/rank_ic_stability.png" in names
+    assert "matrix/classification_quality.png" in names
+    assert "matrix/score_band_payoff.png" in names
     assert "matrix/holdout_policy_decision.csv" in names
     assert "matrix/frozen_policy_robustness.csv" in names
     assert "matrix/frozen_policy_monitoring_plan.csv" in names

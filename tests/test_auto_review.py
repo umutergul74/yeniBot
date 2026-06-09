@@ -395,6 +395,23 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         ),
         encoding="utf-8",
     )
+    dashboard_files = {
+        "model_performance_dashboard.md": "# Fixture dashboard\n",
+        "model_performance_summary.json": "{}",
+        "model_performance_scorecard.csv": "metric,value\nmean_rank_ic,0.05\n",
+        "model_metric_definitions.csv": "metric,definition\nmean_rank_ic,fixture\n",
+        "model_calibration_reliability.csv": "bin,count\n0,10\n",
+        "model_precision_recall_curve.csv": "threshold,precision,recall\n0.5,0.5,0.5\n",
+    }
+    for filename, content in dashboard_files.items():
+        (path / filename).write_text(content, encoding="utf-8")
+    for filename in [
+        "model_scorecard.png",
+        "rank_ic_stability.png",
+        "classification_quality.png",
+        "score_band_payoff.png",
+    ]:
+        (path / filename).write_bytes(b"fixture-png")
     (path / "validation_charter_status.json").write_text(
         json.dumps(
             {
