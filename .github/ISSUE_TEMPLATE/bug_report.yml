@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible pipeline, notebook, or diagnostics defect
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, Drive tokens, private paths, or model bundles.
+
+  - type: input
+    id: commit
+    attributes:
+      label: Git commit
+      description: Commit hash used when the issue occurred.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Pipeline stage
+      options:
+        - 01 data preparation
+        - 02 feature engineering
+        - 03 labeling
+        - 04 training
+        - 05 diagnostics
+        - Local tests
+        - CI
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include the compact traceback and workflow status stage.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Restart Colab session
+        2. Run notebook ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: integrity
+    attributes:
+      label: Integrity checks
+      options:
+        - label: I restarted the Colab session after pulling new code.
+        - label: I verified the run id and git commit.
+        - label: I removed secrets and private data from this report.

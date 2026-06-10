@@ -9,9 +9,14 @@ checkpoints/*.pt
 checkpoints/*.pkl
 checkpoints/*.parquet
 .env
+.venv/
+venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 .testtmp/
 .codex_tmp/
 .codex_pytest_run/
@@ -21,6 +26,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.DS_Store
+Thumbs.db
 reports/
 phase1_diagnostics_*/
 phase1_diagnostics_*.zip

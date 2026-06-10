@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run unit and integration tests
+        run: pytest -q --ignore=tests/test_experiments.py
+
+      - name: Run experiment contract tests
+        run: >
+          pytest -q tests/test_experiments.py
+          -k "not test_experiment_matrix_and_diagnostics_write_profile_comparison
+          and not test_experiment_diagnostics_evaluates_reserved_holdout
+          and not test_experiment_diagnostics_recovers_standard_holdout_when_manifest_lacks_metadata
+          and not test_seed_audit_writes_isolated_seed_summaries
+          and not test_experiment_run_id_reuses_latest_matching_signature"
+
+  full-experiment-integration:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run full experiment integration suite
+        run: pytest -q tests/test_experiments.py

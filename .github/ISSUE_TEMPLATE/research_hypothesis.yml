@@ -1,0 +1,59 @@
+name: Research hypothesis
+description: Propose a pre-registered Phase 1 experiment
+title: "research: "
+labels: ["research"]
+body:
+  - type: textarea
+    id: mechanism
+    attributes:
+      label: Mechanism
+      description: What concrete model failure should this change address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: novelty
+    attributes:
+      label: Experiment-memory check
+      description: Explain why this is not a repeat of a rejected profile or loss.
+    validations:
+      required: true
+
+  - type: textarea
+    id: causality
+    attributes:
+      label: Temporal and causal availability
+      description: When is each proposed input known, and how is future leakage prevented?
+    validations:
+      required: true
+
+  - type: textarea
+    id: falsification
+    attributes:
+      label: Falsification criteria
+      description: State the metrics and gates that would reject the hypothesis.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rerun
+    attributes:
+      label: Minimum rerun scope
+      options:
+        - 05 only
+        - 04 and 05
+        - 03 through 05
+        - 02 through 05
+        - 01 through 05
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Phase boundary
+      options:
+        - label: This proposal does not add backtesting, execution, live trading, XGBoost, or 3-class labels.
+          required: true
+        - label: This proposal does not tune against the already-seen holdout.
+          required: true
