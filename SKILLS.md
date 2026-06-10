@@ -106,7 +106,13 @@ Holdout is a one-shot validation gate, not a development playground.
 - Promotion is blocked until `future_unseen_oos_ready` is true and the candidate was pre-registered before that future-OOS window.
 - Observed-best holdout rows are diagnostic only. They can inform future hypotheses, not immediate promotion.
 - Frozen future-OOS candidates must be recorded in `frozen_candidate_manifest.json`.
+- Each required frozen candidate must pin an explicit `source_run_id`, frozen
+  threshold payload, and expected manifest hash. Diagnostics from a newer run
+  must never silently replace those source artifacts.
 - Every referenced model, scaler, HMM, feature order, training signature, threshold source, and fit cutoff must be content-hashed before future-OOS scoring.
+- Training and diagnostics signatures are separate. Report, chart, calibration
+  audit, charter, or future-OOS display changes must not invalidate fitted
+  model artifacts or trigger training by themselves.
 - Future-OOS evaluation is prediction-only. It must perform zero fit operations and fail closed on missing or modified artifacts.
 - Enough new bars is only readiness to evaluate. Phase 2 remains blocked until the frozen primary candidate is actually evaluated and passes its pre-registered future-OOS gates.
 - Future-OOS readiness, evaluation, and pass are sequential states. Before the minimum row count is reached, evaluation/pass checks must be reported as pending rather than as additional failures.
@@ -128,7 +134,11 @@ Phase 2 is blocked until `auto_review.py` reports all readiness checks passing:
 9. `positive_f1_skill_fold_fraction`: rate-normalized F1 skill is positive in at least `75%` of folds.
 10. `positive_forward_return_fold_fraction`: selected rows have positive forward return in at least `60%` of folds.
 11. `prediction_long_rate`: the official policy predicts long on at most `70%` of rows.
-12. `calibration_separation`: actual long labels separate from non-long labels.
+12. `calibration_separation`: backward-compatible gate name for positive
+    long-vs-not-long **score separation**. It is not evidence that raw sigmoid
+    values are calibrated probabilities. Probability quality must be reported
+    separately with Brier skill versus climatology, log-loss skill versus
+    climatology, ECE, and calibration slope/intercept.
 13. `mtf_leakage`: MTF leakage audit passes.
 14. `stationarity_policy`: stationarity policy audit passes.
 15. `seed_audit_coverage`: configured seed/fold coverage is complete.
@@ -218,6 +228,9 @@ Required diagnostic artifacts include:
 - `model_metric_definitions.csv`
 - `model_calibration_reliability.csv`
 - `model_precision_recall_curve.csv`
+- `model_evidence_uncertainty.csv`
+- `probability_calibration_comparison.csv`
+- `probability_calibration_comparison_by_fold.csv`
 - `model_scorecard.png`
 - `rank_ic_stability.png`
 - `classification_quality.png`

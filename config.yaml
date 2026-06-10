@@ -1774,6 +1774,12 @@ validation:
     min_precision_lift_vs_prevalence: 1.05
     min_f1_skill_vs_rate_random: 0.00
     min_positive_forward_return_fold_rate: 0.60
+  model_evidence_uncertainty:
+    enabled: true
+    block_lengths: [24, 168]
+    bootstrap_repeats: 300
+    confidence_level: 0.95
+    random_seed: 42
   charter_proposal:
     enabled: true
     version: v4_evidence
@@ -1959,6 +1965,12 @@ experiments:
       - candidate_id: control_fold_ensemble_v1
         candidate_type: profile
         profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+        source_run_id: "20260605_211102"
+        expected_manifest_hash: "5c2acd94b3ea46a509b8a8c8b7327f6cc5ed34045a4e97e21a0b34b3313ae302"
+        threshold:
+          value: 0.4236384365293715
+          source: validation_constrained_threshold
+          selected_from: pre_anchor_walk_forward_validation
         fold_scope: full
         status: preregistered
         evaluation_role: primary

@@ -14,6 +14,8 @@ from yenibot.experiments import (
     _auto_full_profiles,
     _best_profile_blend,
     _experiment_selection_frame,
+    _experiment_signature,
+    _diagnostics_signature,
     _experiment_policy_guard_frame,
     _fold_reliability_gate_frame,
     _fold_reliability_gate_summary_frame,
@@ -41,6 +43,8 @@ from yenibot.experiments import (
     _profile_blend_review_frame,
     _probability_quality_forensics_frame,
     _probability_quality_summary_frame,
+    _probability_calibration_comparison_frames,
+    _model_evidence_uncertainty_frame,
     _regime_stability_frames,
     _regime_threshold_policy_frames,
     _score_distribution_shift_frame,
@@ -115,6 +119,65 @@ def test_profile_config_applies_nested_config_overrides_without_mutating_source(
     assert updated["features"]["active_profile"] == "margin_candidate"
     assert updated["training"]["loss"]["label_margin_weight"] == 0.05
     assert updated["training"]["loss"]["label_margin"] == 0.25
+
+
+def test_diagnostic_config_change_does_not_invalidate_training_signature(tiny_config) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["active_profile"] = "control"
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": []}
+    }
+    settings = experiment_settings(config)
+    training_before = _experiment_signature(config, settings)
+    diagnostics_before = _diagnostics_signature(config, settings)
+
+    config["validation"]["calibration_bins"] = 17
+    training_after = _experiment_signature(config, settings)
+    diagnostics_after = _diagnostics_signature(config, settings)
+
+    assert training_after == training_before
+    assert diagnostics_after != diagnostics_before
+
+
+def test_training_signature_tracks_selection_frame_but_ignores_future_oos_progress(
+    tiny_config,
+) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["features"]["active_profile"] = "control"
+    config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": []}
+    }
+    config["experiments"] = {
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "holdout": {
+            "enabled": True,
+            "holdout_bars": 20,
+            "selection_rows": 4,
+            "selection_data_start": "2024-01-01 00:00:00+00:00",
+            "selection_data_end": "2024-01-01 03:00:00+00:00",
+            "holdout_data_start": "2024-01-02 00:00:00+00:00",
+            "latest_available_data_end": "2024-01-03 00:00:00+00:00",
+        },
+    }
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+            "feature": [0.1, 0.2, 0.3, 0.4],
+            "label": [0, 1, 0, 1],
+        }
+    )
+    settings = experiment_settings(config)
+    before = _experiment_signature(config, settings, frame)
+
+    settings["holdout"]["latest_available_data_end"] = "2024-02-01 00:00:00+00:00"
+    after_future_progress = _experiment_signature(config, settings, frame)
+    changed_frame = frame.copy()
+    changed_frame.loc[0, "feature"] = 9.9
+    after_training_data_change = _experiment_signature(config, settings, changed_frame)
+
+    assert after_future_progress == before
+    assert after_training_data_change != before
 
 
 def test_experiment_settings_resolves_control_and_candidates() -> None:
@@ -1134,6 +1197,85 @@ def test_classification_skill_compares_f1_with_no_skill_baselines() -> None:
     assert float(row["f1_skill_vs_rate_matched_random_mean"]) > 0.0
     assert float(row["prauc_lift_vs_prevalence_mean"]) > 1.0
     assert bool(row["skill_evidence_passed"]) is True
+
+
+def test_model_evidence_uncertainty_and_calibration_comparison_are_validation_only() -> None:
+    config = {
+        "validation": {
+            "calibration_bins": 5,
+            "classification_skill": {
+                "min_prauc_lift_vs_prevalence": 1.01,
+                "min_precision_lift_vs_prevalence": 1.01,
+                "min_f1_skill_vs_rate_random": 0.0,
+            },
+            "model_evidence_uncertainty": {
+                "enabled": True,
+                "block_lengths": [4],
+                "bootstrap_repeats": 24,
+                "confidence_level": 0.90,
+                "random_seed": 7,
+            },
+        }
+    }
+    rows = []
+    threshold_rows = []
+    for fold in range(2):
+        base = np.linspace(0.20, 0.80, 80)
+        labels = (base > 0.55).astype(int)
+        raw_scores = 0.25 + 0.55 * base
+        for split in ("val", "test"):
+            for index, (score, label) in enumerate(zip(raw_scores, labels)):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-01-01", tz="UTC")
+                        + pd.Timedelta(hours=fold * 200 + index),
+                        "label": label,
+                        "prob_long": score,
+                        "forward_return": 0.004 if label else -0.002,
+                    }
+                )
+        threshold_rows.append(
+            {
+                "fold": fold,
+                "official_threshold": 0.25 + 0.55 * 0.55,
+                "official_threshold_source": "validation_constrained_threshold",
+                "official_threshold_uses_calibration": False,
+            }
+        )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {
+            "row": {"official_threshold_source": "validation_constrained_threshold"},
+            "threshold_metrics": pd.DataFrame(threshold_rows),
+        },
+    }
+
+    uncertainty = _model_evidence_uncertainty_frame([entry], config)
+    calibration_detail, calibration_summary = (
+        _probability_calibration_comparison_frames([entry], config)
+    )
+
+    assert set(uncertainty["metric"]) == {
+        "prauc_lift_vs_prevalence",
+        "precision_lift_vs_prevalence",
+        "f1_skill_vs_rate_matched_random",
+        "top_10_forward_return",
+    }
+    assert set(calibration_summary["method"]) == {"raw", "platt", "isotonic"}
+    assert set(calibration_detail["fit_source"]) == {
+        "none_raw_scores",
+        "fold_validation_only",
+    }
+    assert {
+        "mean_brier_skill_vs_climatology",
+        "mean_log_loss_skill_vs_climatology",
+        "mean_calibration_intercept",
+        "mean_calibration_slope",
+    }.issubset(calibration_summary.columns)
 
 
 def test_validation_charter_flags_non_discriminative_legacy_targets() -> None:
@@ -4323,7 +4465,7 @@ def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, ti
     frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
 
     first = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="stable_run", device="cpu")
-    run_id, source = resolve_experiment_run_id(tmp_path, config)
+    run_id, source = resolve_experiment_run_id(tmp_path, config, frame=frame)
     second = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, device="cpu")
 
     assert first["run_id"] == "stable_run"

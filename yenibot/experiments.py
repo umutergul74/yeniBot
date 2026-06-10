@@ -15,6 +15,7 @@ from yenibot.experiment.rank_ic import *  # noqa: F401,F403
 from yenibot.experiment.classification import *  # noqa: F401,F403
 from yenibot.experiment.separation import *  # noqa: F401,F403
 from yenibot.experiment.drift import *  # noqa: F401,F403
+from yenibot.experiment.evidence import *  # noqa: F401,F403
 from yenibot.experiment.payoff import *  # noqa: F401,F403
 from yenibot.experiment.ensembles import *  # noqa: F401,F403
 from yenibot.experiment.artifacts import *  # noqa: F401,F403

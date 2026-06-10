@@ -77,7 +77,7 @@ def phase1_report(predictions: pd.DataFrame, config: object) -> dict[str, object
     mean_prauc = float(class_by_fold["prauc"].mean())
     actual_long = predictions.loc[predictions["label"] == 1, "prob_long"].mean()
     actual_not_long = predictions.loc[predictions["label"] == 0, "prob_long"].mean()
-    calibration_separation = float(actual_long - actual_not_long)
+    score_separation = float(actual_long - actual_not_long)
 
     validation = config["validation"] if isinstance(config, dict) else config.validation
     checks = {
@@ -85,7 +85,7 @@ def phase1_report(predictions: pd.DataFrame, config: object) -> dict[str, object
         "rank_ic_std": std_rank_ic < float(validation["max_rank_ic_std"]),
         "positive_ic_fraction": positive_fraction > float(validation["min_positive_ic_fraction"]),
         "long_f1": mean_long_f1 > float(validation["min_long_f1"]),
-        "calibration_separation": calibration_separation > 0,
+        "calibration_separation": score_separation > 0,
     }
     alerts: list[str] = []
     if abs(mean_rank_ic) <= float(validation["random_like_rank_ic"]):
@@ -100,7 +100,10 @@ def phase1_report(predictions: pd.DataFrame, config: object) -> dict[str, object
         "positive_ic_fraction": positive_fraction,
         "mean_long_f1": mean_long_f1,
         "mean_prauc": mean_prauc,
-        "calibration_separation": calibration_separation,
+        # Backward-compatible gate name. This is score separation, not
+        # probability calibration; probability quality is audited separately.
+        "calibration_separation": score_separation,
+        "score_separation": score_separation,
         "checks": checks,
         "passed": all(checks.values()),
         "alerts": alerts,

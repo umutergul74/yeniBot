@@ -10,7 +10,10 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, precision_score, recall_score
 
 from yenibot.experiment.common import _cfg, _rank_ic_for_frame, _table_markdown, _write_json
-from yenibot.experiment.frozen import verify_frozen_manifest_artifacts
+from yenibot.experiment.frozen import (
+    frozen_manifest_source_run_dir,
+    verify_frozen_manifest_artifacts,
+)
 from yenibot.experiment.holdout import _aggregate_holdout_predictions, _predict_holdout_for_profile
 
 __all__ = ["evaluate_future_oos"]
@@ -98,10 +101,11 @@ def _profile_predictions(
     config: dict[str, Any],
 ) -> dict[str, pd.DataFrame]:
     predictions: dict[str, pd.DataFrame] = {}
+    source_run_dir = frozen_manifest_source_run_dir(manifest, run_dir=run_dir)
     for component in manifest.get("components", []) or []:
         profile = str(component["profile"])
         raw = _predict_holdout_for_profile(
-            scope_dir=run_dir / str(component["scope_relative_path"]),
+            scope_dir=source_run_dir / str(component["scope_relative_path"]),
             manifest={
                 "profile": profile,
                 "feature_columns": list(component["feature_columns"]),

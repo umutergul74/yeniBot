@@ -126,8 +126,11 @@ def _metric_definitions() -> pd.DataFrame:
         ("Precision lift", "Decision quality", "Official-policy precision divided by unconditional long-label prevalence.", "Above 1.0; active gate is 1.05."),
         ("Rate-matched F1 skill", "Classification skill", "F1 minus random-selection F1 at the same prediction rate.", "Positive and persistent across folds."),
         ("Brier score", "Probability quality", "Mean squared probability error; combines calibration and resolution.", "Lower, compared over time/models."),
+        ("Brier skill", "Probability quality", "One minus model Brier score divided by the fold-climatology Brier score.", "Positive; negative means worse than predicting the base rate."),
         ("Log loss", "Probability quality", "Proper scoring rule that strongly penalizes confident wrong probabilities.", "Lower, compared over time/models."),
+        ("Log-loss skill", "Probability quality", "One minus model log loss divided by fold-climatology log loss.", "Positive; interpret beside calibration slope and ECE."),
         ("ECE", "Calibration", "Weighted gap between predicted probability and observed frequency.", "Lower; inspect with reliability diagram."),
+        ("Score separation", "Discrimination", "Mean score for actual longs minus mean score for not-long rows.", "Positive; this is not a calibration metric."),
         ("Top-decile lift", "Economic ordering", "Long-label rate in the top score decile divided by base prevalence.", "Above 1.0 and paired with positive return."),
         ("Top-decile forward return", "Economic ordering", "Mean realized forward return for the top score decile.", "Positive on CV and confirmed on future unseen OOS."),
         ("Seed dispersion", "Training robustness", "Variation of key metrics across deterministic seeds.", "Small relative to the signal margin."),
@@ -215,7 +218,7 @@ def _scorecard_frame(
         "positive_forward_return_fold_fraction": "Economic ordering",
         "prediction_long_rate": "Decision guardrail",
         "raw_long_f1": "Risk monitor",
-        "calibration_separation": "Calibration",
+        "calibration_separation": "Score separation",
         "mtf_leakage": "Integrity",
         "stationarity_policy": "Integrity",
         "seed_audit_coverage": "Training robustness",
@@ -230,6 +233,10 @@ def _scorecard_frame(
         "future_unseen_oos_ready": "Fresh labeled rows must reach the preregistered minimum before scoring.",
         "future_unseen_oos_evaluated": "Must be prediction-only with zero fit operations.",
         "future_unseen_oos_passed": "Final preregistered promotion evidence before Phase 2.",
+        "calibration_separation": (
+            "Mean score gap between actual long and not-long rows. This is not "
+            "probability calibration."
+        ),
     }
     for item in phase2_readiness.get("checks", []) or []:
         metric = str(item.get("check"))
@@ -314,7 +321,9 @@ def _scorecard_frame(
         ("Tail risk", "worst_fold_rank_ic", "walk_forward_oos", stability.get("worst_fold_rank_ic"), "monitor", "monitor", "risk", "Worst temporal fold; should remain visible even when aggregate gates pass.", "fold_stability_summary.csv"),
         ("Tail risk", "top_5_variance_contribution", "walk_forward_oos", stability.get("top_5_variance_contribution"), "monitor", "monitor", "risk", "Fraction of fold variance concentrated in the five largest contributors.", "fold_stability_summary.csv"),
         ("Probability quality", "brier_score", "walk_forward_oos", quality.get("mean_brier_score"), "lower is better", "monitor", "monitor", "Proper probability score; compare across frozen evaluations.", "probability_quality_summary.csv"),
+        ("Probability quality", "brier_skill_vs_climatology", "walk_forward_oos", quality.get("mean_brier_skill_vs_climatology"), "> 0", "passed" if _number(quality.get("mean_brier_skill_vs_climatology")) > 0 else "failed", "monitor", "Probability improvement over fold climatology; negative means raw probabilities are worse than the base rate.", "probability_quality_summary.csv"),
         ("Probability quality", "log_loss", "walk_forward_oos", quality.get("mean_log_loss"), "lower is better", "monitor", "monitor", "Penalizes confident wrong probabilities.", "probability_quality_summary.csv"),
+        ("Probability quality", "log_loss_skill_vs_climatology", "walk_forward_oos", quality.get("mean_log_loss_skill_vs_climatology"), "> 0", "passed" if _number(quality.get("mean_log_loss_skill_vs_climatology")) > 0 else "failed", "monitor", "Log-loss improvement over fold climatology.", "probability_quality_summary.csv"),
         ("Calibration", "ece_equal_count", "walk_forward_oos", quality.get("mean_ece_equal_count"), "lower is better", "monitor", "monitor", "Expected calibration error across equal-count bins.", "probability_quality_summary.csv"),
         ("Economic ordering", "top_10_cv_label_lift", "walk_forward_oos", cv_payoff.get("label_lift_vs_base", control.get("top_10_lift_global")), "> 1", "passed" if _number(cv_payoff.get("label_lift_vs_base", control.get("top_10_lift_global"))) > 1 else "failed", "monitor", "Top-decile label concentration; not sufficient without positive payoff.", "payoff_alignment.csv"),
         ("Economic ordering", "top_10_cv_forward_return", "walk_forward_oos", cv_payoff.get("mean_forward_return"), "> 0", "passed" if _number(cv_payoff.get("mean_forward_return")) > 0 else "failed", "monitor", "Top-decile realized forward return on CV test folds.", "payoff_alignment.csv"),
@@ -623,7 +632,9 @@ def _dashboard_markdown(
         "top_10_cv_forward_return",
         "top_10_holdout_forward_return",
         "brier_score",
+        "brier_skill_vs_climatology",
         "log_loss",
+        "log_loss_skill_vs_climatology",
         "ece_equal_count",
     ]
     visible = scorecard.loc[scorecard["metric"].isin(visible_metrics), ["category", "metric", "scope", "value", "target", "status", "role"]]

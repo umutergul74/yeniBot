@@ -168,6 +168,57 @@ def test_frozen_manifest_hashes_artifacts_and_detects_tampering(tmp_path: Path) 
     errors = verify_frozen_manifest_artifacts(manifests[0], run_dir=run_dir)
     assert any("model_fold_000.pt" in error for error in errors)
 
+def test_frozen_manifest_uses_pinned_source_run_not_current_run(tmp_path: Path) -> None:
+    experiments_root = tmp_path / "experiments"
+    source_run = experiments_root / "source_run"
+    current_run = experiments_root / "current_run"
+    _fake_scope(source_run)
+    _, current_entry = _fake_scope(current_run)
+    (current_run / "control" / "full" / "model_fold_000.pt").write_bytes(b"new-model")
+    config = _config(tmp_path)
+    candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
+    candidate["source_run_id"] = "source_run"
+    candidate["threshold"] = {
+        "value": 0.55,
+        "source": "validation_threshold",
+        "selected_from": "pre_anchor_walk_forward_validation",
+    }
+
+    manifests, _ = freeze_candidate_manifests(
+        run_dir=current_run,
+        report_dir=tmp_path / "report",
+        entries=[current_entry],
+        config=config,
+    )
+
+    manifest = manifests[0]
+    assert manifest["source_run_id"] == "source_run"
+    assert verify_frozen_manifest_artifacts(manifest, run_dir=current_run) == []
+    source_model = source_run / "control" / "full" / "model_fold_000.pt"
+    source_model.write_bytes(b"tampered-source")
+    errors = verify_frozen_manifest_artifacts(manifest, run_dir=current_run)
+    assert any("model_fold_000.pt" in error for error in errors)
+
+
+def test_frozen_manifest_fails_closed_on_expected_hash_mismatch(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    _, entry = _fake_scope(run_dir)
+    config = _config(tmp_path)
+    config["experiments"]["frozen_candidates"]["candidates"][0][
+        "expected_manifest_hash"
+    ] = "not-the-generated-hash"
+
+    manifests, index = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "report",
+        entries=[entry],
+        config=config,
+    )
+
+    assert manifests[0]["available"] is False
+    assert manifests[0]["manifest_hash_verified"] is False
+    assert "expected_manifest_hash_mismatch" in index.loc[0, "unavailable_reasons"]
+
 
 def test_optional_frozen_benchmark_does_not_invalidate_primary(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"

@@ -384,6 +384,36 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
             }
         ]
     ).to_csv(path / "score_reversal_context_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "metric": "prauc_lift_vs_prevalence",
+                "point_estimate": 1.10,
+                "ci_low": 1.01,
+                "ci_high": 1.20,
+            }
+        ]
+    ).to_csv(path / "model_evidence_uncertainty.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "method": "raw",
+                "mean_brier_skill_vs_climatology": -0.05,
+            }
+        ]
+    ).to_csv(path / "probability_calibration_comparison.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate": control,
+                "fold": 0,
+                "method": "raw",
+                "brier_skill_vs_climatology": -0.05,
+            }
+        ]
+    ).to_csv(path / "probability_calibration_comparison_by_fold.csv", index=False)
     (path / "phase1_decision_ladder.json").write_text(
         json.dumps(
             {

@@ -11,9 +11,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from yenibot.experiment.common import _cfg, _hash_payload, _table_markdown, _write_json
+from yenibot.experiment.common import _cfg, _hash_payload, _slug, _table_markdown, _write_json
 
-__all__ = ["freeze_candidate_manifests", "verify_frozen_manifest_artifacts"]
+__all__ = [
+    "freeze_candidate_manifests",
+    "frozen_manifest_source_run_dir",
+    "verify_frozen_manifest_artifacts",
+]
 
 
 def _sha256_file(path: Path) -> str:
@@ -38,6 +42,19 @@ def _entry_by_profile(entries: list[dict[str, Any]], *, fold_scope: str) -> dict
         for entry in entries
         if str(entry.get("fold_scope")) == fold_scope
     }
+
+def frozen_manifest_source_run_dir(
+    manifest: dict[str, Any],
+    *,
+    run_dir: str | Path,
+) -> Path:
+    """Resolve the immutable artifact root pinned by a frozen manifest."""
+
+    current = Path(run_dir)
+    source_run_id = str(manifest.get("source_run_id", "") or current.name)
+    if Path(source_run_id).name != source_run_id or source_run_id in {"", ".", ".."}:
+        raise ValueError(f"Invalid frozen source_run_id: {source_run_id!r}")
+    return current if current.name == source_run_id else current.parent / source_run_id
 
 
 def _artifact_records(scope_dir: Path, run_dir: Path) -> list[dict[str, Any]]:
@@ -82,19 +99,31 @@ def _threshold_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "selected_from": "fallback_not_tuned_on_future_oos",
     }
 
+def _configured_threshold_payload(spec: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    configured = spec.get("threshold")
+    if isinstance(configured, dict):
+        value = _finite_float(configured.get("value"))
+        if value is not None:
+            return {
+                "value": value,
+                "source": str(configured.get("source", "configured_frozen_threshold")),
+                "selected_from": str(
+                    configured.get("selected_from", "pre_anchor_walk_forward_validation")
+                ),
+            }
+    return _threshold_payload(entry)
+
 
 def _profile_component(
     *,
     profile: str,
     fold_scope: str,
-    entries: dict[str, dict[str, Any]],
     run_dir: Path,
     anchor: pd.Timestamp,
 ) -> tuple[dict[str, Any], str]:
-    entry = entries.get(profile)
-    if entry is None:
-        return {}, f"missing_profile_scope:{profile}:{fold_scope}"
-    scope_dir = Path(entry["scope_dir"])
+    scope_dir = run_dir / _slug(profile) / fold_scope
+    if not scope_dir.exists():
+        return {}, f"missing_profile_scope:{profile}:{fold_scope}:{run_dir.name}"
     manifest_path = scope_dir / "training_manifest.json"
     if not manifest_path.exists():
         return {}, f"missing_training_manifest:{profile}:{fold_scope}"
@@ -156,8 +185,11 @@ def freeze_candidate_manifests(
                 "model_count",
                 "threshold",
                 "threshold_source",
+                "source_run_id",
                 "anchor_data_end",
                 "manifest_hash",
+                "expected_manifest_hash",
+                "manifest_hash_verified",
                 "unavailable_reasons",
             ]
         )
@@ -185,11 +217,22 @@ def freeze_candidate_manifests(
         candidate_id = str(spec.get("candidate_id", "")).strip()
         candidate_type = str(spec.get("candidate_type", "profile"))
         fold_scope = str(spec.get("fold_scope", "full"))
+        source_run_id = str(spec.get("source_run_id", "") or run_path.name)
+        if Path(source_run_id).name != source_run_id or source_run_id in {"", ".", ".."}:
+            source_run_path = run_path
+            source_run_error = f"invalid_source_run_id:{source_run_id}"
+        else:
+            source_run_path = (
+                run_path if run_path.name == source_run_id else run_path.parent / source_run_id
+            )
+            source_run_error = (
+                "" if source_run_path.exists() else f"missing_source_run:{source_run_id}"
+            )
         required_for_evaluation = bool(
             spec.get("required_for_evaluation", candidate_id == primary_id)
         )
         components: list[dict[str, Any]] = []
-        errors: list[str] = []
+        errors: list[str] = [source_run_error] if source_run_error else []
         profiles = (
             [str(spec.get("profile", ""))]
             if candidate_type == "profile"
@@ -199,8 +242,7 @@ def freeze_candidate_manifests(
             component, error = _profile_component(
                 profile=profile,
                 fold_scope=fold_scope,
-                entries=profile_entries,
-                run_dir=run_path,
+                run_dir=source_run_path,
                 anchor=anchor,
             )
             if error:
@@ -240,28 +282,40 @@ def freeze_candidate_manifests(
                 )
             ),
             "required_for_evaluation": required_for_evaluation,
-            "source_run_id": run_path.name,
+            "source_run_id": source_run_id,
             "anchor_run_id": str(frozen_cfg.get("anchor_run_id", "")),
             "anchor_data_end": anchor.isoformat(),
             "artifact_policy": str(frozen_cfg.get("artifact_policy", "")),
             "profiles": profiles,
             "blend_method": str(spec.get("blend_method", "")),
             "weights": [float(item) for item in spec.get("weights", []) or []],
-            "threshold": _threshold_payload(diagnostic_entry or {}),
+            "threshold": _configured_threshold_payload(spec, diagnostic_entry or {}),
             "components": components,
             "available": enabled and not errors and len(components) == len(profiles),
             "unavailable_reasons": errors,
             "future_oos_fit_allowed": False,
         }
         manifest_hash = _hash_payload(content)
+        expected_manifest_hash = str(spec.get("expected_manifest_hash", "") or "")
+        if expected_manifest_hash and manifest_hash != expected_manifest_hash:
+            errors.append(
+                "expected_manifest_hash_mismatch:"
+                f"{expected_manifest_hash}:{manifest_hash}"
+            )
+            content["available"] = False
+            content["unavailable_reasons"] = errors
         manifest = {
             **content,
             "manifest_hash": manifest_hash,
+            "expected_manifest_hash": expected_manifest_hash,
+            "manifest_hash_verified": bool(
+                not expected_manifest_hash or manifest_hash == expected_manifest_hash
+            ),
             "frozen_at": datetime.now(timezone.utc).isoformat(),
         }
         manifests.append(manifest)
         immutable_path = (
-            run_path
+            source_run_path
             / "frozen_candidates"
             / candidate_id
             / f"manifest_{manifest_hash}.json"
@@ -281,8 +335,11 @@ def freeze_candidate_manifests(
             "model_count": sum(int(component.get("model_count", 0)) for component in item["components"]),
             "threshold": item["threshold"]["value"],
             "threshold_source": item["threshold"]["source"],
+            "source_run_id": item["source_run_id"],
             "anchor_data_end": item["anchor_data_end"],
             "manifest_hash": item["manifest_hash"],
+            "expected_manifest_hash": item.get("expected_manifest_hash", ""),
+            "manifest_hash_verified": item.get("manifest_hash_verified", False),
             "unavailable_reasons": ";".join(item["unavailable_reasons"]),
         }
         for item in manifests
@@ -306,8 +363,19 @@ def verify_frozen_manifest_artifacts(
 ) -> list[str]:
     """Return artifact-integrity errors; never silently accept tampering."""
 
-    root = Path(run_dir)
+    try:
+        root = frozen_manifest_source_run_dir(manifest, run_dir=run_dir)
+    except ValueError as exc:
+        return [str(exc)]
+    if not root.exists():
+        return [f"missing_source_run:{root.name}"]
     errors: list[str] = []
+    expected_manifest_hash = str(manifest.get("expected_manifest_hash", "") or "")
+    if expected_manifest_hash and str(manifest.get("manifest_hash", "")) != expected_manifest_hash:
+        errors.append(
+            "manifest_hash_mismatch:"
+            f"{expected_manifest_hash}:{manifest.get('manifest_hash', '')}"
+        )
     for component in manifest.get("components", []) or []:
         for artifact in component.get("artifacts", []) or []:
             path = root / str(artifact["relative_path"])

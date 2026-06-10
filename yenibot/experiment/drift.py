@@ -597,7 +597,11 @@ def _binary_probability_metrics(labels: pd.Series, scores: pd.Series, *, bins: i
     if frame.empty:
         return {
             "brier_score": np.nan,
+            "baseline_brier_score": np.nan,
+            "brier_skill_vs_climatology": np.nan,
             "log_loss": np.nan,
+            "baseline_log_loss": np.nan,
+            "log_loss_skill_vs_climatology": np.nan,
             "average_precision": np.nan,
             "ece_equal_width": np.nan,
             "mce_equal_width": np.nan,
@@ -614,9 +618,32 @@ def _binary_probability_metrics(labels: pd.Series, scores: pd.Series, *, bins: i
     ece_width, mce_width, _ = _calibration_error(labels_array, scores_array, bins=bins, strategy="equal_width")
     ece_count, mce_count, _ = _calibration_error(labels_array, scores_array, bins=bins, strategy="equal_count")
     entropy = -(scores_array * np.log(scores_array) + (1.0 - scores_array) * np.log(1.0 - scores_array))
+    prevalence = float(labels_array.mean())
+    baseline_brier = float(np.mean((labels_array - prevalence) ** 2))
+    baseline_log_loss = float(
+        -np.mean(
+            labels_array * np.log(max(prevalence, 1e-6))
+            + (1.0 - labels_array) * np.log(max(1.0 - prevalence, 1e-6))
+        )
+    )
+    brier = float(np.mean((scores_array - labels_array) ** 2))
+    log_loss = float(
+        -np.mean(
+            labels_array * np.log(scores_array)
+            + (1.0 - labels_array) * np.log(1.0 - scores_array)
+        )
+    )
     return {
-        "brier_score": float(np.mean((scores_array - labels_array) ** 2)),
-        "log_loss": float(-np.mean(labels_array * np.log(scores_array) + (1.0 - labels_array) * np.log(1.0 - scores_array))),
+        "brier_score": brier,
+        "baseline_brier_score": baseline_brier,
+        "brier_skill_vs_climatology": (
+            1.0 - brier / baseline_brier if baseline_brier > 0 else np.nan
+        ),
+        "log_loss": log_loss,
+        "baseline_log_loss": baseline_log_loss,
+        "log_loss_skill_vs_climatology": (
+            1.0 - log_loss / baseline_log_loss if baseline_log_loss > 0 else np.nan
+        ),
         "average_precision": _safe_average_precision(labels_array, scores_array),
         "ece_equal_width": ece_width,
         "mce_equal_width": mce_width,
@@ -642,7 +669,11 @@ def _probability_quality_forensics_frame(entries: list[dict[str, Any]], config: 
         "rank_ic",
         "rank_ic_bucket",
         "brier_score",
+        "baseline_brier_score",
+        "brier_skill_vs_climatology",
         "log_loss",
+        "baseline_log_loss",
+        "log_loss_skill_vs_climatology",
         "average_precision",
         "ece_equal_width",
         "mce_equal_width",
@@ -755,7 +786,11 @@ def _probability_quality_summary_frame(probability_quality: pd.DataFrame, config
         "bad_fold_count",
         "good_fold_count",
         "mean_brier_score",
+        "mean_baseline_brier_score",
+        "mean_brier_skill_vs_climatology",
         "mean_log_loss",
+        "mean_baseline_log_loss",
+        "mean_log_loss_skill_vs_climatology",
         "mean_average_precision",
         "mean_ece_equal_count",
         "mean_score_entropy",
@@ -817,7 +852,19 @@ def _probability_quality_summary_frame(probability_quality: pd.DataFrame, config
                 "bad_fold_count": bad_count,
                 "good_fold_count": good_count,
                 "mean_brier_score": float(pd.to_numeric(part["brier_score"], errors="coerce").mean()),
+                "mean_baseline_brier_score": float(
+                    pd.to_numeric(part["baseline_brier_score"], errors="coerce").mean()
+                ),
+                "mean_brier_skill_vs_climatology": float(
+                    pd.to_numeric(part["brier_skill_vs_climatology"], errors="coerce").mean()
+                ),
                 "mean_log_loss": float(pd.to_numeric(part["log_loss"], errors="coerce").mean()),
+                "mean_baseline_log_loss": float(
+                    pd.to_numeric(part["baseline_log_loss"], errors="coerce").mean()
+                ),
+                "mean_log_loss_skill_vs_climatology": float(
+                    pd.to_numeric(part["log_loss_skill_vs_climatology"], errors="coerce").mean()
+                ),
                 "mean_average_precision": float(pd.to_numeric(part["average_precision"], errors="coerce").mean()),
                 "mean_ece_equal_count": float(pd.to_numeric(part["ece_equal_count"], errors="coerce").mean()),
                 "mean_score_entropy": float(pd.to_numeric(part["score_entropy_mean"], errors="coerce").mean()),

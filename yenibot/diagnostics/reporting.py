@@ -1971,7 +1971,7 @@ def _summary_markdown(report: dict[str, Any], fold_metrics: pd.DataFrame) -> str
         f"Positive IC Fraction: {fmt(report.get('positive_ic_fraction'))}",
         f"Mean Long F1: {fmt(report.get('mean_long_f1'))}",
         f"Mean PRAUC: {fmt(report.get('mean_prauc'))}",
-        f"Calibration Separation: {fmt(report.get('calibration_separation'))}",
+        f"Score Separation: {fmt(report.get('score_separation', report.get('calibration_separation')))}",
     ]
     if threshold_selected:
         lines.extend(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from datetime import datetime, timezone
 from fnmatch import fnmatch
@@ -49,12 +50,15 @@ __all__ = [
     '_preflight_experiment_profiles',
     'experiment_root',
     'new_run_id',
+    '_training_config_payload',
+    '_diagnostics_signature',
     '_experiment_signature',
     '_matching_latest_run',
     'resolve_experiment_run_id',
     'latest_experiment_run',
     'profile_run_dir',
     '_frame_window',
+    '_frame_fingerprint',
     '_training_signature',
     '_manifest_path',
     '_training_execution_summary_path',
@@ -521,17 +525,116 @@ def experiment_root(checkpoint_dir: str | Path) -> Path:
 def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-def _experiment_signature(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    comparable_settings = copy.deepcopy(settings)
-    comparable_settings.pop("run_id", None)
-    comparable_settings.pop("experiment_policy_guard", None)
+def _training_config_payload(config: dict[str, Any], *, profile: str | None = None) -> dict[str, Any]:
+    """Return only settings that can change fitted artifacts or predictions."""
+
+    cfg = profile_config(config, profile) if profile else config
+    project = _cfg(cfg, ["project"], {}) or {}
+    features = _cfg(cfg, ["features"], {}) or {}
+    active_profile = str(profile or features.get("active_profile", ""))
+    resolved_profile = resolve_feature_profile(cfg) if active_profile else {}
     return {
-        "settings": comparable_settings,
-        "feature_profiles": _cfg(config, ["features", "profiles"], {}),
-        "model": _cfg(config, ["model"], {}),
-        "training": _cfg(config, ["training"], {}),
-        "walk_forward": _cfg(config, ["walk_forward"], {}),
-        "validation": _cfg(config, ["validation"], {}),
+        "project": {
+            "random_seed": project.get("random_seed"),
+            "deterministic": project.get("deterministic"),
+        },
+        "feature_profile": active_profile,
+        "resolved_feature_profile": resolved_profile,
+        "feature_generation_policy": {
+            key: copy.deepcopy(features.get(key))
+            for key in (
+                "exclude_columns",
+                "exclude_patterns",
+                "stationarity",
+            )
+            if key in features
+        },
+        "model": copy.deepcopy(_cfg(cfg, ["model"], {}) or {}),
+        "training": copy.deepcopy(_cfg(cfg, ["training"], {}) or {}),
+        "walk_forward": copy.deepcopy(_cfg(cfg, ["walk_forward"], {}) or {}),
+        "hmm": copy.deepcopy(_cfg(cfg, ["hmm"], {}) or {}),
+        "labeling": copy.deepcopy(_cfg(cfg, ["labeling"], {}) or {}),
+    }
+
+def _training_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: copy.deepcopy(settings.get(key))
+        for key in (
+            "mode",
+            "control_profile",
+            "profiles",
+            "candidate_profiles",
+            "triage_fold_ids",
+            "full_cv_profiles",
+            "always_full_profiles",
+            "max_auto_full_candidates",
+            "seed_audit",
+        )
+        if key in settings
+    }
+    holdout = settings.get("holdout", {}) or {}
+    payload["holdout_training_boundary"] = {
+        key: copy.deepcopy(holdout.get(key))
+        for key in (
+            "enabled",
+            "holdout_bars",
+            "selection_rows",
+            "selection_data_start",
+            "selection_data_end",
+            "holdout_data_start",
+        )
+        if key in holdout
+    }
+    return payload
+
+def _experiment_signature(
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    frame: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    profiles = list(
+        dict.fromkeys(
+            [
+                str(settings.get("control_profile", "")),
+                *[str(item) for item in settings.get("profiles", []) or []],
+                *[str(item) for item in settings.get("always_full_profiles", []) or []],
+                *[
+                    str(item)
+                    for item in (settings.get("seed_audit", {}) or {}).get("profiles", []) or []
+                ],
+            ]
+        )
+    )
+    profiles = [profile for profile in profiles if profile]
+    payload = {
+        "signature_version": "training_v2",
+        "settings": _training_settings_payload(settings),
+        "profiles": {
+            profile: _training_config_payload(config, profile=profile)
+            for profile in profiles
+        },
+    }
+    if frame is not None:
+        payload["training_frame"] = {
+            "rows": int(len(frame)),
+            **_frame_window(frame),
+            "fingerprint": _frame_fingerprint(frame),
+        }
+    return payload
+
+def _diagnostics_signature(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """Track report-policy changes without invalidating fitted artifacts."""
+
+    return {
+        "signature_version": "diagnostics_v1",
+        "validation": copy.deepcopy(_cfg(config, ["validation"], {}) or {}),
+        "policy_review": copy.deepcopy(_cfg(config, ["experiments", "policy_review"], {}) or {}),
+        "frozen_candidates": copy.deepcopy(_cfg(config, ["experiments", "frozen_candidates"], {}) or {}),
+        "future_oos_validation": copy.deepcopy(
+            _cfg(config, ["experiments", "future_oos_validation"], {}) or {}
+        ),
+        "profile_blends": copy.deepcopy(_cfg(config, ["experiments", "profile_blends"], {}) or {}),
+        "control_profile": str(settings.get("control_profile", "")),
     }
 
 def _matching_latest_run(checkpoint_dir: str | Path, signature_hash: str) -> Path | None:
@@ -556,13 +659,14 @@ def resolve_experiment_run_id(
     config: dict[str, Any],
     settings: dict[str, Any] | None = None,
     run_id: str | None = None,
+    frame: pd.DataFrame | None = None,
 ) -> tuple[str, str]:
     settings = experiment_settings(config) if settings is None else settings
     if run_id:
         return str(run_id), "explicit_argument"
     if settings.get("run_id"):
         return str(settings["run_id"]), "config"
-    signature_hash = _hash_payload(_experiment_signature(config, settings))
+    signature_hash = _hash_payload(_experiment_signature(config, settings, frame))
     if bool(settings.get("resume_existing", True)) and not bool(settings.get("force_retrain", False)):
         existing = _matching_latest_run(checkpoint_dir, signature_hash)
         if existing is not None:
@@ -585,6 +689,28 @@ def _frame_window(frame: pd.DataFrame) -> dict[str, str]:
     timestamps = pd.to_datetime(frame["timestamp"], utc=True)
     return {"data_start": str(timestamps.min()), "data_end": str(timestamps.max())}
 
+def _frame_fingerprint(
+    frame: pd.DataFrame,
+    columns: list[str] | None = None,
+) -> str:
+    if frame.empty:
+        return hashlib.sha256(b"empty-frame").hexdigest()
+    selected = list(frame.columns) if columns is None else [
+        column for column in columns if column in frame.columns
+    ]
+    selected = sorted(dict.fromkeys(selected))
+    if not selected:
+        return hashlib.sha256(b"no-columns").hexdigest()
+    hashed = pd.util.hash_pandas_object(
+        frame[selected],
+        index=False,
+        categorize=True,
+    ).to_numpy(dtype="uint64", copy=False)
+    digest = hashlib.sha256()
+    digest.update("|".join(selected).encode("utf-8"))
+    digest.update(hashed.tobytes())
+    return digest.hexdigest()
+
 def _training_signature(
     *,
     frame: pd.DataFrame,
@@ -595,13 +721,27 @@ def _training_signature(
     fold_scope: str,
 ) -> dict[str, Any]:
     return {
+        "signature_version": "profile_training_v2",
         "profile": profile,
         "fold_scope": fold_scope,
         "fold_ids": fold_ids,
         "feature_columns": feature_columns,
         "feature_columns_hash": _hash_payload(feature_columns),
-        "config_hash": _hash_payload(config),
+        "training_config_hash": _hash_payload(
+            _training_config_payload(config, profile=profile)
+        ),
         "frame_rows": int(len(frame)),
+        "frame_fingerprint": _frame_fingerprint(
+            frame,
+            columns=[
+                "timestamp",
+                *feature_columns,
+                "label",
+                "fwd_return_10h",
+                "forward_return",
+                "tb_return",
+            ],
+        ),
         **_frame_window(frame),
     }
 

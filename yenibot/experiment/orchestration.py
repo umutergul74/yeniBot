@@ -43,6 +43,7 @@ from yenibot.experiment.common import (
 from yenibot.experiment.configuration import (
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
+    _diagnostics_signature,
     _experiment_signature,
     _load_training_execution_summary,
     _missing_selected_profiles,
@@ -102,6 +103,13 @@ from yenibot.experiment.execution import (
     traced_workflow,
     training_status_path,
     workflow_checkpoint,
+)
+
+from yenibot.experiment.evidence import (
+    _model_evidence_uncertainty_frame,
+    _probability_calibration_comparison_frames,
+    _write_model_evidence_uncertainty,
+    _write_probability_calibration_comparison,
 )
 
 from yenibot.experiment.dashboard import (
@@ -455,9 +463,17 @@ def run_experiment_matrix(
     settings = _preflight_experiment_profiles(settings, frame, config)
     settings = _apply_experiment_policy_guard(settings, config)
     available_fold_ids = _preflight_fold_plans(frame, settings, config)
-    signature = _experiment_signature(config, settings)
+    signature = _experiment_signature(config, settings, frame)
     signature_hash = _hash_payload(signature)
-    run_id, run_id_source = resolve_experiment_run_id(checkpoint_dir, config, settings, run_id)
+    diagnostics_signature = _diagnostics_signature(config, settings)
+    diagnostics_signature_hash = _hash_payload(diagnostics_signature)
+    run_id, run_id_source = resolve_experiment_run_id(
+        checkpoint_dir,
+        config,
+        settings,
+        run_id,
+        frame=frame,
+    )
     run_dir = experiment_root(checkpoint_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     workflow_checkpoint(
@@ -473,6 +489,10 @@ def run_experiment_matrix(
             "run_id_source": run_id_source,
             "signature": signature,
             "signature_hash": signature_hash,
+            "training_signature": signature,
+            "training_signature_hash": signature_hash,
+            "diagnostics_signature": diagnostics_signature,
+            "diagnostics_signature_hash": diagnostics_signature_hash,
             "settings": settings,
         },
     )
@@ -596,6 +616,10 @@ def run_experiment_matrix(
     feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
     probability_quality_forensics = _probability_quality_forensics_frame(all_results, config)
     probability_quality_summary = _probability_quality_summary_frame(probability_quality_forensics, config)
+    model_evidence_uncertainty = _model_evidence_uncertainty_frame(all_results, config)
+    probability_calibration_by_fold, probability_calibration_comparison = (
+        _probability_calibration_comparison_frames(all_results, config)
+    )
     score_distribution_shift = _score_distribution_shift_frame(all_results, config)
     score_distribution_shift_summary = _score_distribution_shift_summary_frame(score_distribution_shift, config)
     fold_reliability_gate = _fold_reliability_gate_frame(all_results, config)
@@ -706,6 +730,12 @@ def run_experiment_matrix(
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_score_reversal_context_audit(run_dir, score_reversal_context_audit)
     _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
+    _write_model_evidence_uncertainty(run_dir, model_evidence_uncertainty)
+    _write_probability_calibration_comparison(
+        run_dir,
+        probability_calibration_by_fold,
+        probability_calibration_comparison,
+    )
     _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_fold_reliability_gate(run_dir, fold_reliability_gate, fold_reliability_gate_summary)
     _write_regime_threshold_policy(run_dir, regime_threshold_policy_by_fold, regime_threshold_policy_summary)
@@ -773,6 +803,10 @@ def run_experiment_matrix(
         "bad_fold_signature": bad_fold_signature.to_dict(orient="records"),
         "feature_family_drift_summary": feature_family_drift_summary.to_dict(orient="records"),
         "probability_quality_summary": probability_quality_summary.to_dict(orient="records"),
+        "model_evidence_uncertainty": model_evidence_uncertainty.to_dict(orient="records"),
+        "probability_calibration_comparison": probability_calibration_comparison.to_dict(
+            orient="records"
+        ),
         "score_distribution_shift_summary": score_distribution_shift_summary.to_dict(orient="records"),
         "fold_reliability_gate_summary": fold_reliability_gate_summary.to_dict(orient="records"),
         "regime_threshold_policy_summary": regime_threshold_policy_summary.to_dict(orient="records"),
@@ -1095,6 +1129,10 @@ def write_experiment_diagnostics(
     feature_family_drift_summary = _feature_family_drift_summary_frame(feature_drift_forensics)
     probability_quality_forensics = _probability_quality_forensics_frame(entries, diagnostic_config)
     probability_quality_summary = _probability_quality_summary_frame(probability_quality_forensics, diagnostic_config)
+    model_evidence_uncertainty = _model_evidence_uncertainty_frame(entries, diagnostic_config)
+    probability_calibration_by_fold, probability_calibration_comparison = (
+        _probability_calibration_comparison_frames(entries, diagnostic_config)
+    )
     score_distribution_shift = _score_distribution_shift_frame(entries, diagnostic_config)
     score_distribution_shift_summary = _score_distribution_shift_summary_frame(score_distribution_shift, diagnostic_config)
     fold_reliability_gate = _fold_reliability_gate_frame(entries, diagnostic_config)
@@ -1202,6 +1240,10 @@ def write_experiment_diagnostics(
     decision["bad_fold_signature"] = bad_fold_signature.to_dict(orient="records")
     decision["feature_family_drift_summary"] = feature_family_drift_summary.to_dict(orient="records")
     decision["probability_quality_summary"] = probability_quality_summary.to_dict(orient="records")
+    decision["model_evidence_uncertainty"] = model_evidence_uncertainty.to_dict(orient="records")
+    decision["probability_calibration_comparison"] = probability_calibration_comparison.to_dict(
+        orient="records"
+    )
     decision["score_distribution_shift_summary"] = score_distribution_shift_summary.to_dict(orient="records")
     decision["fold_reliability_gate_summary"] = fold_reliability_gate_summary.to_dict(orient="records")
     decision["regime_threshold_policy_summary"] = regime_threshold_policy_summary.to_dict(orient="records")
@@ -1248,6 +1290,12 @@ def write_experiment_diagnostics(
     _write_score_separation_forensics(report_dir, score_separation_forensics, bad_fold_signature)
     _write_feature_drift_forensics(report_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_probability_quality_forensics(report_dir, probability_quality_forensics, probability_quality_summary)
+    _write_model_evidence_uncertainty(report_dir, model_evidence_uncertainty)
+    _write_probability_calibration_comparison(
+        report_dir,
+        probability_calibration_by_fold,
+        probability_calibration_comparison,
+    )
     _write_score_distribution_shift(report_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_fold_reliability_gate(report_dir, fold_reliability_gate, fold_reliability_gate_summary)
     _write_regime_threshold_policy(report_dir, regime_threshold_policy_by_fold, regime_threshold_policy_summary)
@@ -1529,6 +1577,12 @@ def write_experiment_diagnostics(
     _write_feature_drift_forensics(run_dir, feature_drift_forensics, feature_family_drift_summary)
     _write_score_reversal_context_audit(run_dir, score_reversal_context_audit)
     _write_probability_quality_forensics(run_dir, probability_quality_forensics, probability_quality_summary)
+    _write_model_evidence_uncertainty(run_dir, model_evidence_uncertainty)
+    _write_probability_calibration_comparison(
+        run_dir,
+        probability_calibration_by_fold,
+        probability_calibration_comparison,
+    )
     _write_score_distribution_shift(run_dir, score_distribution_shift, score_distribution_shift_summary)
     _write_fold_reliability_gate(run_dir, fold_reliability_gate, fold_reliability_gate_summary)
     _write_regime_threshold_policy(run_dir, regime_threshold_policy_by_fold, regime_threshold_policy_summary)
