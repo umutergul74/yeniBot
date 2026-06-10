@@ -1780,6 +1780,14 @@ validation:
     bootstrap_repeats: 300
     confidence_level: 0.95
     random_seed: 42
+    estimands: [macro_fold, pooled_rows]
+    gate_estimand: macro_fold
+    resampling_scheme: fold_cluster_then_within_fold_moving_block
+  probability_quality:
+    min_positive_skill_fold_fraction: 0.60
+    max_ece_equal_count: 0.05
+    calibration_slope_min: 0.50
+    calibration_slope_max: 1.50
   charter_proposal:
     enabled: true
     version: v4_evidence

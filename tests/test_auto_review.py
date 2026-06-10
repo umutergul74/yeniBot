@@ -388,10 +388,13 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         [
             {
                 "candidate": control,
+                "fold_scope": "full",
+                "estimand": "macro_fold",
                 "metric": "prauc_lift_vs_prevalence",
                 "point_estimate": 1.10,
                 "ci_low": 1.01,
                 "ci_high": 1.20,
+                "probability_above_gate": 0.80,
             }
         ]
     ).to_csv(path / "model_evidence_uncertainty.csv", index=False)
@@ -399,8 +402,15 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
         [
             {
                 "candidate": control,
-                "method": "raw",
-                "mean_brier_skill_vs_climatology": -0.05,
+                "fold_scope": "full",
+                "method": "platt",
+                "mean_brier_skill_vs_climatology": -0.01,
+                "positive_brier_skill_fold_fraction": 0.40,
+                "mean_ece_equal_count": 0.08,
+                "probability_quality_passed": False,
+                "recommended_use": (
+                    "calibration_reduces_ece_but_does_not_beat_climatology"
+                ),
             }
         ]
     ).to_csv(path / "probability_calibration_comparison.csv", index=False)
@@ -509,6 +519,16 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert review["causal_threshold_policy"]["passed_policy_count"] == 1
     assert review["causal_threshold_policy"]["best_test_f1_policy"]["policy_name"] == "causal_fixed_top_60"
     assert review["classification_skill"]["control_official"]["always_long_f1_mean"] == 0.48
+    assert len(review["model_evidence_uncertainty"]["macro_gate_rows"]) == 1
+    assert (
+        review["model_evidence_uncertainty"]["macro_gate_rows"][0]["estimand"]
+        == "macro_fold"
+    )
+    assert review["probability_calibration"]["deployable_methods"] == []
+    assert (
+        review["probability_calibration"]["control_rows"][0]["recommended_use"]
+        == "calibration_reduces_ece_but_does_not_beat_climatology"
+    )
     assert review["seed_audit_coverage"]["coverage_passed"] is True
     assert review["validation_charter_review"]["formal_revision_recommended"] is True
     assert review["validation_charter_proposal"]["active_for_phase1_readiness"] is False

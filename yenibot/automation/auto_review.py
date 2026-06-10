@@ -859,6 +859,12 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     rank_ic_evidence = _read_csv(report_path / "rank_ic_aggregate_evidence.csv")
     causal_threshold_policy = _read_csv(report_path / "causal_threshold_policy_summary.csv")
     classification_skill = _read_csv(report_path / "classification_skill_summary.csv")
+    model_evidence_uncertainty = _read_csv(
+        report_path / "model_evidence_uncertainty.csv"
+    )
+    probability_calibration = _read_csv(
+        report_path / "probability_calibration_comparison.csv"
+    )
     seed_audit_coverage = _read_csv(report_path / "seed_audit_coverage.csv")
     validation_charter = _read_csv(report_path / "validation_charter_review.csv")
     validation_charter_proposal = _read_csv(report_path / "validation_charter_proposal.csv")
@@ -921,6 +927,34 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         ]
         if not matched.empty:
             control_classification_skill = _json_ready(matched.iloc[0].to_dict())
+    control_uncertainty: list[dict[str, Any]] = []
+    if (
+        not model_evidence_uncertainty.empty
+        and "candidate" in model_evidence_uncertainty.columns
+    ):
+        matched = model_evidence_uncertainty.loc[
+            model_evidence_uncertainty["candidate"].astype(str).eq(control_profile)
+            & (
+                model_evidence_uncertainty["fold_scope"].astype(str).eq("full")
+                if "fold_scope" in model_evidence_uncertainty.columns
+                else True
+            )
+        ]
+        control_uncertainty = _records(matched)
+    control_probability_calibration: list[dict[str, Any]] = []
+    if (
+        not probability_calibration.empty
+        and "candidate" in probability_calibration.columns
+    ):
+        matched = probability_calibration.loc[
+            probability_calibration["candidate"].astype(str).eq(control_profile)
+            & (
+                probability_calibration["fold_scope"].astype(str).eq("full")
+                if "fold_scope" in probability_calibration.columns
+                else True
+            )
+        ]
+        control_probability_calibration = _records(matched)
     seed_coverage_passed = bool(
         not seed_audit_coverage.empty
         and "coverage_passed" in seed_audit_coverage.columns
@@ -1008,6 +1042,27 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "classification_skill": {
             "control_official": control_classification_skill,
             "policy_count": int(len(classification_skill)) if not classification_skill.empty else 0,
+        },
+        "model_evidence_uncertainty": {
+            "control_rows": control_uncertainty,
+            "macro_gate_rows": [
+                row
+                for row in control_uncertainty
+                if str(row.get("estimand")) == "macro_fold"
+            ],
+            "pooled_diagnostic_rows": [
+                row
+                for row in control_uncertainty
+                if str(row.get("estimand")) == "pooled_rows"
+            ],
+        },
+        "probability_calibration": {
+            "control_rows": control_probability_calibration,
+            "deployable_methods": [
+                row
+                for row in control_probability_calibration
+                if _to_bool(row.get("probability_quality_passed"), default=False)
+            ],
         },
         "seed_audit_coverage": {
             "coverage_passed": seed_coverage_passed,
@@ -1110,6 +1165,37 @@ def _row_metric_line(row: dict[str, Any]) -> str:
     )
 
 
+def _uncertainty_metric_summary(
+    rows: list[dict[str, Any]],
+    metric: str,
+) -> dict[str, Any]:
+    matched = [row for row in rows if str(row.get("metric")) == metric]
+    if not matched:
+        return {}
+    ci_values = [
+        value
+        for value in (_to_float(row.get("ci_low")) for row in matched)
+        if value is not None
+    ]
+    probabilities = [
+        value
+        for value in (
+            _to_float(row.get("probability_above_gate")) for row in matched
+        )
+        if value is not None
+    ]
+    return {
+        "point_estimate": matched[0].get("point_estimate"),
+        "ci_low_min": min(ci_values) if ci_values else None,
+        "probability_above_gate_min": (
+            min(probabilities) if probabilities else None
+        ),
+        "conclusions": sorted(
+            {str(row.get("conclusion", "")) for row in matched}
+        ),
+    }
+
+
 def auto_review_markdown(review: dict[str, Any]) -> str:
     policy = review["holdout"]["policy"]
     phase2 = review.get("phase2_readiness", {})
@@ -1117,6 +1203,30 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
     forensics = review.get("forensics", {}) or {}
     fold_summary = forensics.get("control_fold_stability_summary", {}) or {}
     std_driver = forensics.get("top_control_std_driver_fold", {}) or {}
+    macro_uncertainty = review.get("model_evidence_uncertainty", {}).get(
+        "macro_gate_rows",
+        [],
+    )
+    prauc_uncertainty = _uncertainty_metric_summary(
+        macro_uncertainty,
+        "prauc_lift_vs_prevalence",
+    )
+    precision_uncertainty = _uncertainty_metric_summary(
+        macro_uncertainty,
+        "precision_lift_vs_prevalence",
+    )
+    calibration_rows = review.get("probability_calibration", {}).get(
+        "control_rows",
+        [],
+    )
+    platt = next(
+        (
+            row
+            for row in calibration_rows
+            if str(row.get("method")) == "platt"
+        ),
+        {},
+    )
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -1202,6 +1312,18 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('f1_skill_vs_rate_matched_random_mean'))}`",
         f"- PRAUC lift versus prevalence: "
         f"`{_fmt(review.get('classification_skill', {}).get('control_official', {}).get('prauc_lift_vs_prevalence_mean'))}`",
+        f"- Macro-fold PRAUC lift worst 95% lower bound: "
+        f"`{_fmt(prauc_uncertainty.get('ci_low_min'))}`; minimum probability above gate: "
+        f"`{_fmt(prauc_uncertainty.get('probability_above_gate_min'))}`",
+        f"- Macro-fold precision lift worst 95% lower bound: "
+        f"`{_fmt(precision_uncertainty.get('ci_low_min'))}`; minimum probability above gate: "
+        f"`{_fmt(precision_uncertainty.get('probability_above_gate_min'))}`",
+        f"- Platt calibration macro Brier skill: "
+        f"`{_fmt(platt.get('mean_brier_skill_vs_climatology'))}`; positive-skill folds: "
+        f"`{_fmt(platt.get('positive_brier_skill_fold_fraction'))}`; ECE: "
+        f"`{_fmt(platt.get('mean_ece_equal_count'))}`",
+        f"- Probability deployment recommendation: "
+        f"`{platt.get('recommended_use', 'not_available')}`",
         f"- Classification skill conclusion: "
         f"`{review.get('classification_skill', {}).get('control_official', {}).get('classification_conclusion', '')}`",
         f"- Formal validation charter review recommended: "

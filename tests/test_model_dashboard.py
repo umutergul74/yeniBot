@@ -181,6 +181,54 @@ def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) 
             }
         ]
     )
+    uncertainty = pd.DataFrame(
+        [
+            {
+                "candidate": CONTROL,
+                "fold_scope": "full",
+                "estimand": "macro_fold",
+                "block_length": 24,
+                "metric": "prauc_lift_vs_prevalence",
+                "ci_low": 1.06,
+                "gate": 1.05,
+                "probability_above_gate": 0.96,
+            },
+            {
+                "candidate": CONTROL,
+                "fold_scope": "full",
+                "estimand": "macro_fold",
+                "block_length": 24,
+                "metric": "f1_skill_vs_rate_matched_random",
+                "ci_low": 0.01,
+                "gate": 0.0,
+                "probability_above_gate": 0.99,
+            },
+        ]
+    )
+    calibration_comparison = pd.DataFrame(
+        [
+            {
+                "candidate": CONTROL,
+                "fold_scope": "full",
+                "method": "raw",
+                "mean_brier_skill_vs_climatology": -0.10,
+                "pooled_brier_skill_vs_climatology": -0.08,
+                "positive_brier_skill_fold_fraction": 0.20,
+                "mean_ece_equal_count": 0.15,
+                "recommended_use": "ranking_score_only_not_probability",
+            },
+            {
+                "candidate": CONTROL,
+                "fold_scope": "full",
+                "method": "platt",
+                "mean_brier_skill_vs_climatology": 0.01,
+                "pooled_brier_skill_vs_climatology": 0.02,
+                "positive_brier_skill_fold_fraction": 0.65,
+                "mean_ece_equal_count": 0.04,
+                "recommended_use": "diagnostic_only",
+            },
+        ]
+    )
     stability_summary = pd.DataFrame(
         [
             {
@@ -234,6 +282,8 @@ def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) 
         rank_ic_aggregate_evidence=rank_evidence,
         classification_skill_summary=classification,
         probability_quality_summary=probability,
+        model_evidence_uncertainty=uncertainty,
+        probability_calibration_comparison=calibration_comparison,
         payoff_alignment=payoff,
         seed_stability=seed_stability,
         phase2_readiness=_readiness(),
@@ -263,6 +313,8 @@ def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) 
         "brier_score",
         "top_10_cv_forward_return",
         "future_oos_progress",
+        "prauc_lift_macro_ci_low_min",
+        "platt_macro_brier_skill",
     }.issubset(set(result["scorecard"]["metric"]))
     summary = json.loads(
         (tmp_path / "model_performance_summary.json").read_text(encoding="utf-8")

@@ -1265,6 +1265,22 @@ def test_model_evidence_uncertainty_and_calibration_comparison_are_validation_on
         "f1_skill_vs_rate_matched_random",
         "top_10_forward_return",
     }
+    assert set(uncertainty["estimand"]) == {"macro_fold", "pooled_rows"}
+    assert uncertainty.loc[
+        uncertainty["estimand"].eq("macro_fold"),
+        "gate_comparable",
+    ].astype(bool).all()
+    assert not uncertainty.loc[
+        uncertainty["estimand"].eq("pooled_rows"),
+        "gate_comparable",
+    ].astype(bool).any()
+    assert uncertainty.loc[
+        uncertainty["estimand"].eq("pooled_rows"),
+        "conclusion",
+    ].eq("diagnostic_only_not_gate_comparable").all()
+    assert uncertainty["resampling_scheme"].eq(
+        "fold_cluster_then_within_fold_moving_block"
+    ).all()
     assert set(calibration_summary["method"]) == {"raw", "platt", "isotonic"}
     assert set(calibration_detail["fit_source"]) == {
         "none_raw_scores",
@@ -1275,7 +1291,87 @@ def test_model_evidence_uncertainty_and_calibration_comparison_are_validation_on
         "mean_log_loss_skill_vs_climatology",
         "mean_calibration_intercept",
         "mean_calibration_slope",
+        "pooled_brier_skill_vs_climatology",
+        "pooled_log_loss_skill_vs_climatology",
+        "positive_brier_skill_fold_fraction",
+        "positive_log_loss_skill_fold_fraction",
+        "negative_calibration_slope_fold_count",
+        "acceptable_calibration_slope_fold_fraction",
+        "recommended_use",
     }.issubset(calibration_summary.columns)
+
+
+def test_model_evidence_uncertainty_does_not_compare_pooled_rows_to_macro_gate() -> None:
+    config = {
+        "validation": {
+            "classification_skill": {
+                "min_prauc_lift_vs_prevalence": 1.05,
+                "min_precision_lift_vs_prevalence": 1.05,
+                "min_f1_skill_vs_rate_random": 0.0,
+            },
+            "model_evidence_uncertainty": {
+                "enabled": True,
+                "block_lengths": [2],
+                "bootstrap_repeats": 20,
+                "confidence_level": 0.90,
+                "random_seed": 3,
+            },
+        }
+    }
+    rows: list[dict[str, object]] = []
+    threshold_rows = []
+    fold_specs = [
+        (0, 100, 0.50, True),
+        (1, 20, 0.10, False),
+    ]
+    for fold, count, prevalence, informative in fold_specs:
+        positive_count = int(count * prevalence)
+        labels = np.array([1] * positive_count + [0] * (count - positive_count))
+        scores = (
+            np.where(labels == 1, 0.9, 0.1)
+            if informative
+            else np.full(count, 0.6)
+        )
+        for index, (label, score) in enumerate(zip(labels, scores)):
+            rows.append(
+                {
+                    "fold": fold,
+                    "split": "test",
+                    "timestamp": pd.Timestamp("2024-01-01", tz="UTC")
+                    + pd.Timedelta(hours=fold * 200 + index),
+                    "label": int(label),
+                    "prob_long": float(score),
+                    "forward_return": 0.004 if label else -0.002,
+                }
+            )
+        threshold_rows.append(
+            {
+                "fold": fold,
+                "official_threshold": 0.5,
+                "official_threshold_source": "validation_constrained_threshold",
+                "official_threshold_uses_calibration": False,
+            }
+        )
+    entry = {
+        "profile": "control",
+        "fold_scope": "full",
+        "predictions": pd.DataFrame(rows),
+        "diagnostics": {"threshold_metrics": pd.DataFrame(threshold_rows)},
+    }
+
+    uncertainty = _model_evidence_uncertainty_frame([entry], config)
+    prauc = uncertainty.loc[
+        uncertainty["metric"].eq("prauc_lift_vs_prevalence")
+    ]
+    macro = prauc.loc[prauc["estimand"].eq("macro_fold")].iloc[0]
+    pooled = prauc.loc[prauc["estimand"].eq("pooled_rows")].iloc[0]
+
+    assert float(macro["point_estimate"]) != pytest.approx(
+        float(pooled["point_estimate"])
+    )
+    assert bool(macro["gate_comparable"]) is True
+    assert bool(pooled["gate_comparable"]) is False
+    assert pooled["conclusion"] == "diagnostic_only_not_gate_comparable"
 
 
 def test_validation_charter_flags_non_discriminative_legacy_targets() -> None:

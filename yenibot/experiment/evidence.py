@@ -111,15 +111,17 @@ def _evidence_metrics(frame: pd.DataFrame) -> dict[str, float]:
             "f1_skill_vs_rate_matched_random": np.nan,
             "top_10_forward_return": np.nan,
         }
-    labels = pd.to_numeric(frame["label"], errors="coerce")
-    scores = pd.to_numeric(frame["score"], errors="coerce")
-    selected = frame["selected"].astype(bool)
-    valid = labels.notna() & scores.notna()
-    labels = labels[valid].astype(int)
-    scores = scores[valid].astype(float)
-    selected = selected[valid]
-    if labels.empty:
+    clean = frame.copy()
+    clean["label"] = pd.to_numeric(clean["label"], errors="coerce")
+    clean["score"] = pd.to_numeric(clean["score"], errors="coerce")
+    clean = clean.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=["label", "score"]
+    )
+    if clean.empty:
         return _evidence_metrics(pd.DataFrame())
+    labels = clean["label"].astype(int)
+    scores = clean["score"].astype(float)
+    selected = clean["selected"].astype(bool)
     prevalence = float(labels.mean())
     pred_rate = float(selected.mean())
     ap = (
@@ -138,7 +140,7 @@ def _evidence_metrics(frame: pd.DataFrame) -> dict[str, float]:
     if "forward_return" in frame.columns and len(scores) >= 10:
         threshold = float(scores.quantile(0.90))
         top_mask = scores >= threshold
-        returns = pd.to_numeric(frame.loc[valid, "forward_return"], errors="coerce")
+        returns = pd.to_numeric(clean["forward_return"], errors="coerce")
         if top_mask.any():
             top_return = float(returns[top_mask].mean())
     return {
@@ -153,6 +155,59 @@ def _evidence_metrics(frame: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _macro_fold_evidence_metrics(frame: pd.DataFrame) -> dict[str, float]:
+    if frame.empty or "fold" not in frame.columns:
+        return _evidence_metrics(pd.DataFrame())
+    fold_metrics = [
+        _evidence_metrics(part)
+        for _, part in frame.groupby("fold", sort=True)
+    ]
+    if not fold_metrics:
+        return _evidence_metrics(pd.DataFrame())
+    return {
+        metric: float(
+            pd.to_numeric(
+                pd.Series([row.get(metric) for row in fold_metrics]),
+                errors="coerce",
+            ).mean()
+        )
+        for metric in fold_metrics[0]
+    }
+
+
+def _hierarchical_bootstrap_sample(
+    frame: pd.DataFrame,
+    *,
+    block_length: int,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Resample folds, then moving time blocks inside each sampled fold."""
+
+    groups = [
+        part.sort_values("timestamp").reset_index(drop=True)
+        if "timestamp" in part.columns
+        else part.reset_index(drop=True)
+        for _, part in frame.groupby("fold", sort=True)
+    ]
+    if not groups:
+        return pd.DataFrame(columns=frame.columns)
+    sampled_parts: list[pd.DataFrame] = []
+    sampled_group_ids = rng.integers(0, len(groups), size=len(groups))
+    for bootstrap_fold, group_id in enumerate(sampled_group_ids):
+        group = groups[int(group_id)]
+        sampled = group.iloc[
+            _moving_block_sample_indices(
+                len(group),
+                block_length=min(max(1, block_length), len(group)),
+                rng=rng,
+            )
+        ].reset_index(drop=True)
+        # Duplicate sampled folds must remain separate macro units.
+        sampled["fold"] = bootstrap_fold
+        sampled_parts.append(sampled)
+    return pd.concat(sampled_parts, ignore_index=True)
+
+
 def _model_evidence_uncertainty_frame(
     entries: list[dict[str, Any]],
     config: dict[str, Any],
@@ -161,6 +216,10 @@ def _model_evidence_uncertainty_frame(
         "candidate",
         "candidate_type",
         "fold_scope",
+        "estimand",
+        "gate_comparable",
+        "resampling_scheme",
+        "fold_count",
         "block_length",
         "bootstrap_repeats",
         "confidence_level",
@@ -179,6 +238,25 @@ def _model_evidence_uncertainty_frame(
     confidence = float(cfg.get("confidence_level", 0.95))
     block_lengths = [int(item) for item in cfg.get("block_lengths", [24, 168])]
     random_seed = int(cfg.get("random_seed", 42))
+    estimands = [
+        str(item)
+        for item in cfg.get("estimands", ["macro_fold", "pooled_rows"])
+        if str(item) in {"macro_fold", "pooled_rows"}
+    ]
+    if not estimands:
+        estimands = ["macro_fold", "pooled_rows"]
+    gate_estimand = str(cfg.get("gate_estimand", "macro_fold"))
+    resampling_scheme = str(
+        cfg.get(
+            "resampling_scheme",
+            "fold_cluster_then_within_fold_moving_block",
+        )
+    )
+    if resampling_scheme != "fold_cluster_then_within_fold_moving_block":
+        raise ValueError(
+            "Unsupported model evidence resampling scheme: "
+            f"{resampling_scheme}"
+        )
     gates = {
         "prauc_lift_vs_prevalence": float(
             _cfg(config, ["validation", "classification_skill", "min_prauc_lift_vs_prevalence"], 1.05)
@@ -199,56 +277,82 @@ def _model_evidence_uncertainty_frame(
         frame = _official_test_frame(entry)
         if frame.empty:
             continue
-        point = _evidence_metrics(frame)
+        all_points = {
+            "macro_fold": _macro_fold_evidence_metrics(frame),
+            "pooled_rows": _evidence_metrics(frame),
+        }
+        points = {estimand: all_points[estimand] for estimand in estimands}
         for block_length in block_lengths:
             rng = np.random.default_rng(random_seed + block_length)
-            samples = {metric: [] for metric in gates}
+            samples = {
+                estimand: {metric: [] for metric in gates}
+                for estimand in points
+            }
             for _ in range(repeats):
-                sampled = frame.iloc[
-                    _moving_block_sample_indices(
-                        len(frame),
-                        block_length=block_length,
-                        rng=rng,
+                sampled = _hierarchical_bootstrap_sample(
+                    frame,
+                    block_length=block_length,
+                    rng=rng,
+                )
+                all_sampled_metrics = {
+                    "macro_fold": _macro_fold_evidence_metrics(sampled),
+                    "pooled_rows": _evidence_metrics(sampled),
+                }
+                sampled_metrics = {
+                    estimand: all_sampled_metrics[estimand]
+                    for estimand in estimands
+                }
+                for estimand, metrics in sampled_metrics.items():
+                    for metric in samples[estimand]:
+                        samples[estimand][metric].append(metrics[metric])
+            for estimand, point in points.items():
+                gate_comparable = estimand == gate_estimand
+                for metric, gate in gates.items():
+                    low, high = _interval(samples[estimand][metric], confidence)
+                    clean = np.asarray(
+                        [
+                            value
+                            for value in samples[estimand][metric]
+                            if np.isfinite(value)
+                        ],
+                        dtype=float,
                     )
-                ].reset_index(drop=True)
-                metrics = _evidence_metrics(sampled)
-                for metric in samples:
-                    samples[metric].append(metrics[metric])
-            for metric, gate in gates.items():
-                low, high = _interval(samples[metric], confidence)
-                clean = np.asarray(
-                    [value for value in samples[metric] if np.isfinite(value)],
-                    dtype=float,
-                )
-                probability = (
-                    float(np.mean(clean > gate)) if clean.size else np.nan
-                )
-                conclusion = (
-                    "robustly_above_gate"
-                    if np.isfinite(low) and low > gate
-                    else (
-                        "uncertain_near_gate"
-                        if np.isfinite(high) and high > gate
-                        else "not_supported_above_gate"
+                    probability = (
+                        float(np.mean(clean > gate)) if clean.size else np.nan
                     )
-                )
-                rows.append(
-                    {
-                        "candidate": str(entry.get("profile", "")),
-                        "candidate_type": _diagnostic_candidate_type(fold_scope),
-                        "fold_scope": fold_scope,
-                        "block_length": block_length,
-                        "bootstrap_repeats": repeats,
-                        "confidence_level": confidence,
-                        "metric": metric,
-                        "point_estimate": point[metric],
-                        "ci_low": low,
-                        "ci_high": high,
-                        "probability_above_gate": probability,
-                        "gate": gate,
-                        "conclusion": conclusion,
-                    }
-                )
+                    if not gate_comparable:
+                        conclusion = "diagnostic_only_not_gate_comparable"
+                    else:
+                        conclusion = (
+                            "robustly_above_gate"
+                            if np.isfinite(low) and low > gate
+                            else (
+                                "uncertain_near_gate"
+                                if np.isfinite(high) and high > gate
+                                else "not_supported_above_gate"
+                            )
+                        )
+                    rows.append(
+                        {
+                            "candidate": str(entry.get("profile", "")),
+                            "candidate_type": _diagnostic_candidate_type(fold_scope),
+                            "fold_scope": fold_scope,
+                            "estimand": estimand,
+                            "gate_comparable": gate_comparable,
+                            "resampling_scheme": resampling_scheme,
+                            "fold_count": int(frame["fold"].nunique()),
+                            "block_length": block_length,
+                            "bootstrap_repeats": repeats,
+                            "confidence_level": confidence,
+                            "metric": metric,
+                            "point_estimate": point[metric],
+                            "ci_low": low,
+                            "ci_high": high,
+                            "probability_above_gate": probability,
+                            "gate": gate,
+                            "conclusion": conclusion,
+                        }
+                    )
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -313,7 +417,19 @@ def _probability_calibration_comparison_frames(
     config: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     detail_rows: list[dict[str, Any]] = []
+    pooled_rows: list[dict[str, Any]] = []
     bins = int(_cfg(config, ["validation", "calibration_bins"], 10))
+    quality_cfg = _cfg(
+        config,
+        ["validation", "probability_quality"],
+        {},
+    ) or {}
+    min_positive_skill_fold_fraction = float(
+        quality_cfg.get("min_positive_skill_fold_fraction", 0.60)
+    )
+    max_ece = float(quality_cfg.get("max_ece_equal_count", 0.05))
+    slope_min = float(quality_cfg.get("calibration_slope_min", 0.50))
+    slope_max = float(quality_cfg.get("calibration_slope_max", 1.50))
     for entry in entries:
         fold_scope = str(entry.get("fold_scope", ""))
         if not _is_stability_scope(fold_scope):
@@ -341,6 +457,27 @@ def _probability_calibration_comparison_frames(
             score_column = (
                 "prob_long" if method == "raw" else "prob_long_calibrated"
             )
+            pooled_metrics = _probability_row(
+                test,
+                score_column=score_column,
+                bins=bins,
+            )
+            if pooled_metrics:
+                pooled_rows.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_type": candidate_type,
+                        "fold_scope": fold_scope,
+                        "method": method,
+                        "fit_source": (
+                            "none_raw_scores"
+                            if method == "raw"
+                            else "fold_validation_only"
+                        ),
+                        "test_rows": int(len(test)),
+                        **pooled_metrics,
+                    }
+                )
             for fold_raw, part in test.groupby("fold"):
                 metrics = _probability_row(
                     part,
@@ -368,6 +505,7 @@ def _probability_calibration_comparison_frames(
     detail = pd.DataFrame(detail_rows)
     if detail.empty:
         return detail, pd.DataFrame()
+    pooled = pd.DataFrame(pooled_rows)
     summary_rows: list[dict[str, Any]] = []
     for keys, part in detail.groupby(
         ["candidate", "candidate_type", "fold_scope", "method"],
@@ -392,10 +530,39 @@ def _probability_calibration_comparison_frames(
             column: float(pd.to_numeric(part[column], errors="coerce").mean())
             for column in numeric_columns
         }
+        pooled_match = pooled.loc[
+            pooled["candidate"].astype(str).eq(str(candidate))
+            & pooled["candidate_type"].astype(str).eq(str(candidate_type))
+            & pooled["fold_scope"].astype(str).eq(str(fold_scope))
+            & pooled["method"].astype(str).eq(str(method))
+        ]
+        pooled_values = (
+            pooled_match.iloc[0].to_dict()
+            if not pooled_match.empty
+            else {}
+        )
+        brier_skill = pd.to_numeric(
+            part["brier_skill_vs_climatology"],
+            errors="coerce",
+        )
+        log_skill = pd.to_numeric(
+            part["log_loss_skill_vs_climatology"],
+            errors="coerce",
+        )
+        slopes = pd.to_numeric(part["calibration_slope"], errors="coerce")
+        positive_brier_fraction = float((brier_skill > 0.0).mean())
+        positive_log_fraction = float((log_skill > 0.0).mean())
+        acceptable_slope_fraction = float(
+            slopes.between(slope_min, slope_max).mean()
+        )
         probability_valid = bool(
             values["brier_skill_vs_climatology"] > 0.0
             and values["log_loss_skill_vs_climatology"] > 0.0
-            and values["ece_equal_count"] < 0.05
+            and values["ece_equal_count"] < max_ece
+            and _float(pooled_values, "brier_skill_vs_climatology") > 0.0
+            and _float(pooled_values, "log_loss_skill_vs_climatology") > 0.0
+            and positive_brier_fraction >= min_positive_skill_fold_fraction
+            and positive_log_fraction >= min_positive_skill_fold_fraction
         )
         summary_rows.append(
             {
@@ -404,7 +571,26 @@ def _probability_calibration_comparison_frames(
                 "fold_scope": fold_scope,
                 "method": method,
                 "fold_count": int(part["fold"].nunique()),
+                "aggregation_note": (
+                    "macro_mean_is_equal_weight_fold_average;"
+                    "pooled_is_all_test_rows_combined"
+                ),
                 **{f"mean_{key}": value for key, value in values.items()},
+                **{
+                    f"pooled_{key}": _float(pooled_values, key)
+                    for key in numeric_columns
+                },
+                "positive_brier_skill_fold_fraction": positive_brier_fraction,
+                "positive_log_loss_skill_fold_fraction": positive_log_fraction,
+                "negative_calibration_slope_fold_count": int((slopes < 0.0).sum()),
+                "acceptable_calibration_slope_fold_fraction": (
+                    acceptable_slope_fraction
+                ),
+                "calibration_slope_target_range": f"[{slope_min}, {slope_max}]",
+                "min_positive_skill_fold_fraction": (
+                    min_positive_skill_fold_fraction
+                ),
+                "max_ece_equal_count": max_ece,
                 "probability_quality_passed": probability_valid,
                 "deployment_status": "diagnostic_only_not_part_of_frozen_candidate",
             }
@@ -412,6 +598,37 @@ def _probability_calibration_comparison_frames(
     summary = pd.DataFrame(summary_rows).sort_values(
         ["candidate_type", "candidate", "fold_scope", "mean_brier_score"]
     ).reset_index(drop=True)
+    recommendations: list[str] = []
+    for _, row in summary.iterrows():
+        if bool(row["probability_quality_passed"]):
+            recommendations.append(
+                "eligible_for_separate_future_frozen_calibration_review"
+            )
+            continue
+        if str(row["method"]) == "raw":
+            recommendations.append("ranking_score_only_not_probability")
+            continue
+        raw = summary.loc[
+            summary["candidate"].astype(str).eq(str(row["candidate"]))
+            & summary["candidate_type"].astype(str).eq(str(row["candidate_type"]))
+            & summary["fold_scope"].astype(str).eq(str(row["fold_scope"]))
+            & summary["method"].astype(str).eq("raw")
+        ]
+        raw_ece = (
+            _float(raw.iloc[0].to_dict(), "mean_ece_equal_count")
+            if not raw.empty
+            else np.nan
+        )
+        if (
+            np.isfinite(raw_ece)
+            and _float(row.to_dict(), "mean_ece_equal_count") < raw_ece
+        ):
+            recommendations.append(
+                "calibration_reduces_ece_but_does_not_beat_climatology"
+            )
+        else:
+            recommendations.append("calibration_not_supported")
+    summary["recommended_use"] = recommendations
     return detail, summary
 
 

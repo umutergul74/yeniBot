@@ -122,14 +122,15 @@ def _metric_definitions() -> pd.DataFrame:
         ("Mean Rank IC", "Discrimination", "Spearman correlation between P(Long) and forward return across OOS folds.", "Higher and positive."),
         ("Positive fold fraction", "Temporal robustness", "Share of OOS folds with positive Rank IC.", "Persistent across market windows."),
         ("Random-effects lower CI", "Statistical confidence", "Lower confidence bound after accounting for fold uncertainty and dependence assumptions.", "Positive across configured block lengths."),
-        ("PRAUC lift", "Imbalanced classification", "Average precision divided by positive-label prevalence.", "Above 1.0; active gate is 1.05."),
-        ("Precision lift", "Decision quality", "Official-policy precision divided by unconditional long-label prevalence.", "Above 1.0; active gate is 1.05."),
+        ("PRAUC lift", "Imbalanced classification", "Equal-weight fold-macro average precision divided by each fold's positive-label prevalence. Pooled-row lift is diagnostic only.", "Above 1.0; active fold-macro gate is 1.05."),
+        ("Precision lift", "Decision quality", "Equal-weight fold-macro official-policy precision divided by each fold's long-label prevalence. Pooled-row lift is diagnostic only.", "Above 1.0; active fold-macro gate is 1.05."),
         ("Rate-matched F1 skill", "Classification skill", "F1 minus random-selection F1 at the same prediction rate.", "Positive and persistent across folds."),
         ("Brier score", "Probability quality", "Mean squared probability error; combines calibration and resolution.", "Lower, compared over time/models."),
         ("Brier skill", "Probability quality", "One minus model Brier score divided by the fold-climatology Brier score.", "Positive; negative means worse than predicting the base rate."),
         ("Log loss", "Probability quality", "Proper scoring rule that strongly penalizes confident wrong probabilities.", "Lower, compared over time/models."),
         ("Log-loss skill", "Probability quality", "One minus model log loss divided by fold-climatology log loss.", "Positive; interpret beside calibration slope and ECE."),
         ("ECE", "Calibration", "Weighted gap between predicted probability and observed frequency.", "Lower; inspect with reliability diagram."),
+        ("Evidence uncertainty", "Statistical confidence", "Fold-cluster bootstrap with moving-block resampling inside each sampled fold.", "Use macro-fold intervals for gates; keep pooled-row intervals diagnostic-only."),
         ("Score separation", "Discrimination", "Mean score for actual longs minus mean score for not-long rows.", "Positive; this is not a calibration metric."),
         ("Top-decile lift", "Economic ordering", "Long-label rate in the top score decile divided by base prevalence.", "Above 1.0 and paired with positive return."),
         ("Top-decile forward return", "Economic ordering", "Mean realized forward return for the top score decile.", "Positive on CV and confirmed on future unseen OOS."),
@@ -186,6 +187,8 @@ def _scorecard_frame(
     rank_ic_evidence: pd.DataFrame,
     classification_skill: pd.DataFrame,
     probability_quality: pd.DataFrame,
+    model_evidence_uncertainty: pd.DataFrame,
+    probability_calibration_comparison: pd.DataFrame,
     fold_stability: pd.DataFrame,
     payoff_alignment: pd.DataFrame,
     seed_stability: pd.DataFrame,
@@ -315,6 +318,28 @@ def _scorecard_frame(
         if not payoff_alignment.empty
         else None,
     )
+    uncertainty = (
+        model_evidence_uncertainty.loc[
+            model_evidence_uncertainty["candidate"].astype(str).eq(control_profile)
+            & model_evidence_uncertainty["fold_scope"].astype(str).eq("full")
+            & model_evidence_uncertainty["estimand"].astype(str).eq("macro_fold")
+        ].copy()
+        if not model_evidence_uncertainty.empty
+        and "estimand" in model_evidence_uncertainty.columns
+        else pd.DataFrame()
+    )
+    calibration = (
+        probability_calibration_comparison.loc[
+            probability_calibration_comparison["candidate"].astype(str).eq(
+                control_profile
+            )
+            & probability_calibration_comparison["fold_scope"].astype(str).eq(
+                "full"
+            )
+        ].copy()
+        if not probability_calibration_comparison.empty
+        else pd.DataFrame()
+    )
 
     extras = [
         ("Statistical confidence", "random_effects_lower_ci_min", "walk_forward_oos", rank.get("random_effects_ci_low_min"), "> 0", "monitor", "confidence", "Minimum lower confidence bound across block assumptions.", "rank_ic_aggregate_evidence.csv"),
@@ -345,6 +370,106 @@ def _scorecard_frame(
                 "source": source,
             }
         )
+
+    uncertainty_labels = {
+        "prauc_lift_vs_prevalence": "prauc_lift_macro_ci_low_min",
+        "precision_lift_vs_prevalence": "precision_lift_macro_ci_low_min",
+        "f1_skill_vs_rate_matched_random": "f1_skill_macro_ci_low_min",
+        "top_10_forward_return": "top_10_return_macro_ci_low_min",
+    }
+    for source_metric, output_metric in uncertainty_labels.items():
+        if uncertainty.empty or "metric" not in uncertainty.columns:
+            continue
+        part = uncertainty.loc[
+            uncertainty["metric"].astype(str).eq(source_metric)
+        ]
+        if part.empty:
+            continue
+        ci_low = pd.to_numeric(part["ci_low"], errors="coerce").min()
+        gate = pd.to_numeric(part["gate"], errors="coerce").iloc[0]
+        probability = pd.to_numeric(
+            part["probability_above_gate"],
+            errors="coerce",
+        ).min()
+        rows.extend(
+            [
+                {
+                    "category": "Statistical confidence",
+                    "metric": output_metric,
+                    "scope": "walk_forward_oos_macro_fold",
+                    "value": ci_low,
+                    "target": f"> {gate}",
+                    "status": (
+                        "supported"
+                        if np.isfinite(ci_low) and ci_low > gate
+                        else "uncertain"
+                    ),
+                    "role": "confidence",
+                    "interpretation": (
+                        "Worst 95% lower bound across configured block lengths "
+                        "from fold-cluster plus within-fold moving-block bootstrap."
+                    ),
+                    "source": "model_evidence_uncertainty.csv",
+                },
+                {
+                    "category": "Statistical confidence",
+                    "metric": f"{source_metric}_probability_above_gate_min",
+                    "scope": "walk_forward_oos_macro_fold",
+                    "value": probability,
+                    "target": "closer to 1 is stronger",
+                    "status": "monitor",
+                    "role": "confidence",
+                    "interpretation": (
+                        "Minimum bootstrap probability of clearing the active "
+                        "point-estimate gate across block assumptions."
+                    ),
+                    "source": "model_evidence_uncertainty.csv",
+                },
+            ]
+        )
+
+    for method in ("raw", "platt", "isotonic"):
+        if calibration.empty or "method" not in calibration.columns:
+            continue
+        part = calibration.loc[calibration["method"].astype(str).eq(method)]
+        if part.empty:
+            continue
+        item = part.iloc[0].to_dict()
+        for suffix, source_column, target in [
+            ("macro_brier_skill", "mean_brier_skill_vs_climatology", "> 0"),
+            ("pooled_brier_skill", "pooled_brier_skill_vs_climatology", "> 0"),
+            (
+                "positive_brier_skill_fold_fraction",
+                "positive_brier_skill_fold_fraction",
+                ">= 0.60",
+            ),
+            ("macro_ece", "mean_ece_equal_count", "< 0.05"),
+        ]:
+            value = _number(item.get(source_column))
+            if suffix == "macro_ece":
+                passed = np.isfinite(value) and value < 0.05
+            elif suffix == "positive_brier_skill_fold_fraction":
+                passed = np.isfinite(value) and value >= 0.60
+            else:
+                passed = np.isfinite(value) and value > 0.0
+            rows.append(
+                {
+                    "category": "Probability calibration",
+                    "metric": f"{method}_{suffix}",
+                    "scope": "walk_forward_oos_validation_fit_test_eval",
+                    "value": value,
+                    "target": target,
+                    "status": "passed" if passed else "failed",
+                    "role": "monitor",
+                    "interpretation": str(
+                        item.get(
+                            "recommended_use",
+                            "Diagnostic only; not part of the frozen candidate.",
+                        )
+                    ),
+                    "source": "probability_calibration_comparison.csv",
+                }
+            )
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -636,6 +761,14 @@ def _dashboard_markdown(
         "log_loss",
         "log_loss_skill_vs_climatology",
         "ece_equal_count",
+        "prauc_lift_macro_ci_low_min",
+        "precision_lift_macro_ci_low_min",
+        "f1_skill_macro_ci_low_min",
+        "top_10_return_macro_ci_low_min",
+        "raw_macro_brier_skill",
+        "platt_macro_brier_skill",
+        "platt_positive_brier_skill_fold_fraction",
+        "platt_macro_ece",
     ]
     visible = scorecard.loc[scorecard["metric"].isin(visible_metrics), ["category", "metric", "scope", "value", "target", "status", "role"]]
     lines.append("| " + " | ".join(visible.columns) + " |")
@@ -683,6 +816,8 @@ def write_model_performance_dashboard(
     rank_ic_aggregate_evidence: pd.DataFrame,
     classification_skill_summary: pd.DataFrame,
     probability_quality_summary: pd.DataFrame,
+    model_evidence_uncertainty: pd.DataFrame,
+    probability_calibration_comparison: pd.DataFrame,
     payoff_alignment: pd.DataFrame,
     seed_stability: pd.DataFrame,
     phase2_readiness: dict[str, Any],
@@ -703,6 +838,8 @@ def write_model_performance_dashboard(
         rank_ic_evidence=rank_ic_aggregate_evidence,
         classification_skill=classification_skill_summary,
         probability_quality=probability_quality_summary,
+        model_evidence_uncertainty=model_evidence_uncertainty,
+        probability_calibration_comparison=probability_calibration_comparison,
         fold_stability=fold_stability_summary,
         payoff_alignment=payoff_alignment,
         seed_stability=seed_stability,
