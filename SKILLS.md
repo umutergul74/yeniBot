@@ -176,6 +176,9 @@ Operational rules:
 - Run `03` again when labels, ATR source, data range, or processed features change.
 - Run `04` only when training inputs, profiles, folds, labels, model/training config, or checkpoints need new predictions.
 - Run `05` for diagnostics/report changes; it should not require GPU.
+- Before frozen scoring, run the read-only future-OOS preflight. A failed
+  preflight must block model loading; it must never be repaired by silently
+  regenerating or retraining the candidate.
 - Prefer slim diagnostics bundles for review unless full per-profile prediction bundles are explicitly needed.
 - Keep review artifacts inside the slim/full zip bundle. Do not litter Drive report roots with separate `latest_*` files.
 
@@ -206,6 +209,8 @@ Required diagnostic artifacts include:
 - `validation_charter_status.json`
 - `frozen_candidate_manifest.json`
 - `frozen_candidate_index.csv`
+- `future_oos_preflight.json`
+- `future_oos_preflight.md`
 - `future_oos_readiness.json`
 - `future_oos_evaluation.csv`
 - `experiment_registry_snapshot.jsonl`

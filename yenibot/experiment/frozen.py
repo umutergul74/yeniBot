@@ -15,6 +15,7 @@ from yenibot.experiment.common import _cfg, _hash_payload, _slug, _table_markdow
 
 __all__ = [
     "freeze_candidate_manifests",
+    "frozen_manifest_content_hash",
     "frozen_manifest_source_run_dir",
     "verify_frozen_manifest_artifacts",
 ]
@@ -34,6 +35,19 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if np.isfinite(number) else None
+
+
+def frozen_manifest_content_hash(manifest: dict[str, Any]) -> str:
+    """Recompute the immutable content hash of a frozen candidate manifest."""
+
+    excluded = {
+        "manifest_hash",
+        "expected_manifest_hash",
+        "manifest_hash_verified",
+        "frozen_at",
+    }
+    content = {key: value for key, value in manifest.items() if key not in excluded}
+    return _hash_payload(content)
 
 
 def _entry_by_profile(entries: list[dict[str, Any]], *, fold_scope: str) -> dict[str, dict[str, Any]]:
@@ -370,13 +384,31 @@ def verify_frozen_manifest_artifacts(
     if not root.exists():
         return [f"missing_source_run:{root.name}"]
     errors: list[str] = []
+    recorded_manifest_hash = str(manifest.get("manifest_hash", "") or "")
+    actual_manifest_hash = frozen_manifest_content_hash(manifest)
+    if not recorded_manifest_hash:
+        errors.append("missing_manifest_hash")
+    elif actual_manifest_hash != recorded_manifest_hash:
+        errors.append(
+            f"manifest_content_hash_mismatch:{recorded_manifest_hash}:{actual_manifest_hash}"
+        )
     expected_manifest_hash = str(manifest.get("expected_manifest_hash", "") or "")
-    if expected_manifest_hash and str(manifest.get("manifest_hash", "")) != expected_manifest_hash:
+    if expected_manifest_hash and recorded_manifest_hash != expected_manifest_hash:
         errors.append(
             "manifest_hash_mismatch:"
-            f"{expected_manifest_hash}:{manifest.get('manifest_hash', '')}"
+            f"{expected_manifest_hash}:{recorded_manifest_hash}"
         )
     for component in manifest.get("components", []) or []:
+        feature_columns = list(component.get("feature_columns", []) or [])
+        feature_columns_hash = str(component.get("feature_columns_hash", "") or "")
+        if not feature_columns:
+            errors.append(f"missing_feature_columns:{component.get('profile', '')}")
+        elif not feature_columns_hash:
+            errors.append(f"missing_feature_columns_hash:{component.get('profile', '')}")
+        elif _hash_payload(feature_columns) != feature_columns_hash:
+            errors.append(f"feature_columns_hash_mismatch:{component.get('profile', '')}")
+        if not str(component.get("training_signature_hash", "") or ""):
+            errors.append(f"missing_training_signature_hash:{component.get('profile', '')}")
         for artifact in component.get("artifacts", []) or []:
             path = root / str(artifact["relative_path"])
             if not path.exists():

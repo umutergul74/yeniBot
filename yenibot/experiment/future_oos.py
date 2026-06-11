@@ -243,6 +243,7 @@ def evaluate_future_oos(
     report_dir: str | Path,
     config: dict[str, Any],
     manifests: list[dict[str, Any]],
+    preflight: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Score only rows after the frozen anchor using transform/predict operations."""
 
@@ -291,6 +292,15 @@ def evaluate_future_oos(
     artifact_integrity_errors: list[str] = []
     required_candidate_errors: list[str] = []
     optional_candidate_warnings: list[str] = []
+    preflight_errors = (
+        [
+            f"preflight:{item}"
+            for item in preflight.get("failed_checks", []) or []
+        ]
+        if preflight is not None and not bool(preflight.get("invariants_passed", False))
+        else []
+    )
+    required_candidate_errors.extend(preflight_errors)
 
     primary_manifest = next(
         (
@@ -331,7 +341,7 @@ def evaluate_future_oos(
         latest = future["timestamp"].max() if not future.empty else None
 
     ready = bool(future_count >= min_rows)
-    if ready:
+    if ready and not preflight_errors:
         seq_len = int(_cfg(config, ["model", "seq_len"], 64))
         context = labeled.loc[labeled["timestamp"] <= anchor].tail(max(seq_len - 1, 0))
         future_context = pd.concat(
@@ -408,7 +418,10 @@ def evaluate_future_oos(
     charter_active = str(
         _cfg(config, ["validation", "charter", "active_version"], "v3_legacy")
     )
-    if not ready:
+    if preflight_errors:
+        evaluation_state = "blocked_required_candidate"
+        promotion_block_reason = "future_oos_preflight_failed"
+    elif not ready:
         evaluation_state = "waiting_for_min_rows"
         promotion_block_reason = "future_oos_not_ready"
     elif required_candidate_errors:
@@ -441,6 +454,14 @@ def evaluate_future_oos(
         "promotion_allowed": bool(primary_passed),
         "promotion_block_reason": promotion_block_reason,
         "fit_operations_performed": 0,
+        "preflight_state": (
+            str(preflight.get("state", "")) if preflight is not None else None
+        ),
+        "preflight_invariants_passed": (
+            bool(preflight.get("invariants_passed", False))
+            if preflight is not None
+            else None
+        ),
         "artifact_integrity_errors": artifact_integrity_errors,
         "required_candidate_errors": required_candidate_errors,
         "optional_candidate_warnings": optional_candidate_warnings,

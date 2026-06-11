@@ -18,6 +18,9 @@ def _denoise_segment(
 ) -> np.ndarray:
     if pywt is None:
         raise ImportError("PyWavelets is required when features.wavelet.enabled is true")
+    # Pandas 3 can expose read-only NumPy views. PyWavelets requests a writable
+    # buffer on some platforms, so normalize ownership without changing values.
+    segment = np.array(segment, dtype=float, order="C", copy=True)
     coeffs = pywt.wavedec(segment, wavelet=wavelet, level=level, mode="symmetric")
     detail = coeffs[-1]
     sigma = np.median(np.abs(detail - np.median(detail))) / 0.6745 if len(detail) else 0.0

@@ -158,6 +158,16 @@ yeniBot/
 See [`docs/architecture.md`](docs/architecture.md) for module ownership and
 failure-localization rules.
 
+Operational references:
+
+- [`docs/current-status.md`](docs/current-status.md): frozen identity and
+  current decision
+- [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md): exact no-refit
+  evaluation procedure
+- [`docs/metrics.md`](docs/metrics.md): metric definitions and estimands
+- [`docs/experiment-history.md`](docs/experiment-history.md): retained lessons
+  and rejected directions
+
 ## Colab Workflow
 
 All production research notebooks run on Google Colab with source code from
@@ -184,6 +194,10 @@ Rerun rules:
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
 | Frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
+
+Before the frozen evaluation, follow
+[`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is
+authoritative; a calendar date alone does not establish label readiness.
 
 Notebook 05 writes a shareable slim archive under Google Drive:
 

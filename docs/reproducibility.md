@@ -100,6 +100,18 @@ candidates additionally record content hashes for:
 
 Future-OOS evaluation must verify those hashes and perform no fitting.
 
+Run the read-only preflight before frozen scoring:
+
+```bash
+python -m yenibot.automation.future_oos_preflight \
+  --config config.yaml \
+  --checkpoint-dir <checkpoint_dir>
+```
+
+For the current frozen cycle, refresh with `01 -> 02 -> 03 -> 05`. Notebook
+`04` is forbidden because it creates fitted artifacts. See
+[`future-oos-runbook.md`](future-oos-runbook.md).
+
 ## Evidence Interpretation
 
 Use fold-macro metrics for active charter gates. Pooled-row metrics are useful

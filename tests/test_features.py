@@ -12,7 +12,7 @@ from yenibot.features import (
     compute_futures_metrics_features,
     compute_intrahour_order_flow_features,
 )
-from yenibot.features.wavelet import causal_wavelet_denoise
+from yenibot.features.wavelet import _denoise_segment, causal_wavelet_denoise
 
 
 def test_4h_alignment_delays_bar_until_complete(synthetic_klines, tiny_config) -> None:
@@ -36,6 +36,19 @@ def test_causal_wavelet_value_unchanged_when_future_appended() -> None:
     base = causal_wavelet_denoise(series, window=64)
     future = causal_wavelet_denoise(extended, window=64)
     pd.testing.assert_series_equal(base.dropna(), future.iloc[: len(base)].dropna(), check_names=False)
+
+
+def test_wavelet_accepts_read_only_numpy_buffers_without_changing_values() -> None:
+    pytest.importorskip("pywt")
+    writable = np.linspace(100.0, 120.0, 128, dtype=float)
+    read_only = writable.copy()
+    read_only.flags.writeable = False
+
+    kwargs = {"wavelet": "db4", "level": 2, "threshold_scale": 0.5}
+    expected = _denoise_segment(writable, **kwargs)
+    actual = _denoise_segment(read_only, **kwargs)
+
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_stationary_features_are_causal_when_future_rows_appended(synthetic_klines, tiny_config) -> None:

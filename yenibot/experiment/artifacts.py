@@ -183,6 +183,8 @@ def _write_experiment_bundle(
         "frozen_candidate_manifests.json",
         "frozen_candidate_index.csv",
         "frozen_candidate_index.md",
+        "future_oos_preflight.json",
+        "future_oos_preflight.md",
         "future_oos_readiness.json",
         "future_oos_evaluation.csv",
         "future_oos_evaluation.md",

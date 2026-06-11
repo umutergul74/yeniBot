@@ -119,6 +119,10 @@ from yenibot.experiment.dashboard import (
 
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
+from yenibot.experiment.oos_preflight import (
+    future_oos_preflight,
+    future_oos_preflight_markdown,
+)
 
 from yenibot.experiment.folds import (
     _fold_stability_forensics_frame,
@@ -1199,15 +1203,27 @@ def write_experiment_diagnostics(
         entries=entries,
         config=diagnostic_config,
     )
+    future_oos_preflight_status = future_oos_preflight(
+        checkpoint_dir=checkpoint_dir,
+        config=diagnostic_config,
+        manifests=frozen_candidate_manifests,
+    )
+    _write_json(report_dir / "future_oos_preflight.json", future_oos_preflight_status)
+    (report_dir / "future_oos_preflight.md").write_text(
+        future_oos_preflight_markdown(future_oos_preflight_status),
+        encoding="utf-8",
+    )
     workflow_checkpoint(
         "evaluate_future_oos",
         frozen_candidate_count=len(frozen_candidate_manifests),
+        preflight_state=future_oos_preflight_status["state"],
     )
     future_oos_evaluation, future_oos_readiness = evaluate_future_oos(
         run_dir=run_dir,
         report_dir=report_dir,
         config=diagnostic_config,
         manifests=frozen_candidate_manifests,
+        preflight=future_oos_preflight_status,
     )
     registry_record = append_experiment_registry(
         registry_path=experiment_root(checkpoint_dir) / "experiment_registry.jsonl",
@@ -1232,6 +1248,7 @@ def write_experiment_diagnostics(
     decision["future_oos_candidate_plan"] = future_oos_candidate_plan.to_dict(orient="records")
     decision["validation_charter_status"] = validation_charter_status.to_dict(orient="records")
     decision["frozen_candidate_index"] = frozen_candidate_index.to_dict(orient="records")
+    decision["future_oos_preflight"] = future_oos_preflight_status
     decision["future_oos_evaluation"] = future_oos_evaluation.to_dict(orient="records")
     decision["future_oos_readiness"] = future_oos_readiness
     decision["experiment_registry_event_id"] = registry_record["event_id"]

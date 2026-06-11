@@ -52,6 +52,7 @@ New code imports public APIs from `yenibot.experiment`.
 | `execution.py` | Atomic workflow status and failure traces |
 | `charter.py` | Explicit versioned validation-charter governance |
 | `frozen.py` | Content-addressed pre-anchor candidate manifests |
+| `oos_preflight.py` | Read-only frozen identity, data-contract, and artifact checks |
 | `future_oos.py` | Artifact-verified, no-refit future-OOS scoring |
 | `registry.py` | Append-only experiment decision history |
 | `orchestration.py` | Top-level notebook-facing workflows |
@@ -87,11 +88,13 @@ still identifies the interrupted phase.
 
 ## Future-OOS Flow
 
-1. Notebook 05 freezes existing pre-anchor artifacts and their hashes.
-2. The evaluator waits until the configured minimum fresh labeled rows exist.
-3. It verifies every artifact hash, then runs transform/predict only.
-4. It writes future evidence separately from the active Phase 1 charter.
-5. Phase 2 remains blocked unless both the active charter and future-OOS checks pass.
+1. Notebook 05 resolves the already-pinned pre-anchor manifest.
+2. A read-only preflight verifies identity, threshold, fit cutoff, feature
+   order, data contract, and every artifact hash.
+3. The evaluator waits until the configured minimum fresh mature labels exist.
+4. Only a passing preflight can reach transform/predict; no fitting is allowed.
+5. It writes future evidence separately from the active Phase 1 charter.
+6. Phase 2 remains blocked unless both the active charter and future-OOS checks pass.
 
 ## Change Rules
 
