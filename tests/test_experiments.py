@@ -385,6 +385,48 @@ def test_experiment_policy_guard_unlocks_after_future_oos_minimum_window() -> No
     assert settings["experiment_policy_guard"]["future_oos_ready"] is True
 
 
+def test_experiment_policy_guard_opens_research_after_failed_future_oos() -> None:
+    config = {
+        "features": {"active_profile": "control", "profiles": {"control": {}}},
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control"],
+            "holdout": {
+                "enabled": True,
+                "selection_data_end": "2026-01-01 00:00:00+00:00",
+                "latest_available_data_end": "2026-02-15 00:00:00+00:00",
+            },
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_data_end": "2026-01-01 00:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                    "allow_holdout_roll_forward": False,
+                },
+            },
+            "frozen_candidates": {
+                "primary_candidate_id": "candidate_v1",
+            },
+            "frozen_candidate_outcomes": {
+                "candidate_v1": {"status": "failed_future_oos_retired"},
+            },
+        },
+    }
+
+    settings = experiment_settings(config)
+    guard = settings["experiment_policy_guard"]
+
+    assert guard["profile_search_locked"] is False
+    assert guard["action"] == (
+        "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    )
+    assert guard["primary_candidate_outcome"] == "failed_future_oos_retired"
+
+
 def test_future_oos_candidate_plan_records_ready_dates() -> None:
     config = {
         "features": {

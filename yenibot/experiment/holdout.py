@@ -413,6 +413,8 @@ def _predict_holdout_for_profile(
     holdout_context: pd.DataFrame,
     holdout_start: pd.Timestamp,
     config: dict[str, Any],
+    holdout_end: pd.Timestamp | None = None,
+    model_folds: set[int] | None = None,
 ) -> pd.DataFrame:
     profile = str(manifest["profile"])
     cfg = profile_config(config, profile)
@@ -432,6 +434,8 @@ def _predict_holdout_for_profile(
     model_paths = sorted(scope_dir.glob("model_fold_*.pt"))
     for model_path in model_paths:
         fold = int(model_path.stem.rsplit("_", 1)[-1])
+        if model_folds is not None and fold not in model_folds:
+            continue
         scaler_path = scope_dir / f"scaler_fold_{fold:03d}.pkl"
         hmm_path = scope_dir / f"hmm_fold_{fold:03d}.pkl"
         if not scaler_path.exists() or not hmm_path.exists():
@@ -448,7 +452,11 @@ def _predict_holdout_for_profile(
         model = _build_model(len(feature_columns), cfg).to(torch_device)
         model.load_state_dict(checkpoint["model_state_dict"])
         prediction = _predict_dataset(model, dataset, part, batch_size=batch_size, device=torch_device)
-        prediction = prediction.loc[pd.to_datetime(prediction["timestamp"], utc=True) >= holdout_start].copy()
+        prediction_timestamps = pd.to_datetime(prediction["timestamp"], utc=True)
+        mask = prediction_timestamps >= holdout_start
+        if holdout_end is not None:
+            mask &= prediction_timestamps <= holdout_end
+        prediction = prediction.loc[mask].copy()
         if prediction.empty:
             continue
         prediction["split"] = "test"
@@ -486,6 +494,21 @@ def _aggregate_holdout_predictions(predictions: pd.DataFrame, *, profile: str) -
     ]
     aggregations: dict[str, Any] = {column: (column, "first") for column in first_columns}
     aggregations["prob_long"] = ("prob_long", "mean")
+    aggregations["prob_long_model_std"] = (
+        "prob_long",
+        lambda values: float(pd.to_numeric(values, errors="coerce").std(ddof=0)),
+    )
+    aggregations["prob_long_model_min"] = ("prob_long", "min")
+    aggregations["prob_long_model_q10"] = (
+        "prob_long",
+        lambda values: float(pd.to_numeric(values, errors="coerce").quantile(0.10)),
+    )
+    aggregations["prob_long_model_median"] = ("prob_long", "median")
+    aggregations["prob_long_model_q90"] = (
+        "prob_long",
+        lambda values: float(pd.to_numeric(values, errors="coerce").quantile(0.90)),
+    )
+    aggregations["prob_long_model_max"] = ("prob_long", "max")
     aggregations["model_fold_count"] = ("model_fold", "nunique")
     for column in [column for column in frame.columns if column.startswith("regime_prob_")]:
         aggregations[column] = (column, "mean")

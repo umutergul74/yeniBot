@@ -14,6 +14,12 @@ from yenibot.experiment.frozen import (
     frozen_manifest_source_run_dir,
     verify_frozen_manifest_artifacts,
 )
+from yenibot.experiment.future_oos_diagnostics import (
+    future_oos_diagnostic_frames,
+    future_oos_failure_markdown,
+    future_oos_failure_summary,
+    future_oos_model_metrics,
+)
 from yenibot.experiment.holdout import _aggregate_holdout_predictions, _predict_holdout_for_profile
 
 __all__ = ["evaluate_future_oos"]
@@ -114,7 +120,9 @@ def _profile_predictions(
             holdout_start=future_start,
             config=config,
         )
-        predictions[profile] = _aggregate_holdout_predictions(raw, profile=profile)
+        aggregated = _aggregate_holdout_predictions(raw, profile=profile)
+        aggregated.attrs["raw_model_predictions"] = raw
+        predictions[profile] = aggregated
     return predictions
 
 
@@ -289,6 +297,11 @@ def evaluate_future_oos(
     labeled_path = data_dir / "processed" / "labeled_1h.parquet"
     rows: list[dict[str, Any]] = []
     prediction_frames: list[pd.DataFrame] = []
+    temporal_diagnostics: list[pd.DataFrame] = []
+    score_band_diagnostics: list[pd.DataFrame] = []
+    regime_diagnostics: list[pd.DataFrame] = []
+    disagreement_diagnostics: list[pd.DataFrame] = []
+    model_diagnostics: list[pd.DataFrame] = []
     artifact_integrity_errors: list[str] = []
     required_candidate_errors: list[str] = []
     optional_candidate_warnings: list[str] = []
@@ -383,7 +396,32 @@ def evaluate_future_oos(
                 continue
             predictions["candidate_id"] = manifest["candidate_id"]
             prediction_frames.append(predictions)
-            rows.append(_evaluate_predictions(predictions, manifest=manifest, config=config))
+            evaluation_row = _evaluate_predictions(
+                predictions,
+                manifest=manifest,
+                config=config,
+            )
+            rows.append(evaluation_row)
+            threshold = float((manifest.get("threshold") or {}).get("value", 0.5))
+            diagnostics = future_oos_diagnostic_frames(
+                predictions,
+                threshold=threshold,
+                block_hours=int(future_cfg.get("diagnostic_block_hours", 168)),
+            )
+            temporal_diagnostics.append(diagnostics["temporal_blocks"])
+            score_band_diagnostics.append(diagnostics["score_bands"])
+            regime_diagnostics.append(diagnostics["regime_metrics"])
+            disagreement_diagnostics.append(diagnostics["ensemble_disagreement"])
+            for profile, component in components.items():
+                raw = component.attrs.get("raw_model_predictions", pd.DataFrame())
+                model_diagnostics.append(
+                    future_oos_model_metrics(
+                        raw,
+                        candidate_id=candidate_id,
+                        profile=profile,
+                        threshold=threshold,
+                    )
+                )
 
     evaluation = pd.DataFrame(rows)
     if evaluation.empty:
@@ -484,6 +522,70 @@ def evaluate_future_oos(
         {"status": status, "rows": evaluation.to_dict(orient="records")},
     )
     _write_json(report_path / "future_oos_readiness.json", status)
+    diagnostic_outputs = {
+        "future_oos_temporal_blocks.csv": pd.concat(
+            [item for item in temporal_diagnostics if not item.empty],
+            ignore_index=True,
+        )
+        if any(not item.empty for item in temporal_diagnostics)
+        else pd.DataFrame(),
+        "future_oos_score_bands.csv": pd.concat(
+            [item for item in score_band_diagnostics if not item.empty],
+            ignore_index=True,
+        )
+        if any(not item.empty for item in score_band_diagnostics)
+        else pd.DataFrame(),
+        "future_oos_regime_metrics.csv": pd.concat(
+            [item for item in regime_diagnostics if not item.empty],
+            ignore_index=True,
+        )
+        if any(not item.empty for item in regime_diagnostics)
+        else pd.DataFrame(),
+        "future_oos_ensemble_disagreement.csv": pd.concat(
+            [item for item in disagreement_diagnostics if not item.empty],
+            ignore_index=True,
+        )
+        if any(not item.empty for item in disagreement_diagnostics)
+        else pd.DataFrame(),
+        "future_oos_model_metrics.csv": pd.concat(
+            [item for item in model_diagnostics if not item.empty],
+            ignore_index=True,
+        )
+        if any(not item.empty for item in model_diagnostics)
+        else pd.DataFrame(),
+    }
+    for filename, frame in diagnostic_outputs.items():
+        frame.to_csv(report_path / filename, index=False)
+    if evaluation_completed:
+        primary_row = primary.iloc[0].to_dict()
+        summary = future_oos_failure_summary(
+            primary_row,
+            temporal_blocks=diagnostic_outputs["future_oos_temporal_blocks.csv"].loc[
+                lambda frame: frame.get(
+                    "candidate_id",
+                    pd.Series(index=frame.index, dtype=str),
+                ).astype(str).eq(primary_id)
+            ],
+            ensemble_disagreement=diagnostic_outputs[
+                "future_oos_ensemble_disagreement.csv"
+            ].loc[
+                lambda frame: frame.get(
+                    "candidate_id",
+                    pd.Series(index=frame.index, dtype=str),
+                ).astype(str).eq(primary_id)
+            ],
+            model_metrics=diagnostic_outputs["future_oos_model_metrics.csv"].loc[
+                lambda frame: frame.get(
+                    "candidate_id",
+                    pd.Series(index=frame.index, dtype=str),
+                ).astype(str).eq(primary_id)
+            ],
+        )
+        _write_json(report_path / "future_oos_failure_summary.json", summary)
+        (report_path / "future_oos_failure_summary.md").write_text(
+            future_oos_failure_markdown(summary),
+            encoding="utf-8",
+        )
     if prediction_frames:
         predictions = pd.concat(prediction_frames, ignore_index=True)
         predictions.to_parquet(report_path / "future_oos_predictions.parquet", index=False)

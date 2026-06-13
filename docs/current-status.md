@@ -1,17 +1,37 @@
 # Current Phase 1 Status
 
-Last reviewed: **June 11, 2026**
+Last reviewed: **June 13, 2026**
 
 ## Decision
 
-The current model has passed the active `v4_evidence` research charter, but
-Phase 2 remains blocked until the frozen primary candidate completes its
-pre-registered future unseen out-of-sample evaluation.
+The current model passed the active `v4_evidence` walk-forward research
+charter, but the frozen primary candidate failed its pre-registered future
+unseen out-of-sample evaluation. Phase 2 remains blocked.
 
 - **Model evidence passed** means the walk-forward research evidence is
   credible enough to justify a frozen confirmation test.
 - **Phase 2 ready** requires the untouched frozen candidate to pass that
   confirmation test with no refitting or policy changes.
+
+## Future-OOS Result
+
+The 737-row window from `2026-05-13 09:00 UTC` through
+`2026-06-13 01:00 UTC` was scored with zero fit operations and a verified
+manifest hash.
+
+| Metric | Future-OOS result |
+|---|---:|
+| Rank IC | `-0.0075` |
+| PRAUC lift vs prevalence | `1.0267` |
+| Precision lift vs prevalence | `1.0609` |
+| F1 skill vs rate-matched random | `+0.0219` |
+| Prediction-long rate | `79.38%` |
+| Top-decile label lift | `0.9901` |
+| Top-decile forward return | `-0.00166` |
+| Selected forward return | `-0.00308` |
+
+The candidate failed ranking, payoff, PRAUC-lift, and prediction-rate gates.
+This is not a threshold-only miss. `control_fold_ensemble_v1` is retired.
 
 ## Frozen Contract
 
@@ -46,12 +66,26 @@ bundle and matches the configured expected hash.
 Raw sigmoid scores are ranking scores, not deployment-ready probabilities.
 The reliability evidence does not support probability-sized positions.
 
-## What Is Allowed While Waiting
+## What Is Allowed Now
 
 - Improve diagnostics, tests, documentation, CI, and operator safety.
-- Refresh raw data, features, and labels with notebooks `01 -> 02 -> 03`.
-- Run notebook `05` to inspect readiness and, once ready, perform frozen
-  prediction-only evaluation.
+- Use the failed OOS window for diagnosis only.
+- Develop a replacement candidate on an isolated research branch.
+- Compare rolling retraining and recency-aware ensemble policies only on
+  historical rolling-origin windows.
+- Add the failed window to future training data only after preserving its
+  immutable evaluation record.
+- Pre-register the replacement before collecting a new future-OOS window.
+
+## Immediate Run Sequence
+
+1. Run notebook `04` once on a GPU. Existing training scopes may be reused;
+   the new work is historical cross-model inference for the recency policies.
+2. Run notebook `05` on CPU/high-RAM.
+3. Review `recency_ensemble_summary.csv`,
+   `recency_ensemble_by_fold.csv`, and the new future-OOS root-cause files.
+4. Freeze nothing unless a recency policy improves historical mean IC,
+   downside folds, payoff consistency, and prediction-rate discipline together.
 - Fix code defects only when the frozen numerical contract remains unchanged
   and the change is covered by regression tests.
 
@@ -64,9 +98,6 @@ The reliability evidence does not support probability-sized positions.
 - Fit cutoff and anchor
 - Future-OOS gates
 
-Do not run notebook `04` for the frozen evaluation. Do not change the profile,
-threshold, weights, model artifacts, or manifest hash.
-
-Readiness is determined by mature labeled rows, not by the calendar alone.
-June 13 is an estimate; `future_oos_preflight.json` is authoritative.
-
+Do not modify the retired candidate's profile, threshold, weights, model
+artifacts, or manifest hash. Do not choose replacement ensemble weights or
+thresholds from the failed OOS window.

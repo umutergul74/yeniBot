@@ -191,14 +191,29 @@ def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -
     control = str(settings.get("control_profile") or _cfg(config, ["experiments", "control_profile"], ""))
     status = str(policy_review.get("status", ""))
     enabled = bool(policy_review.get("enabled", False))
+    frozen_cfg = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
+    primary_candidate_id = str(frozen_cfg.get("primary_candidate_id", ""))
+    outcome = (
+        _cfg(
+            config,
+            ["experiments", "frozen_candidate_outcomes", primary_candidate_id],
+            {},
+        )
+        or {}
+    )
+    failed_future_oos = "failed" in str(outcome.get("status", "")).lower()
     locked = bool(
         enabled
         and _policy_status_is_retired_or_failed(status)
         and monitor_state["holdout_roll_forward_locked"]
         and not monitor_state["future_oos_ready"]
+        and not failed_future_oos
     )
     allowed = _future_oos_allowed_benchmark_profiles(config, control)
-    if locked:
+    if failed_future_oos:
+        action = "retire_failed_frozen_candidate_and_open_new_research_anchor"
+        reason = "primary_frozen_candidate_failed_future_oos"
+    elif locked:
         action = "wait_for_new_unseen_bars_keep_control_profile"
         reason = (
             "clean_holdout_policy_failed_and_future_oos_not_ready; "
@@ -217,6 +232,8 @@ def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -
         "action": action,
         "reason": reason,
         "allowed_benchmark_profiles": allowed,
+        "primary_candidate_id": primary_candidate_id,
+        "primary_candidate_outcome": str(outcome.get("status", "")),
         **monitor_state,
     }
 
@@ -632,6 +649,12 @@ def _diagnostics_signature(config: dict[str, Any], settings: dict[str, Any]) -> 
         "frozen_candidates": copy.deepcopy(_cfg(config, ["experiments", "frozen_candidates"], {}) or {}),
         "future_oos_validation": copy.deepcopy(
             _cfg(config, ["experiments", "future_oos_validation"], {}) or {}
+        ),
+        "frozen_candidate_outcomes": copy.deepcopy(
+            _cfg(config, ["experiments", "frozen_candidate_outcomes"], {}) or {}
+        ),
+        "next_research_cycle": copy.deepcopy(
+            _cfg(config, ["experiments", "next_research_cycle"], {}) or {}
         ),
         "profile_blends": copy.deepcopy(_cfg(config, ["experiments", "profile_blends"], {}) or {}),
         "control_profile": str(settings.get("control_profile", "")),

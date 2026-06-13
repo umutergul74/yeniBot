@@ -694,3 +694,73 @@ def test_write_auto_review_outputs_files(tmp_path) -> None:
     assert transition["decision"] == "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
     assert transition["long_f1_source"] == "validation_selected_threshold"
     assert result["auto_review_path"].endswith("auto_review.md")
+
+
+def test_auto_review_retires_failed_future_oos_candidate(tmp_path) -> None:
+    _write_minimal_report(tmp_path, future_oos_ready=True)
+    (tmp_path / "future_oos_readiness.json").write_text(
+        json.dumps(
+            {
+                "ready_for_evaluation": True,
+                "evaluation_completed": True,
+                "evaluation_state": "evaluated_failed",
+                "primary_candidate_id": "control_fold_ensemble_v1",
+                "primary_candidate_passed": False,
+                "new_labeled_rows": 737,
+                "min_rows_remaining": 0,
+                "preferred_rows_remaining": 1423,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "candidate_id": "control_fold_ensemble_v1",
+                "rank_ic": -0.01,
+                "evidence_passed": False,
+            }
+        ]
+    ).to_csv(tmp_path / "future_oos_evaluation.csv", index=False)
+    (tmp_path / "future_oos_predictions.parquet").write_bytes(b"fixture")
+    for filename in [
+        "future_oos_temporal_blocks.csv",
+        "future_oos_score_bands.csv",
+        "future_oos_regime_metrics.csv",
+        "future_oos_ensemble_disagreement.csv",
+        "future_oos_model_metrics.csv",
+    ]:
+        pd.DataFrame({"candidate_id": ["control_fold_ensemble_v1"]}).to_csv(
+            tmp_path / filename,
+            index=False,
+        )
+    (tmp_path / "future_oos_failure_summary.json").write_text(
+        json.dumps(
+            {
+                "candidate_id": "control_fold_ensemble_v1",
+                "candidate_status": "retired_after_failed_future_oos",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "future_oos_failure_summary.md").write_text(
+        "# Failed\n",
+        encoding="utf-8",
+    )
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["report_completeness"]["complete"] is True
+    assert review["next_action"]["action"] == (
+        "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    )
+    assert review["next_action"]["do_not_promote_from_current_holdout"] is True
+    assert review["phase2_readiness"]["next_action"] == (
+        "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    )
+    assert review["phase1_transition_plan"]["decision"] == (
+        "FROZEN_CANDIDATE_FAILED_NEW_RESEARCH_REQUIRED"
+    )
+    assert review["phase1_transition_plan"]["metric_gaps"][
+        "future_oos_min_bars_remaining"
+    ] == 0

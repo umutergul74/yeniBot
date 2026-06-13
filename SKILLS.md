@@ -18,6 +18,10 @@ The current safe control profile is configured in `config.yaml`:
 - `features.active_profile` may remain a feature-generation default and is not by itself a promotion decision.
 - `experiments.policy_review.status`: `failed_clean_holdout_review`
 - `future_oos_monitor.allow_holdout_roll_forward`: `false`
+- Frozen candidate `control_fold_ensemble_v1` completed its 737-row future-OOS
+  evaluation on June 13, 2026 and failed. It is retired and must not be tuned
+  or retested on that same window.
+- `experiments.next_research_cycle.status`: `open_after_failed_future_oos`
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -118,6 +122,16 @@ Holdout is a one-shot validation gate, not a development playground.
 - Future-OOS readiness, evaluation, and pass are sequential states. Before the minimum row count is reached, evaluation/pass checks must be reported as pending rather than as additional failures.
 - Optional historical benchmark candidates may remain unavailable without invalidating the required primary candidate. They must be reported as warnings and must never be substituted for the primary candidate.
 - Keep an append-only `experiment_registry.jsonl`; do not rewrite historical decision records.
+- A failed frozen candidate stays immutable as historical evidence. Record its
+  outcome outside the frozen manifest so the original manifest hash remains
+  reproducible.
+- A failed future-OOS window may be used for root-cause diagnosis and may enter
+  a later training set only after the candidate is retired. It may never be
+  reused to choose the replacement threshold, ensemble weights, or promotion
+  decision.
+- Replacement candidates require a new pre-registration and a new future-OOS
+  anchor. Their deployment policy must be selected on historical rolling-origin
+  windows only.
 
 ## Phase 1 Readiness Gates
 
@@ -213,6 +227,14 @@ Required diagnostic artifacts include:
 - `future_oos_preflight.md`
 - `future_oos_readiness.json`
 - `future_oos_evaluation.csv`
+- `future_oos_predictions.parquet`
+- `future_oos_temporal_blocks.csv`
+- `future_oos_score_bands.csv`
+- `future_oos_regime_metrics.csv`
+- `future_oos_ensemble_disagreement.csv`
+- `future_oos_model_metrics.csv`
+- `future_oos_failure_summary.json`
+- `next_research_protocol.json`
 - `experiment_registry_snapshot.jsonl`
 - `holdout_evaluation.csv`
 - `holdout_policy_decision.csv`

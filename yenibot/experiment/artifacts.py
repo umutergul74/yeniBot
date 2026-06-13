@@ -191,6 +191,20 @@ def _write_experiment_bundle(
         "future_oos_evaluation.json",
         "future_oos_prediction_sample.csv",
         "future_oos_predictions.parquet",
+        "future_oos_temporal_blocks.csv",
+        "future_oos_score_bands.csv",
+        "future_oos_regime_metrics.csv",
+        "future_oos_ensemble_disagreement.csv",
+        "future_oos_model_metrics.csv",
+        "future_oos_failure_summary.json",
+        "future_oos_failure_summary.md",
+        "next_research_protocol.json",
+        "next_research_protocol.md",
+        "recency_ensemble_summary.csv",
+        "recency_ensemble_by_fold.csv",
+        "recency_ensemble_schedule.csv",
+        "recency_ensemble_eligibility_audit.csv",
+        "recency_ensemble_manifest.json",
         "experiment_registry_snapshot.jsonl",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",
@@ -238,7 +252,11 @@ def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: 
     latest_slim_path = output_dir / "phase1_latest_experiment_slim_bundle.zip"
     with zipfile.ZipFile(slim_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(report_dir.glob("*")):
-            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".jsonl", ".md", ".png"}:
+            include_parquet = path.name == "future_oos_predictions.parquet"
+            if path.is_file() and (
+                path.suffix.lower() in {".csv", ".json", ".jsonl", ".md", ".png"}
+                or include_parquet
+            ):
                 archive.write(path, f"{run_id}/{path.name}")
     shutil.copyfile(slim_path, latest_slim_path)
     return slim_path, latest_slim_path

@@ -173,7 +173,11 @@ def _full_profiles(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[frame["fold_scope"].astype(str) == "full"].copy()
 
 
-def _missing_required_files(report_dir: Path) -> list[str]:
+def _missing_required_files(
+    report_dir: Path,
+    *,
+    future_oos_evaluated: bool = False,
+) -> list[str]:
     required = [
         "profile_comparison.csv",
         "decision_report.json",
@@ -219,6 +223,19 @@ def _missing_required_files(report_dir: Path) -> list[str]:
         "classification_quality.png",
         "score_band_payoff.png",
     ]
+    if future_oos_evaluated:
+        required.extend(
+            [
+                "future_oos_predictions.parquet",
+                "future_oos_temporal_blocks.csv",
+                "future_oos_score_bands.csv",
+                "future_oos_regime_metrics.csv",
+                "future_oos_ensemble_disagreement.csv",
+                "future_oos_model_metrics.csv",
+                "future_oos_failure_summary.json",
+                "future_oos_failure_summary.md",
+            ]
+        )
     return [name for name in required if not (report_dir / name).exists()]
 
 
@@ -677,6 +694,12 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         and not bool(item["passed"])
     ]
     ready = not blockers
+    if future_evaluated and not future_passed:
+        next_action = "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    elif ready:
+        next_action = "freeze_phase1_candidate_and_prepare_phase2_design"
+    else:
+        next_action = "continue_phase1_validation_until_all_blockers_clear"
     return {
         "ready_for_phase2": ready,
         "decision": "READY_FOR_PHASE2" if ready else "DO_NOT_PROCEED_TO_PHASE2",
@@ -685,11 +708,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         "long_f1_source": readiness_f1_source,
         "active_validation_charter": active_charter,
         "checks": checks,
-        "next_action": (
-            "freeze_phase1_candidate_and_prepare_phase2_design"
-            if ready
-            else "continue_phase1_validation_until_all_blockers_clear"
-        ),
+        "next_action": next_action,
     }
 
 
@@ -698,6 +717,9 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     phase2 = review.get("phase2_readiness", {}) or {}
     policy = review.get("holdout", {}).get("policy", {}) or {}
     future_evaluation = review.get("future_oos", {}).get("readiness", {}) or {}
+    future_evaluated = bool(future_evaluation.get("evaluation_completed", False))
+    future_passed = future_evaluation.get("primary_candidate_passed") is True
+    future_failed = future_evaluated and not future_passed
     report_complete = bool(review.get("report_completeness", {}).get("complete", False))
     leakage_ok = _to_bool(control.get("mtf_leakage_passed"), default=False)
     stationarity_ok = _to_bool(control.get("stationarity_policy_passed"), default=False)
@@ -729,7 +751,9 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     selected_threshold_near_phase2 = selected_f1 is not None and selected_f1 > 0.45
     constrained_threshold_near_phase2 = constrained_f1 is not None and constrained_f1 > 0.42
     research_ready = bool(signal_present and (selected_threshold_near_phase2 or constrained_threshold_near_phase2))
-    if bool(phase2.get("ready_for_phase2", False)):
+    if future_failed:
+        decision = "FROZEN_CANDIDATE_FAILED_NEW_RESEARCH_REQUIRED"
+    elif bool(phase2.get("ready_for_phase2", False)):
         decision = "READY_FOR_PHASE2_DESIGN"
     elif research_ready:
         decision = "PHASE1_RESEARCH_READY_PHASE2_BLOCKED"
@@ -751,14 +775,29 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         "constrained_threshold_pred_long_rate_excess_vs_0_70": (
             None if constrained_pred_rate is None else constrained_pred_rate - 0.70
         ),
-        "future_oos_min_bars_remaining": policy.get("min_new_bars_remaining"),
-        "future_oos_preferred_bars_remaining": policy.get("preferred_new_bars_remaining"),
+        "future_oos_min_bars_remaining": future_evaluation.get(
+            "min_rows_remaining",
+            policy.get("min_new_bars_remaining"),
+        ),
+        "future_oos_preferred_bars_remaining": future_evaluation.get(
+            "preferred_rows_remaining",
+            policy.get("preferred_new_bars_remaining"),
+        ),
     }
-    allowed_actions = [
-        "run_05_cpu_slim_only_to_monitor_reports",
-        "wait_for_future_unseen_oos_before_promotion",
-        "use_phase1_predictions_for_score_band_diagnostics_only",
-    ]
+    if future_failed:
+        allowed_actions = [
+            "use_failed_future_oos_for_root_cause_diagnostics_only",
+            "open_isolated_phase1_research_cycle",
+            "design_rolling_retrain_and_recency_ensemble_candidates",
+            "pre_register_new_candidate_and_new_future_oos_anchor",
+            "keep_failed_frozen_candidate_artifacts_immutable",
+        ]
+    else:
+        allowed_actions = [
+            "run_05_cpu_slim_only_to_monitor_reports",
+            "wait_for_future_unseen_oos_before_promotion",
+            "use_phase1_predictions_for_score_band_diagnostics_only",
+        ]
     if active_charter == "v3_legacy":
         allowed_actions.append("work_on_rank_ic_std_and_f1_blockers_inside_phase1")
     else:
@@ -772,7 +811,15 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         "do_not_tune_weights_against_current_holdout",
         "do_not_relax_phase1_success_criteria_silently",
     ]
-    if active_charter != "v3_legacy":
+    if future_failed:
+        blocked_actions.extend(
+            [
+                "do_not_retest_or_promote_the_failed_candidate_on_the_same_oos_window",
+                "do_not_tune_thresholds_or_ensemble_weights_to_repair_the_failed_oos",
+                "do_not_relabel_the_failed_oos_as_holdout_success",
+            ]
+        )
+    elif active_charter != "v3_legacy":
         blocked_actions.append("do_not_retrain_or_modify_the_frozen_candidate_before_future_oos")
     recommended_focus = []
     blockers = set(str(item) for item in phase2.get("blockers", []) or [])
@@ -797,6 +844,20 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
         recommended_focus.append("improve_classification_skill_under_prediction_rate_guardrail")
     if "future_unseen_oos_not_ready" in blockers:
         recommended_focus.append("wait_for_new_unseen_bars_before_any_promotion")
+    if "future_unseen_oos_candidate_failed" in blockers:
+        recommended_focus.extend(
+            [
+                "diagnose_future_oos_ranking_payoff_and_ensemble_decay",
+                "retire_failed_frozen_candidate",
+                "open_new_pre_registered_research_cycle_with_new_oos_anchor",
+            ]
+        )
+        recency = review.get("recency_ensemble_research", {}) or {}
+        recommended_focus.append(
+            "review_historical_recency_ensemble_results_and_freeze_only_if_gates_pass"
+            if recency.get("available")
+            else "run_04_recency_ensemble_research_on_historical_walk_forward_only"
+        )
     return {
         "decision": decision,
         "research_ready_without_phase2": research_ready,
@@ -873,8 +934,16 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     frozen_candidate = _read_json(report_path / "frozen_candidate_manifest.json")
     future_oos_readiness = _read_json(report_path / "future_oos_readiness.json")
     future_oos_evaluation = _read_csv(report_path / "future_oos_evaluation.csv")
+    future_oos_failure = _read_json(report_path / "future_oos_failure_summary.json")
+    recency_research = _read_csv(report_path / "recency_ensemble_summary.csv")
+    next_research_protocol = _read_json(report_path / "next_research_protocol.json")
     training = _read_json(report_path / "training_execution_summary.json")
-    missing_files = _missing_required_files(report_path)
+    missing_files = _missing_required_files(
+        report_path,
+        future_oos_evaluated=bool(
+            future_oos_readiness.get("evaluation_completed", False)
+        ),
+    )
     missing_profiles = _selected_missing_profiles(report_path)
     control_profile = str(decision.get("control_profile") or "")
     full_frame = _full_profiles(comparison)
@@ -1006,7 +1075,15 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "best_candidate_plan_row": _best_future_candidate(policy_plan),
             "readiness": future_oos_readiness,
             "evaluation_rows": _records(future_oos_evaluation),
+            "failure_summary": future_oos_failure,
         },
+        "recency_ensemble_research": {
+            "available": not recency_research.empty,
+            "policy_count": int(len(recency_research)),
+            "best_mean_rank_ic_policy": _best_row(recency_research, "mean_rank_ic"),
+            "rows": _records(recency_research),
+        },
+        "next_research_protocol": next_research_protocol,
         "frozen_candidate": frozen_candidate,
         "validation_charter_status": validation_charter_status,
         "forensics": _forensics_summary(
@@ -1130,7 +1207,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "next_action": {
             "action": action,
             "reasons": reasons,
-            "do_not_promote_from_current_holdout": not bool(policy.get("future_oos_ready", False)),
+            "do_not_promote_from_current_holdout": not (
+                bool(future_oos_readiness.get("evaluation_completed", False))
+                and future_oos_readiness.get("primary_candidate_passed") is True
+            ),
         },
         "decision_recommendation": decision.get("recommendation"),
     }
@@ -1198,6 +1278,7 @@ def _uncertainty_metric_summary(
 
 def auto_review_markdown(review: dict[str, Any]) -> str:
     policy = review["holdout"]["policy"]
+    future = review.get("future_oos", {}).get("readiness", {}) or {}
     phase2 = review.get("phase2_readiness", {})
     transition = review.get("phase1_transition_plan", {})
     forensics = review.get("forensics", {}) or {}
@@ -1227,6 +1308,7 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         ),
         {},
     )
+    recency = review.get("recency_ensemble_research", {}) or {}
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -1243,10 +1325,11 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"- Missing required files: `{review['report_completeness']['missing_required_files']}`",
         f"- Missing selected profiles: `{len(review['report_completeness']['missing_selected_profiles'])}`",
         "",
-        "## Training",
+        "## Source Run Training Metadata",
         f"- Executed scopes: `{review['training'].get('training_executed_count')}`",
         f"- Reused scopes: `{review['training'].get('training_skipped_count')}`",
         f"- All scopes reused: `{review['training'].get('all_training_scopes_reused')}`",
+        "- These counts describe the source experiment run; future-OOS evaluation itself performs zero fit operations.",
         "",
         "## CV Read",
         f"- Control profile: `{review['control_profile']}`",
@@ -1265,13 +1348,22 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         _row_metric_line(review["blends"]["best_top_10_lift_blend"]),
         "",
         "## Holdout Policy",
-        f"- Future OOS ready: `{policy.get('future_oos_ready')}`",
-        f"- Future OOS preferred ready: `{policy.get('future_oos_preferred_ready')}`",
-        f"- New bars since anchor: `{policy.get('new_bars_since_anchor')}`",
-        f"- Min bars remaining: `{policy.get('min_new_bars_remaining')}`",
-        f"- Preferred bars remaining: `{policy.get('preferred_new_bars_remaining')}`",
+        f"- Future OOS ready: `{future.get('ready_for_evaluation', policy.get('future_oos_ready'))}`",
+        f"- Evaluation completed: `{future.get('evaluation_completed')}`",
+        f"- Primary candidate passed: `{future.get('primary_candidate_passed')}`",
+        f"- Evaluation state: `{future.get('evaluation_state')}`",
+        f"- New bars since anchor: `{future.get('new_labeled_rows', policy.get('new_bars_since_anchor'))}`",
+        f"- Min bars remaining: `{future.get('min_rows_remaining', policy.get('min_new_bars_remaining'))}`",
+        f"- Preferred bars remaining: `{future.get('preferred_rows_remaining', policy.get('preferred_new_bars_remaining'))}`",
         f"- Min ready at: `{policy.get('min_ready_at')}`",
         f"- Preferred ready at: `{policy.get('preferred_ready_at')}`",
+        "",
+        "## Post-Failure Research",
+        f"- Recency ensemble research available: `{recency.get('available')}`",
+        f"- Policies compared: `{recency.get('policy_count', 0)}`",
+        f"- Best historical rolling-origin policy: `{recency.get('best_mean_rank_ic_policy', {}).get('policy_name', '')}`",
+        f"- Failed OOS used for policy selection: `{recency.get('best_mean_rank_ic_policy', {}).get('failed_future_oos_used_for_selection', '')}`",
+        f"- New future-OOS anchor required: `{review.get('next_research_protocol', {}).get('new_future_oos_anchor_required')}`",
         "",
         "## Holdout Diagnostic Read",
         "- Best holdout row by mean IC:",

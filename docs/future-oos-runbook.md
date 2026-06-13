@@ -116,3 +116,17 @@ When evaluation is complete, verify:
 - `blocked_required_candidate`: repair the integrity or data-contract defect
   without changing the frozen candidate.
 
+## June 13, 2026 Outcome
+
+`control_fold_ensemble_v1` completed the required evaluation on 737 mature
+labeled rows. Artifact integrity and no-refit checks passed, but the candidate
+failed the pre-registered evidence gates. Its status is
+`retired_after_failed_future_oos`.
+
+The next cycle must:
+
+1. Preserve this manifest and evaluation unchanged.
+2. Use the failed window for root-cause diagnosis only.
+3. Select rolling/recency policies on historical rolling-origin data.
+4. Freeze a replacement candidate before a new future-OOS anchor.
+5. Never tune the replacement threshold or weights against this failed window.

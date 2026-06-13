@@ -1999,6 +1999,7 @@ experiments:
     min_rows: 720
     preferred_rows: 2160
     block_length: 24
+    diagnostic_block_hours: 168
     bootstrap_repeats: 500
     confidence_level: 0.95
     random_seed: 42
@@ -2011,6 +2012,50 @@ experiments:
       min_precision_lift_vs_prevalence: 1.05
       min_f1_skill_vs_rate_random: 0.00
       max_pred_long_rate: 0.70
+  frozen_candidate_outcomes:
+    control_fold_ensemble_v1:
+      evaluated_at: "2026-06-13"
+      source_run_id: "20260605_211102"
+      manifest_hash: "5c2acd94b3ea46a509b8a8c8b7327f6cc5ed34045a4e97e21a0b34b3313ae302"
+      status: failed_future_oos_retired
+      rows: 737
+      rank_ic: -0.0075047
+      prauc_lift_vs_prevalence: 1.026737
+      precision_lift_vs_prevalence: 1.06091
+      f1_skill_vs_rate_random: 0.0218712
+      top_10_lift: 0.990122
+      top_10_forward_return: -0.0016553
+      selected_forward_return: -0.0030813
+      pred_long_rate: 0.7937585
+      decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
+  next_research_cycle:
+    status: open_after_failed_future_oos
+    source_failed_candidate_id: control_fold_ensemble_v1
+    failed_oos_role: diagnostic_and_future_training_data_only
+    same_window_selection_allowed: false
+    new_future_oos_anchor_required: true
+    primary_hypothesis: causal_rolling_retraining_and_recency_aware_ensemble
+    rolling_origin:
+      enabled: true
+      train_bars: 5040
+      val_bars: 1080
+      test_bars: 720
+      step_bars: 720
+      purge_bars: 24
+      embargo_bars: 6
+      selection_rule: compare_only_on_historical_walk_forward_test_windows
+    recency_ensemble:
+      enabled: true
+      policies:
+        - {name: latest_only, policy: latest_only}
+        - {name: recent_3_equal, policy: equal_recent_k, recent_k: 3}
+        - {name: recent_6_equal, policy: equal_recent_k, recent_k: 6}
+        - {name: decay_half_life_3, policy: exponential_decay, half_life_folds: 3.0}
+        - {name: decay_half_life_6, policy: exponential_decay, half_life_folds: 6.0}
+      eligibility_rule: model_validation_end_must_precede_target_test_start
+      selection_data: pre_new_anchor_walk_forward_only
+      failed_future_oos_use: diagnostics_only_no_policy_selection
+      promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
   experiment_memory:
     enabled: true
     reject_retests: true

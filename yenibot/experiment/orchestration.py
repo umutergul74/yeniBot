@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 from pathlib import Path
 from typing import Any
 import pandas as pd
@@ -14,7 +15,6 @@ from yenibot.experiment.artifacts import (
     _write_experiment_bundle,
     _write_experiment_slim_bundle,
 )
-
 from yenibot.experiment.classification import (
     _causal_threshold_policy_frames,
     _classification_skill_frames,
@@ -27,7 +27,6 @@ from yenibot.experiment.classification import (
     _write_validation_charter_proposal,
     _write_validation_charter_review,
 )
-
 from yenibot.experiment.charter import write_validation_charter_status
 
 from yenibot.experiment.common import (
@@ -186,6 +185,7 @@ from yenibot.experiment.root_cause import (
     _write_phase1_blocker_action_plan,
     _write_root_cause_reports,
 )
+from yenibot.experiment.rolling_research import research_protocol_payload
 
 from yenibot.experiment.separation import (
     _bad_fold_signature_frame,
@@ -1225,6 +1225,40 @@ def write_experiment_diagnostics(
         manifests=frozen_candidate_manifests,
         preflight=future_oos_preflight_status,
     )
+    recency_research_dir = run_dir / "recency_research"
+    recency_research_summary = pd.DataFrame()
+    if recency_research_dir.exists():
+        for source in sorted(recency_research_dir.glob("recency_ensemble_*")):
+            if not source.is_file() or source.name.startswith("cross_predictions_fold_"):
+                continue
+            shutil.copy2(source, report_dir / source.name)
+        summary_path = recency_research_dir / "recency_ensemble_summary.csv"
+        if summary_path.exists():
+            recency_research_summary = pd.read_csv(summary_path)
+    next_research_protocol = research_protocol_payload(diagnostic_config)
+    _write_json(
+        report_dir / "next_research_protocol.json",
+        next_research_protocol,
+    )
+    (report_dir / "next_research_protocol.md").write_text(
+        "\n".join(
+            [
+                "# Next Phase 1 Research Protocol",
+                "",
+                f"- Status: `{next_research_protocol.get('status')}`",
+                f"- Failed candidate: `{next_research_protocol.get('source_failed_candidate_id')}`",
+                f"- Failed OOS role: `{next_research_protocol.get('failed_oos_role')}`",
+                f"- Same-window selection allowed: `{next_research_protocol.get('same_window_selection_allowed')}`",
+                f"- New future-OOS anchor required: `{next_research_protocol.get('new_future_oos_anchor_required')}`",
+                "- Phase 2 code allowed: `False`",
+                "",
+                "Candidate policies must be selected on historical rolling-origin windows only. "
+                "The failed future-OOS window is diagnostic evidence, not a policy-selection set.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     registry_record = append_experiment_registry(
         registry_path=experiment_root(checkpoint_dir) / "experiment_registry.jsonl",
         snapshot_path=report_dir / "experiment_registry_snapshot.jsonl",
@@ -1251,6 +1285,24 @@ def write_experiment_diagnostics(
     decision["future_oos_preflight"] = future_oos_preflight_status
     decision["future_oos_evaluation"] = future_oos_evaluation.to_dict(orient="records")
     decision["future_oos_readiness"] = future_oos_readiness
+    decision["recency_ensemble_research"] = recency_research_summary.to_dict(
+        orient="records"
+    )
+    decision["next_research_protocol"] = next_research_protocol
+    if bool(future_oos_readiness.get("evaluation_completed", False)):
+        if future_oos_readiness.get("primary_candidate_passed") is True:
+            decision["recommendation"] = "review_passed_frozen_candidate_for_phase2_readiness"
+        else:
+            decision["recommendation"] = (
+                "retire_failed_frozen_candidate_and_open_new_research_anchor"
+            )
+        decision["frozen_candidate_outcome"] = {
+            "candidate_id": future_oos_readiness.get("primary_candidate_id"),
+            "evaluation_state": future_oos_readiness.get("evaluation_state"),
+            "passed": future_oos_readiness.get("primary_candidate_passed"),
+            "promotion_allowed": future_oos_readiness.get("promotion_allowed"),
+            "next_action": decision["recommendation"],
+        }
     decision["experiment_registry_event_id"] = registry_record["event_id"]
     decision["performance_gap_analysis"] = performance_gap_analysis.to_dict(orient="records")
     decision["fold_stability_summary"] = fold_stability_summary.to_dict(orient="records")
