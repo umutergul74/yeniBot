@@ -247,6 +247,13 @@ def _missing_required_files(
                     "recency_ensemble_decision.md",
                 ]
             )
+        if bool((protocol.get("replacement_candidate", {}) or {}).get("enabled", False)):
+            required.extend(
+                [
+                    "replacement_candidate_fit.json",
+                    "replacement_candidate_fit.md",
+                ]
+            )
     return [name for name in required if not (report_dir / name).exists()]
 
 
@@ -427,6 +434,7 @@ def _next_action(
     cv_promotable: list[dict[str, Any]],
     decision: dict[str, Any],
     future_oos: dict[str, Any],
+    replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     if missing_files:
@@ -446,6 +454,13 @@ def _next_action(
     if bool(future_oos.get("evaluation_completed", False)) and not bool(
         future_oos.get("primary_candidate_passed", False)
     ):
+        replacement = replacement_candidate_fit or {}
+        if replacement.get("status") == "fit_complete_manifest_pin_required":
+            reasons.append("replacement_candidate_fit_complete_manifest_pin_required")
+            return (
+                "pin_replacement_candidate_manifest_and_activate_new_oos_anchor",
+                reasons,
+            )
         reasons.append("frozen_primary_candidate_failed_future_oos")
         return "retire_failed_frozen_candidate_and_open_new_research_anchor", reasons
     if cv_promotable:
@@ -856,13 +871,23 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
     if "future_unseen_oos_not_ready" in blockers:
         recommended_focus.append("wait_for_new_unseen_bars_before_any_promotion")
     if "future_unseen_oos_candidate_failed" in blockers:
-        recommended_focus.extend(
-            [
-                "diagnose_future_oos_ranking_payoff_and_ensemble_decay",
-                "retire_failed_frozen_candidate",
-                "open_new_pre_registered_research_cycle_with_new_oos_anchor",
-            ]
-        )
+        replacement = review.get("replacement_candidate_fit", {}) or {}
+        if replacement.get("status") == "fit_complete_manifest_pin_required":
+            recommended_focus.extend(
+                [
+                    "review_and_pin_replacement_candidate_manifest_hash",
+                    "activate_replacement_candidate_new_future_oos_anchor",
+                    "do_not_reselect_policy_on_failed_or_new_oos_rows",
+                ]
+            )
+        else:
+            recommended_focus.extend(
+                [
+                    "diagnose_future_oos_ranking_payoff_and_ensemble_decay",
+                    "retire_failed_frozen_candidate",
+                    "open_new_pre_registered_research_cycle_with_new_oos_anchor",
+                ]
+            )
         recency = review.get("recency_ensemble_research", {}) or {}
         recommended_focus.append(
             "review_historical_recency_ensemble_results_and_freeze_only_if_gates_pass"
@@ -952,6 +977,9 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     )
     recency_policy_decision = _read_json(
         report_path / "recency_ensemble_decision.json"
+    )
+    replacement_candidate_fit = _read_json(
+        report_path / "replacement_candidate_fit.json"
     )
     next_research_protocol = _read_json(report_path / "next_research_protocol.json")
     training = _read_json(report_path / "training_execution_summary.json")
@@ -1053,6 +1081,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         cv_promotable=cv_promotable,
         decision=decision,
         future_oos=future_oos_readiness,
+        replacement_candidate_fit=replacement_candidate_fit,
     )
     review = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1102,6 +1131,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "paired_comparison_rows": _records(recency_paired_comparison),
             "decision": recency_policy_decision,
         },
+        "replacement_candidate_fit": replacement_candidate_fit,
         "next_research_protocol": next_research_protocol,
         "frozen_candidate": frozen_candidate,
         "validation_charter_status": validation_charter_status,

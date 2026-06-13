@@ -1145,9 +1145,11 @@ def _phase1_decision_ladder_payload(
     phase2_readiness: dict[str, Any] | None,
     settings: dict[str, Any],
     recency_policy_decision: dict[str, Any] | None = None,
+    replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     readiness = phase2_readiness or {}
     recency_decision = recency_policy_decision or {}
+    replacement_fit = replacement_candidate_fit or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
     only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
         {
@@ -1194,7 +1196,14 @@ def _phase1_decision_ladder_payload(
     recency_ready = bool(
         recency_decision.get("candidate_ready_for_preregistration", False)
     )
-    if future_oos_failed and recency_ready:
+    replacement_fit_complete = (
+        replacement_fit.get("status") == "fit_complete_manifest_pin_required"
+    )
+    if future_oos_failed and replacement_fit_complete:
+        recommended_next_action = (
+            "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+        )
+    elif future_oos_failed and recency_ready:
         recommended_next_action = (
             "explicitly_review_and_preregister_historical_recency_winner"
         )
@@ -1240,6 +1249,10 @@ def _phase1_decision_ladder_payload(
         "recency_policy_decision_status": recency_decision.get("status"),
         "recency_recommended_policy": recency_decision.get("recommended_policy"),
         "replacement_candidate_ready_for_preregistration": recency_ready,
+        "replacement_candidate_fit_status": replacement_fit.get("status"),
+        "replacement_candidate_manifest_pin_required": bool(
+            replacement_fit.get("manifest_pin_required", False)
+        ),
         "new_future_oos_anchor_required": bool(future_oos_failed),
         "why_no_04": (
             ""

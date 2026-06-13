@@ -237,6 +237,7 @@ def research_protocol_payload(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "rolling_origin": cycle.get("rolling_origin", {}),
         "recency_ensemble": cycle.get("recency_ensemble", {}),
+        "replacement_candidate": cycle.get("replacement_candidate", {}),
         "phase2_code_allowed": False,
     }
 

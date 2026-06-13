@@ -13,6 +13,10 @@ from yenibot.experiment.training import run_profile_experiment
 from yenibot.experiment.orchestration import run_experiment_matrix
 from yenibot.experiment.orchestration import write_experiment_diagnostics
 from yenibot.experiment.rolling_research import run_recency_ensemble_research
+from yenibot.experiment.replacement import (
+    publish_replacement_candidate_reports,
+    run_replacement_candidate_fit,
+)
 
 __all__ = [
     'experiment_settings',
@@ -28,4 +32,6 @@ __all__ = [
     'run_experiment_matrix',
     'write_experiment_diagnostics',
     'run_recency_ensemble_research',
+    'publish_replacement_candidate_reports',
+    'run_replacement_candidate_fit',
 ]

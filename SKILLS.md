@@ -29,9 +29,14 @@ The current safe control profile is configured in `config.yaml`:
   real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
   coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
   `all_eligible_equal` retained stronger top-decile lift. Do not repeat the
-  broad recency sweep. The only open follow-up is the committed causal
-  `dual_horizon_all_recent3_50_50` policy and the explicit balanced
-  non-inferiority review; Phase 1 gates remain unchanged.
+  broad recency sweep.
+- Bundle 70 rejected `dual_horizon_all_recent3_50_50`: its IC improvement was
+  real, but mean F1 was `0.4383` and positive top-decile return occurred in
+  only `69.4%` of folds. `recent_3_equal` alone cleared every committed
+  balanced non-inferiority gate. The active follow-up is therefore
+  `control_recent3_equal_v2`, built through the June 13, 2026 01:00 UTC
+  pre-registration anchor. Its generated artifact manifest must be reviewed
+  and pinned before it becomes the new frozen primary candidate.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 

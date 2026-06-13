@@ -146,7 +146,7 @@ def _candidate_predictions(
     component_predictions: dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
     profiles = [str(item) for item in manifest.get("profiles", []) or []]
-    if manifest.get("candidate_type") == "profile":
+    if manifest.get("candidate_type") in {"profile", "recency_profile"}:
         return _plain_frame(
             component_predictions.get(profiles[0], pd.DataFrame())
         )
@@ -389,6 +389,12 @@ def evaluate_future_oos(
             required = bool(
                 manifest.get("required_for_evaluation", candidate_id == primary_id)
             )
+            candidate_status = str(manifest.get("candidate_status", "")).lower()
+            if "pending" in candidate_status:
+                optional_candidate_warnings.append(
+                    f"{candidate_id}:candidate_not_activated_for_future_oos"
+                )
+                continue
             integrity_errors = verify_frozen_manifest_artifacts(manifest, run_dir=run_path)
             if integrity_errors:
                 messages = [f"{candidate_id}:{reason}" for reason in integrity_errors]

@@ -9,7 +9,6 @@ import pandas as pd
 from yenibot.diagnostics import (
     write_phase1_diagnostic_bundle,
 )
-
 from yenibot.experiment.artifacts import (
     _write_experiment_bundle,
     _write_experiment_slim_bundle,
@@ -27,7 +26,6 @@ from yenibot.experiment.classification import (
     _write_validation_charter_review,
 )
 from yenibot.experiment.charter import write_validation_charter_status
-
 from yenibot.experiment.common import (
     _cfg,
     _hash_payload,
@@ -37,7 +35,6 @@ from yenibot.experiment.common import (
     _slug,
     _write_json,
 )
-
 from yenibot.experiment.configuration import (
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
@@ -57,7 +54,6 @@ from yenibot.experiment.configuration import (
     profile_config,
     resolve_experiment_run_id,
 )
-
 from yenibot.experiment.drift import (
     _feature_drift_forensics_frame,
     _feature_family_drift_summary_frame,
@@ -76,7 +72,6 @@ from yenibot.experiment.drift import (
     _write_score_reversal_context_audit,
     _write_score_separation_forensics,
 )
-
 from yenibot.experiment.ensembles import (
     _best_profile_blend,
     _profile_blend_entries,
@@ -95,38 +90,32 @@ from yenibot.experiment.ensembles import (
     _write_seed_audit_files,
     _write_seed_ensemble_files,
 )
-
 from yenibot.experiment.execution import (
     diagnostics_status_path,
     traced_workflow,
     training_status_path,
     workflow_checkpoint,
 )
-
 from yenibot.experiment.evidence import (
     _model_evidence_uncertainty_frame,
     _probability_calibration_comparison_frames,
     _write_model_evidence_uncertainty,
     _write_probability_calibration_comparison,
 )
-
 from yenibot.experiment.dashboard import (
     attach_active_charter_status,
     write_model_performance_dashboard,
 )
-
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 from yenibot.experiment.oos_preflight import (
     future_oos_preflight,
     future_oos_preflight_markdown,
 )
-
 from yenibot.experiment.folds import (
     _fold_stability_forensics_frame,
     _fold_stability_summary_frame,
 )
-
 from yenibot.experiment.holdout import (
     _aggregate_holdout_predictions,
     _attach_holdout_cv_threshold_metrics,
@@ -152,7 +141,6 @@ from yenibot.experiment.holdout import (
     _write_holdout_reservation,
     _write_performance_gap_analysis,
 )
-
 from yenibot.experiment.payoff import (
     _frozen_policy_robustness_frame,
     _payoff_alignment_frame,
@@ -163,16 +151,13 @@ from yenibot.experiment.payoff import (
     _write_payoff_alignment,
     _write_payoff_policy_robustness,
 )
-
 from yenibot.experiment.rank_ic import (
     _rank_ic_stability_evidence_frames,
     _rank_ic_uncertainty_frames,
     _write_rank_ic_stability_evidence,
     _write_rank_ic_uncertainty,
 )
-
 from yenibot.experiment.registry import append_experiment_registry
-
 from yenibot.experiment.root_cause import (
     _bad_fold_mechanism_summary_frame,
     _historical_experiment_memory_audit_frame,
@@ -188,7 +173,7 @@ from yenibot.experiment.rolling_research import (
     publish_recency_research_reports,
     research_protocol_payload,
 )
-
+from yenibot.experiment.replacement import publish_replacement_candidate_reports
 from yenibot.experiment.separation import (
     _bad_fold_signature_frame,
     _score_separation_forensics_frame,
@@ -1231,6 +1216,7 @@ def write_experiment_diagnostics(
     recency_research_summary, recency_policy_decision = (
         publish_recency_research_reports(recency_research_dir, report_dir)
     )
+    replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
     next_research_protocol = research_protocol_payload(diagnostic_config)
     _write_json(
         report_dir / "next_research_protocol.json",
@@ -1285,10 +1271,13 @@ def write_experiment_diagnostics(
         orient="records"
     )
     decision["recency_ensemble_decision"] = recency_policy_decision
+    decision["replacement_candidate_fit"] = replacement_candidate_fit
     decision["next_research_protocol"] = next_research_protocol
     if bool(future_oos_readiness.get("evaluation_completed", False)):
         if future_oos_readiness.get("primary_candidate_passed") is True:
             decision["recommendation"] = "review_passed_frozen_candidate_for_phase2_readiness"
+        elif replacement_candidate_fit.get("status") == "fit_complete_manifest_pin_required":
+            decision["recommendation"] = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
         else:
             decision["recommendation"] = (
                 "retire_failed_frozen_candidate_and_open_new_research_anchor"
@@ -1467,6 +1456,7 @@ def write_experiment_diagnostics(
         phase2_readiness={},
         settings=settings,
         recency_policy_decision=recency_policy_decision,
+        replacement_candidate_fit=replacement_candidate_fit,
     )
     _write_phase1_blocker_action_plan(report_dir, pre_phase1_blocker_action_plan)
     _write_root_cause_reports(
@@ -1570,6 +1560,7 @@ def write_experiment_diagnostics(
         phase2_readiness=decision["phase2_readiness"],
         settings=settings,
         recency_policy_decision=recency_policy_decision,
+        replacement_candidate_fit=replacement_candidate_fit,
     )
     decision["phase1_blocker_action_plan"] = phase1_blocker_action_plan.to_dict(orient="records")
     decision["phase1_blocker_root_cause"] = phase1_blocker_root_cause.to_dict(orient="records")
@@ -1775,6 +1766,7 @@ def write_experiment_diagnostics(
         "frozen_candidate_index": frozen_candidate_index,
         "future_oos_evaluation": future_oos_evaluation,
         "future_oos_readiness": future_oos_readiness,
+        "replacement_candidate_fit": replacement_candidate_fit,
         "holdout_evaluation": holdout_evaluation,
         "holdout_score_bands": holdout_score_bands,
         "holdout_thresholds": holdout_thresholds,

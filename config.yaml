@@ -1994,6 +1994,17 @@ experiments:
         status: preregistered_benchmark
         evaluation_role: optional_historical_benchmark
         required_for_evaluation: false
+      - candidate_id: control_recent3_equal_v2
+        candidate_type: recency_profile
+        profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+        source_run_id: "20260613_134953"
+        anchor_data_end: "2026-06-13 01:00:00+00:00"
+        fold_scope: replacement_recent3
+        recency_policy: equal_recent_k
+        recent_k: 3
+        status: preregistration_build_manifest_pin_pending
+        evaluation_role: replacement_candidate_pending_pin
+        required_for_evaluation: false
   future_oos_validation:
     enabled: true
     min_rows: 720
@@ -2095,6 +2106,24 @@ experiments:
       selection_data: pre_new_anchor_walk_forward_only
       failed_future_oos_use: diagnostics_only_no_policy_selection
       promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
+    replacement_candidate:
+      enabled: true
+      candidate_id: control_recent3_equal_v2
+      candidate_type: recency_profile
+      profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      policy_name: recent_3_equal
+      policy: equal_recent_k
+      recent_k: 3
+      selection_track: balanced_noninferiority
+      selection_data: historical_walk_forward_only
+      anchor_data_end: "2026-06-13 01:00:00+00:00"
+      source_run_id: "20260613_134953"
+      fold_scope: replacement_recent3
+      resume_existing: true
+      force_retrain: false
+      failed_future_oos_use: fit_only_after_retirement_never_policy_selection
+      status: approved_for_fit_manifest_pin_required
+      promotion_allowed: false
   experiment_memory:
     enabled: true
     reject_retests: true

@@ -74,6 +74,7 @@ def frozen_manifest_source_run_dir(
 def _artifact_records(scope_dir: Path, run_dir: Path) -> list[dict[str, Any]]:
     paths = [
         scope_dir / "training_manifest.json",
+        scope_dir / "replacement_candidate_fit.json",
         *sorted(scope_dir.glob("model_fold_*.pt")),
         *sorted(scope_dir.glob("scaler_fold_*.pkl")),
         *sorted(scope_dir.glob("hmm_fold_*.pkl")),
@@ -249,15 +250,20 @@ def freeze_candidate_manifests(
         errors: list[str] = [source_run_error] if source_run_error else []
         profiles = (
             [str(spec.get("profile", ""))]
-            if candidate_type == "profile"
+            if candidate_type in {"profile", "recency_profile"}
             else [str(item) for item in spec.get("profiles", []) or []]
+        )
+        candidate_anchor = pd.to_datetime(
+            spec.get("anchor_data_end", anchor),
+            utc=True,
+            errors="raise",
         )
         for profile in profiles:
             component, error = _profile_component(
                 profile=profile,
                 fold_scope=fold_scope,
                 run_dir=source_run_path,
-                anchor=anchor,
+                anchor=candidate_anchor,
             )
             if error:
                 errors.append(error)
@@ -266,7 +272,7 @@ def freeze_candidate_manifests(
 
         diagnostic_entry = (
             profile_entries.get(str(spec.get("profile")))
-            if candidate_type == "profile"
+            if candidate_type in {"profile", "recency_profile"}
             else all_entries.get(
                 f"blend_{str(spec.get('candidate_id', '')).removesuffix('_v1')}"
             )
@@ -284,6 +290,43 @@ def freeze_candidate_manifests(
                     diagnostic_entry = entry
                     break
 
+        replacement_metadata: dict[str, Any] = {}
+        if candidate_type == "recency_profile":
+            replacement_path = (
+                source_run_path
+                / _slug(str(spec.get("profile", "")))
+                / fold_scope
+                / "replacement_candidate_fit.json"
+            )
+            if not replacement_path.exists():
+                errors.append(
+                    f"missing_replacement_candidate_fit:{candidate_id}:{fold_scope}"
+                )
+            else:
+                replacement_metadata = json.loads(
+                    replacement_path.read_text(encoding="utf-8")
+                )
+                if replacement_metadata.get("candidate_id") != candidate_id:
+                    errors.append(
+                        "replacement_candidate_id_mismatch:"
+                        f"{replacement_metadata.get('candidate_id')}:{candidate_id}"
+                    )
+                if pd.to_datetime(
+                    replacement_metadata.get("anchor_data_end"),
+                    utc=True,
+                    errors="coerce",
+                ) != candidate_anchor:
+                    errors.append("replacement_anchor_mismatch")
+        configured_threshold = spec.get("threshold")
+        if isinstance(configured_threshold, dict):
+            threshold_payload = _configured_threshold_payload(
+                spec,
+                diagnostic_entry or {},
+            )
+        elif replacement_metadata.get("threshold"):
+            threshold_payload = dict(replacement_metadata["threshold"])
+        else:
+            threshold_payload = _threshold_payload(diagnostic_entry or {})
         content = {
             "protocol_version": str(frozen_cfg.get("protocol_version", "v1")),
             "candidate_id": candidate_id,
@@ -298,12 +341,20 @@ def freeze_candidate_manifests(
             "required_for_evaluation": required_for_evaluation,
             "source_run_id": source_run_id,
             "anchor_run_id": str(frozen_cfg.get("anchor_run_id", "")),
-            "anchor_data_end": anchor.isoformat(),
+            "anchor_data_end": candidate_anchor.isoformat(),
             "artifact_policy": str(frozen_cfg.get("artifact_policy", "")),
             "profiles": profiles,
             "blend_method": str(spec.get("blend_method", "")),
             "weights": [float(item) for item in spec.get("weights", []) or []],
-            "threshold": _configured_threshold_payload(spec, diagnostic_entry or {}),
+            "threshold": threshold_payload,
+            "recency_policy": str(spec.get("recency_policy", "")),
+            "recent_k": int(spec.get("recent_k", 0) or 0),
+            "selected_model_folds": list(
+                replacement_metadata.get("selected_model_folds", []) or []
+            ),
+            "selection_evidence_hash": str(
+                replacement_metadata.get("selection_evidence_hash", "")
+            ),
             "components": components,
             "available": enabled and not errors and len(components) == len(profiles),
             "unavailable_reasons": errors,
