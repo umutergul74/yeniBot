@@ -89,6 +89,7 @@ def recency_weights(
     policy: str,
     recent_k: int | None = None,
     half_life_folds: float | None = None,
+    components: list[dict[str, Any]] | None = None,
 ) -> dict[int, float]:
     """Create normalized weights using only models available by the target fold."""
 
@@ -115,6 +116,36 @@ def recency_weights(
         selected = eligible
         ages = np.asarray([target_fold - fold for fold in selected], dtype=float)
         raw = np.power(0.5, ages / half_life)
+    elif policy == "weighted_policy_blend":
+        blend_components = list(components or [])
+        if len(blend_components) < 2:
+            raise ValueError(
+                "weighted_policy_blend requires at least two policy components"
+            )
+        combined = {fold: 0.0 for fold in eligible}
+        total_component_weight = 0.0
+        for component in blend_components:
+            component_weight = float(component.get("weight", 0.0))
+            if component_weight <= 0:
+                raise ValueError("Policy blend component weights must be positive")
+            component_policy = str(component.get("policy", ""))
+            if component_policy == "weighted_policy_blend":
+                raise ValueError("Nested weighted_policy_blend is not supported")
+            component_weights = recency_weights(
+                eligible,
+                target_fold=target_fold,
+                policy=component_policy,
+                recent_k=component.get("recent_k"),
+                half_life_folds=component.get("half_life_folds"),
+            )
+            for fold, weight in component_weights.items():
+                combined[fold] += component_weight * weight
+            total_component_weight += component_weight
+        selected = [fold for fold, weight in combined.items() if weight > 0]
+        raw = np.asarray(
+            [combined[fold] / total_component_weight for fold in selected],
+            dtype=float,
+        )
     else:
         raise ValueError(f"Unknown recency policy: {policy}")
     normalized = raw / raw.sum()
@@ -131,6 +162,7 @@ def aggregate_recency_predictions(
     policy: str,
     recent_k: int | None = None,
     half_life_folds: float | None = None,
+    components: list[dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
     """Aggregate cross-model predictions after enforcing as-of eligibility."""
 
@@ -147,6 +179,7 @@ def aggregate_recency_predictions(
         policy=policy,
         recent_k=recent_k,
         half_life_folds=half_life_folds,
+        components=components,
     )
     frame = frame.loc[frame["model_fold"].isin(weights)].copy()
     frame["model_weight"] = frame["model_fold"].map(weights).astype(float)
@@ -174,13 +207,15 @@ def aggregate_recency_predictions(
         raise ValueError("Recency weights do not sum to one for every prediction timestamp")
     out["target_fold"] = int(target_fold)
     out["policy"] = policy
-    out["policy_parameters"] = (
-        f"recent_k={recent_k}"
-        if policy == "equal_recent_k"
-        else f"half_life_folds={half_life_folds}"
-        if policy == "exponential_decay"
-        else ""
-    )
+    if policy == "equal_recent_k":
+        parameters = f"recent_k={recent_k}"
+    elif policy == "exponential_decay":
+        parameters = f"half_life_folds={half_life_folds}"
+    elif policy == "weighted_policy_blend":
+        parameters = json.dumps(components or [], sort_keys=True)
+    else:
+        parameters = ""
+    out["policy_parameters"] = parameters
     return out.sort_values("timestamp").reset_index(drop=True)
 
 
@@ -376,6 +411,7 @@ def _policy_kwargs(policy: dict[str, Any]) -> dict[str, Any]:
         "policy": str(policy["policy"]),
         "recent_k": policy.get("recent_k"),
         "half_life_folds": policy.get("half_life_folds"),
+        "components": policy.get("components"),
     }
 
 
@@ -544,7 +580,11 @@ def _paired_policy_comparison(
             )
     comparison = pd.DataFrame(rows, columns=columns)
     summary_by_policy = summary.set_index("policy_name")
-    gates = comparison_config.get("gates", {}) or {}
+    strict_gates = comparison_config.get("gates", {}) or {}
+    balanced_gates = (
+        comparison_config.get("balanced_noninferiority_gates", {}) or {}
+    )
+    balanced_track_enabled = bool(balanced_gates)
     decisions: list[dict[str, Any]] = []
     control = summary_by_policy.loc[control_policy]
     rank_rows = comparison.loc[comparison["metric"].eq("rank_ic")].set_index(
@@ -557,35 +597,39 @@ def _paired_policy_comparison(
             if candidate_policy in rank_rows.index
             else {}
         )
-        checks = {
+        strict_checks = {
             "mean_rank_ic_delta": (
                 float(candidate["mean_rank_ic"] - control["mean_rank_ic"])
-                >= float(gates.get("min_mean_rank_ic_delta", 0.005))
+                >= float(strict_gates.get("min_mean_rank_ic_delta", 0.005))
             ),
             "std_rank_ic_delta": (
                 float(candidate["std_rank_ic"] - control["std_rank_ic"])
-                <= float(gates.get("max_std_rank_ic_delta", 0.005))
+                <= float(strict_gates.get("max_std_rank_ic_delta", 0.005))
             ),
             "positive_ic_fraction_delta": (
                 float(
                     candidate["positive_ic_fraction"]
                     - control["positive_ic_fraction"]
                 )
-                >= float(gates.get("min_positive_ic_fraction_delta", 0.0))
+                >= float(
+                    strict_gates.get("min_positive_ic_fraction_delta", 0.0)
+                )
             ),
             "worst_5_rank_ic_delta": (
                 float(
                     candidate["worst_5_rank_ic_mean"]
                     - control["worst_5_rank_ic_mean"]
                 )
-                >= float(gates.get("min_worst_5_rank_ic_delta", 0.0))
+                >= float(strict_gates.get("min_worst_5_rank_ic_delta", 0.0))
             ),
             "top_10_lift_delta": (
                 float(
                     candidate["mean_top_10_lift"]
                     - control["mean_top_10_lift"]
                 )
-                >= float(gates.get("min_mean_top_10_lift_delta", 0.02))
+                >= float(
+                    strict_gates.get("min_mean_top_10_lift_delta", 0.02)
+                )
             ),
             "positive_selected_return_fraction_delta": (
                 float(
@@ -593,7 +637,7 @@ def _paired_policy_comparison(
                     - control["positive_selected_return_fraction"]
                 )
                 >= float(
-                    gates.get(
+                    strict_gates.get(
                         "min_positive_selected_return_fraction_delta",
                         0.0,
                     )
@@ -606,20 +650,133 @@ def _paired_policy_comparison(
                         np.nan,
                     )
                 )
-                >= float(gates.get("min_rank_ic_delta_probability", 0.80))
+                >= float(
+                    strict_gates.get("min_rank_ic_delta_probability", 0.80)
+                )
             ),
             "paired_rank_ic_win_rate": (
                 float(rank_pair.get("candidate_win_rate_ex_ties", np.nan))
-                >= float(gates.get("min_rank_ic_win_rate", 0.55))
+                >= float(strict_gates.get("min_rank_ic_win_rate", 0.55))
             ),
         }
-        failed = [name for name, passed in checks.items() if not bool(passed)]
+        top_10_control = float(control["mean_top_10_lift"])
+        balanced_checks = {
+            "mean_rank_ic_delta": (
+                float(candidate["mean_rank_ic"] - control["mean_rank_ic"])
+                >= float(balanced_gates.get("min_mean_rank_ic_delta", 0.005))
+            ),
+            "std_rank_ic_delta": (
+                float(candidate["std_rank_ic"] - control["std_rank_ic"])
+                <= float(balanced_gates.get("max_std_rank_ic_delta", 0.005))
+            ),
+            "positive_ic_fraction_delta": (
+                float(
+                    candidate["positive_ic_fraction"]
+                    - control["positive_ic_fraction"]
+                )
+                >= float(
+                    balanced_gates.get(
+                        "min_positive_ic_fraction_delta",
+                        0.0,
+                    )
+                )
+            ),
+            "worst_5_rank_ic_delta": (
+                float(
+                    candidate["worst_5_rank_ic_mean"]
+                    - control["worst_5_rank_ic_mean"]
+                )
+                >= float(
+                    balanced_gates.get("min_worst_5_rank_ic_delta", 0.0)
+                )
+            ),
+            "top_10_lift_absolute": (
+                float(candidate["mean_top_10_lift"])
+                >= float(balanced_gates.get("min_mean_top_10_lift", 1.0))
+            ),
+            "top_10_lift_noninferiority": (
+                top_10_control > 0
+                and float(candidate["mean_top_10_lift"]) / top_10_control
+                >= float(
+                    balanced_gates.get("min_mean_top_10_lift_ratio", 0.95)
+                )
+            ),
+            "mean_f1_absolute": (
+                float(candidate["mean_f1"])
+                >= float(balanced_gates.get("min_mean_f1", 0.0))
+            ),
+            "mean_f1_delta": (
+                float(candidate["mean_f1"] - control["mean_f1"])
+                >= float(balanced_gates.get("min_mean_f1_delta", 0.0))
+            ),
+            "mean_prauc_lift": (
+                float(candidate["mean_prauc_lift"])
+                >= float(balanced_gates.get("min_mean_prauc_lift", 1.0))
+            ),
+            "positive_top_10_return_fraction": (
+                float(candidate["positive_top_10_return_fraction"])
+                >= float(
+                    balanced_gates.get(
+                        "min_positive_top_10_return_fraction",
+                        0.50,
+                    )
+                )
+            ),
+            "positive_selected_return_fraction_delta": (
+                float(
+                    candidate["positive_selected_return_fraction"]
+                    - control["positive_selected_return_fraction"]
+                )
+                >= float(
+                    balanced_gates.get(
+                        "min_positive_selected_return_fraction_delta",
+                        0.0,
+                    )
+                )
+            ),
+            "paired_rank_ic_probability": (
+                float(
+                    rank_pair.get(
+                        "bootstrap_probability_delta_positive",
+                        np.nan,
+                    )
+                )
+                >= float(
+                    balanced_gates.get(
+                        "min_rank_ic_delta_probability",
+                        0.80,
+                    )
+                )
+            ),
+            "paired_rank_ic_win_rate": (
+                float(rank_pair.get("candidate_win_rate_ex_ties", np.nan))
+                >= float(balanced_gates.get("min_rank_ic_win_rate", 0.55))
+            ),
+        }
+        strict_failed = [
+            name for name, passed in strict_checks.items() if not bool(passed)
+        ]
+        balanced_failed = (
+            [
+                name
+                for name, passed in balanced_checks.items()
+                if not bool(passed)
+            ]
+            if balanced_track_enabled
+            else ["balanced_noninferiority_not_configured"]
+        )
         decisions.append(
             {
                 "policy_name": candidate_policy,
-                "passed_all_gates": not failed,
-                "failed_gates": failed,
-                "checks": checks,
+                "passed_all_gates": not strict_failed,
+                "failed_gates": strict_failed,
+                "checks": strict_checks,
+                "passed_strict_dominance_gates": not strict_failed,
+                "strict_dominance_failed_gates": strict_failed,
+                "strict_dominance_checks": strict_checks,
+                "passed_balanced_noninferiority_gates": not balanced_failed,
+                "balanced_noninferiority_failed_gates": balanced_failed,
+                "balanced_noninferiority_checks": balanced_checks,
                 "mean_rank_ic": float(candidate["mean_rank_ic"]),
                 "mean_rank_ic_delta": float(
                     candidate["mean_rank_ic"] - control["mean_rank_ic"]
@@ -639,6 +796,19 @@ def _paired_policy_comparison(
                     candidate["mean_top_10_lift"]
                     - control["mean_top_10_lift"]
                 ),
+                "mean_top_10_lift_ratio": (
+                    float(candidate["mean_top_10_lift"]) / top_10_control
+                    if top_10_control > 0
+                    else np.nan
+                ),
+                "mean_f1": float(candidate["mean_f1"]),
+                "mean_f1_delta": float(
+                    candidate["mean_f1"] - control["mean_f1"]
+                ),
+                "mean_prauc_lift": float(candidate["mean_prauc_lift"]),
+                "positive_top_10_return_fraction": float(
+                    candidate["positive_top_10_return_fraction"]
+                ),
                 "positive_selected_return_fraction_delta": float(
                     candidate["positive_selected_return_fraction"]
                     - control["positive_selected_return_fraction"]
@@ -651,8 +821,15 @@ def _paired_policy_comparison(
                 ),
             }
         )
-    passing = [item for item in decisions if item["passed_all_gates"]]
-    passing.sort(
+    strict_passing = [
+        item for item in decisions if item["passed_strict_dominance_gates"]
+    ]
+    balanced_passing = [
+        item
+        for item in decisions
+        if item["passed_balanced_noninferiority_gates"]
+    ]
+    strict_passing.sort(
         key=lambda item: (
             item["mean_rank_ic_delta"],
             item["worst_5_rank_ic_delta"],
@@ -660,15 +837,34 @@ def _paired_policy_comparison(
         ),
         reverse=True,
     )
-    recommended = passing[0]["policy_name"] if passing else None
+    balanced_passing.sort(
+        key=lambda item: (
+            item["mean_rank_ic_delta"],
+            item["worst_5_rank_ic_delta"],
+            item["mean_top_10_lift_ratio"],
+        ),
+        reverse=True,
+    )
+    if strict_passing:
+        recommended = strict_passing[0]["policy_name"]
+        selection_track = "strict_dominance"
+    elif balanced_passing:
+        recommended = balanced_passing[0]["policy_name"]
+        selection_track = "balanced_noninferiority"
+    else:
+        recommended = None
+        selection_track = None
     decision = {
         "status": (
-            "historical_policy_cleared_all_gates"
-            if recommended
+            "historical_policy_cleared_strict_dominance_gates"
+            if selection_track == "strict_dominance"
+            else "historical_policy_cleared_balanced_noninferiority_gates"
+            if selection_track == "balanced_noninferiority"
             else "no_policy_cleared_historical_gates"
         ),
         "control_policy": control_policy,
         "recommended_policy": recommended,
+        "recommended_selection_track": selection_track,
         "candidate_ready_for_preregistration": bool(recommended),
         "automatic_freeze_allowed": False,
         "new_future_oos_anchor_required": True,
@@ -682,8 +878,14 @@ def _paired_policy_comparison(
             "block_length_folds": block_length,
             "confidence_level": confidence_level,
             "random_seed": random_seed,
-            "gates": gates,
+            "strict_dominance_gates": strict_gates,
+            "balanced_noninferiority_gates": balanced_gates,
+            "phase1_thresholds_unchanged": bool(
+                comparison_config.get("phase1_thresholds_unchanged", True)
+            ),
         },
+        "selection_tracks": comparison_config.get("selection_tracks", {}),
+        "balanced_noninferiority_enabled": balanced_track_enabled,
         "policy_decisions": decisions,
     }
     return comparison, decision
@@ -697,6 +899,10 @@ def _recency_decision_markdown(decision: dict[str, Any]) -> str:
         f"- Causal control: `{decision.get('control_policy')}`",
         f"- Recommended policy: `{decision.get('recommended_policy')}`",
         (
+            "- Recommended selection track: "
+            f"`{decision.get('recommended_selection_track')}`"
+        ),
+        (
             "- Candidate ready for explicit pre-registration: "
             f"`{decision.get('candidate_ready_for_preregistration')}`"
         ),
@@ -708,10 +914,19 @@ def _recency_decision_markdown(decision: dict[str, Any]) -> str:
         "",
     ]
     for item in decision.get("policy_decisions", []) or []:
-        failed = ", ".join(item.get("failed_gates", [])) or "none"
+        strict_failed = (
+            ", ".join(item.get("strict_dominance_failed_gates", [])) or "none"
+        )
+        balanced_failed = (
+            ", ".join(item.get("balanced_noninferiority_failed_gates", []))
+            or "none"
+        )
         lines.append(
-            f"- `{item.get('policy_name')}`: passed=`{item.get('passed_all_gates')}`; "
-            f"failed gates=`{failed}`"
+            f"- `{item.get('policy_name')}`: "
+            f"strict=`{item.get('passed_strict_dominance_gates')}` "
+            f"(failed: `{strict_failed}`); "
+            f"balanced=`{item.get('passed_balanced_noninferiority_gates')}` "
+            f"(failed: `{balanced_failed}`)"
         )
     return "\n".join(lines)
 

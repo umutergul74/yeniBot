@@ -2053,6 +2053,11 @@ experiments:
         - {name: recent_6_equal, policy: equal_recent_k, recent_k: 6}
         - {name: decay_half_life_3, policy: exponential_decay, half_life_folds: 3.0}
         - {name: decay_half_life_6, policy: exponential_decay, half_life_folds: 6.0}
+        - name: dual_horizon_all_recent3_50_50
+          policy: weighted_policy_blend
+          components:
+            - {policy: equal_all_eligible, weight: 0.5}
+            - {policy: equal_recent_k, recent_k: 3, weight: 0.5}
       comparison:
         control_policy: all_eligible_equal
         bootstrap_repeats: 5000
@@ -2068,6 +2073,24 @@ experiments:
           min_positive_selected_return_fraction_delta: 0.0
           min_rank_ic_delta_probability: 0.80
           min_rank_ic_win_rate: 0.55
+        balanced_noninferiority_gates:
+          min_mean_rank_ic_delta: 0.005
+          max_std_rank_ic_delta: 0.005
+          min_positive_ic_fraction_delta: 0.0
+          min_worst_5_rank_ic_delta: 0.0
+          min_mean_top_10_lift: 1.15
+          min_mean_top_10_lift_ratio: 0.95
+          min_mean_f1: 0.44
+          min_mean_f1_delta: 0.005
+          min_mean_prauc_lift: 1.10
+          min_positive_top_10_return_fraction: 0.70
+          min_positive_selected_return_fraction_delta: 0.0
+          min_rank_ic_delta_probability: 0.80
+          min_rank_ic_win_rate: 0.55
+        selection_tracks:
+          strict_dominance: "Candidate must clear every original improvement gate."
+          balanced_noninferiority: "Candidate must materially improve ranking and stability while preserving economically useful top-decile concentration."
+        phase1_thresholds_unchanged: true
       eligibility_rule: model_validation_end_must_precede_target_test_start
       selection_data: pre_new_anchor_walk_forward_only
       failed_future_oos_use: diagnostics_only_no_policy_selection

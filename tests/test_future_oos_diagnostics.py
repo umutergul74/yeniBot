@@ -132,6 +132,25 @@ def test_recency_weights_are_causal_and_normalized() -> None:
         policy="equal_all_eligible",
     )
     assert all_eligible == pytest.approx({0: 0.25, 1: 0.25, 2: 0.25, 3: 0.25})
+    dual_horizon = recency_weights(
+        [0, 1, 2, 3, 4, 5],
+        target_fold=5,
+        policy="weighted_policy_blend",
+        components=[
+            {"policy": "equal_all_eligible", "weight": 0.5},
+            {"policy": "equal_recent_k", "recent_k": 3, "weight": 0.5},
+        ],
+    )
+    assert dual_horizon == pytest.approx(
+        {
+            0: 1 / 12,
+            1: 1 / 12,
+            2: 1 / 12,
+            3: 1 / 4,
+            4: 1 / 4,
+            5: 1 / 4,
+        }
+    )
     with pytest.raises(ValueError, match="Future model folds"):
         recency_weights(
             [0, 1, 4],
@@ -167,6 +186,83 @@ def test_recency_aggregation_uses_only_selected_models() -> None:
 
     assert aggregated["prob_long"].tolist() == pytest.approx([0.6, 0.6, 0.6])
     assert aggregated["model_count"].tolist() == [2, 2, 2]
+
+
+def test_balanced_recency_track_preserves_tail_lift_without_requiring_dominance() -> None:
+    rows = []
+    for fold in range(6):
+        rows.extend(
+            [
+                {
+                    "policy_name": "all_eligible",
+                    "target_fold": fold,
+                    "rank_ic": -0.01 if fold == 0 else 0.02,
+                    "f1": 0.42,
+                    "prauc_lift_vs_prevalence": 1.12,
+                    "precision_lift_vs_prevalence": 1.04,
+                    "top_10_lift": 1.22,
+                    "top_10_forward_return": 0.001,
+                    "selected_forward_return": 0.001,
+                    "pred_long_rate": 0.60,
+                },
+                {
+                    "policy_name": "balanced_candidate",
+                    "target_fold": fold,
+                    "rank_ic": 0.05,
+                    "f1": 0.45,
+                    "prauc_lift_vs_prevalence": 1.14,
+                    "precision_lift_vs_prevalence": 1.06,
+                    "top_10_lift": 1.17,
+                    "top_10_forward_return": 0.001,
+                    "selected_forward_return": 0.001,
+                    "pred_long_rate": 0.62,
+                },
+            ]
+        )
+    by_fold = pd.DataFrame(rows)
+    summary = rolling_module._research_summary(by_fold)
+    _, decision = rolling_module._paired_policy_comparison(
+        by_fold,
+        summary,
+        control_policy="all_eligible",
+        comparison_config={
+            "bootstrap_repeats": 100,
+            "block_length_folds": 2,
+            "confidence_level": 0.95,
+            "random_seed": 42,
+            "gates": {
+                "min_mean_rank_ic_delta": 0.005,
+                "max_std_rank_ic_delta": 0.005,
+                "min_positive_ic_fraction_delta": 0.0,
+                "min_worst_5_rank_ic_delta": 0.0,
+                "min_mean_top_10_lift_delta": 0.02,
+                "min_positive_selected_return_fraction_delta": 0.0,
+                "min_rank_ic_delta_probability": 0.80,
+                "min_rank_ic_win_rate": 0.55,
+            },
+            "balanced_noninferiority_gates": {
+                "min_mean_rank_ic_delta": 0.005,
+                "max_std_rank_ic_delta": 0.005,
+                "min_positive_ic_fraction_delta": 0.0,
+                "min_worst_5_rank_ic_delta": 0.0,
+                "min_mean_top_10_lift": 1.15,
+                "min_mean_top_10_lift_ratio": 0.95,
+                "min_mean_f1": 0.44,
+                "min_mean_f1_delta": 0.005,
+                "min_mean_prauc_lift": 1.10,
+                "min_positive_top_10_return_fraction": 0.70,
+                "min_positive_selected_return_fraction_delta": 0.0,
+                "min_rank_ic_delta_probability": 0.80,
+                "min_rank_ic_win_rate": 0.55,
+            },
+        },
+    )
+
+    candidate = decision["policy_decisions"][0]
+    assert candidate["passed_strict_dominance_gates"] is False
+    assert candidate["passed_balanced_noninferiority_gates"] is True
+    assert decision["recommended_policy"] == "balanced_candidate"
+    assert decision["recommended_selection_track"] == "balanced_noninferiority"
 
 
 def test_rolling_schedule_never_exposes_future_model_folds() -> None:

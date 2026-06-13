@@ -25,6 +25,13 @@ The current safe control profile is configured in `config.yaml`:
 - Post-failure deployment-policy research must compare recency policies against
   the causal `all_eligible_equal` control. Comparing only recency variants with
   each other is insufficient evidence.
+- Historical rolling-origin evidence from bundle `20260613_134953` showed a
+  real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
+  coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
+  `all_eligible_equal` retained stronger top-decile lift. Do not repeat the
+  broad recency sweep. The only open follow-up is the committed causal
+  `dual_horizon_all_recent3_50_50` policy and the explicit balanced
+  non-inferiority review; Phase 1 gates remain unchanged.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
