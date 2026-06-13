@@ -105,8 +105,9 @@ def _profile_predictions(
     future_context: pd.DataFrame,
     future_start: pd.Timestamp,
     config: dict[str, Any],
-) -> dict[str, pd.DataFrame]:
-    predictions: dict[str, pd.DataFrame] = {}
+) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    aggregated_predictions: dict[str, pd.DataFrame] = {}
+    raw_predictions: dict[str, pd.DataFrame] = {}
     source_run_dir = frozen_manifest_source_run_dir(manifest, run_dir=run_dir)
     for component in manifest.get("components", []) or []:
         profile = str(component["profile"])
@@ -121,9 +122,23 @@ def _profile_predictions(
             config=config,
         )
         aggregated = _aggregate_holdout_predictions(raw, profile=profile)
-        aggregated.attrs["raw_model_predictions"] = raw
-        predictions[profile] = aggregated
-    return predictions
+        aggregated_predictions[profile] = aggregated
+        raw_predictions[profile] = raw
+    return aggregated_predictions, raw_predictions
+
+
+def _plain_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Copy prediction values without propagating pandas metadata.
+
+    Pandas compares ``DataFrame.attrs`` during merge operations. Storing a
+    DataFrame inside attrs makes that comparison return another DataFrame,
+    whose truth value is ambiguous. Frozen-candidate prediction frames must
+    therefore cross merge/concat boundaries without attrs.
+    """
+
+    out = frame.copy()
+    out.attrs = {}
+    return out
 
 
 def _candidate_predictions(
@@ -132,17 +147,21 @@ def _candidate_predictions(
 ) -> pd.DataFrame:
     profiles = [str(item) for item in manifest.get("profiles", []) or []]
     if manifest.get("candidate_type") == "profile":
-        return component_predictions.get(profiles[0], pd.DataFrame()).copy()
+        return _plain_frame(
+            component_predictions.get(profiles[0], pd.DataFrame())
+        )
     if any(profile not in component_predictions or component_predictions[profile].empty for profile in profiles):
         return pd.DataFrame()
     weights = np.asarray(manifest.get("weights", []) or [], dtype=float)
     if len(weights) != len(profiles) or weights.sum() <= 0:
         return pd.DataFrame()
     weights = weights / weights.sum()
-    merged = component_predictions[profiles[0]].copy()
+    merged = _plain_frame(component_predictions[profiles[0]])
     merged = merged.rename(columns={"prob_long": f"prob_long_{0}"})
     for index, profile in enumerate(profiles[1:], start=1):
-        other = component_predictions[profile][["timestamp", "prob_long"]].rename(
+        other = _plain_frame(
+            component_predictions[profile][["timestamp", "prob_long"]]
+        ).rename(
             columns={"prob_long": f"prob_long_{index}"}
         )
         merged = merged.merge(other, on="timestamp", how="inner")
@@ -379,13 +398,20 @@ def evaluate_future_oos(
                 else:
                     optional_candidate_warnings.extend(messages)
                 continue
-            components = _profile_predictions(
+            profile_output = _profile_predictions(
                 manifest=manifest,
                 run_dir=run_path,
                 future_context=future_context,
                 future_start=future_start,
                 config=config,
             )
+            if isinstance(profile_output, tuple):
+                components, raw_components = profile_output
+            else:
+                # Compatibility for tests and third-party wrappers written
+                # before raw predictions became an explicit return value.
+                components = profile_output
+                raw_components = {}
             predictions = _candidate_predictions(manifest, components)
             if predictions.empty:
                 message = f"{candidate_id}:no_predictions"
@@ -412,8 +438,8 @@ def evaluate_future_oos(
             score_band_diagnostics.append(diagnostics["score_bands"])
             regime_diagnostics.append(diagnostics["regime_metrics"])
             disagreement_diagnostics.append(diagnostics["ensemble_disagreement"])
-            for profile, component in components.items():
-                raw = component.attrs.get("raw_model_predictions", pd.DataFrame())
+            for profile in components:
+                raw = raw_components.get(profile, pd.DataFrame())
                 model_diagnostics.append(
                     future_oos_model_metrics(
                         raw,

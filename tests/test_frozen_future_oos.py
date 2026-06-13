@@ -307,6 +307,43 @@ def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) ->
     assert status["fit_operations_performed"] == 0
 
 
+def test_candidate_prediction_merge_drops_dataframe_attrs() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC")
+    control = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "prob_long": [0.1, 0.3, 0.7, 0.9],
+            "label": [0, 0, 1, 1],
+            "forward_return": [-0.01, -0.002, 0.003, 0.01],
+        }
+    )
+    pressure = control.assign(prob_long=[0.2, 0.4, 0.6, 0.8])
+    control.attrs["raw_model_predictions"] = pd.DataFrame({"model_fold": [0]})
+    pressure.attrs["raw_model_predictions"] = pd.DataFrame({"model_fold": [1]})
+
+    profile = future_oos_module._candidate_predictions(
+        {
+            "candidate_type": "profile",
+            "profiles": ["control"],
+        },
+        {"control": control},
+    )
+    blend = future_oos_module._candidate_predictions(
+        {
+            "candidate_type": "blend",
+            "profiles": ["control", "pressure"],
+            "weights": [0.65, 0.35],
+        },
+        {"control": control, "pressure": pressure},
+    )
+
+    assert profile.attrs == {}
+    assert blend.attrs == {}
+    assert blend["prob_long"].tolist() == pytest.approx(
+        [0.135, 0.335, 0.665, 0.865]
+    )
+
+
 def test_future_oos_scores_frozen_predictions_without_refit(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path, min_rows=20)
     data_dir = Path(config["paths"]["data_dir"]) / "processed"
