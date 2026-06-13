@@ -173,6 +173,11 @@ Operational references:
 All production research notebooks run on Google Colab with source code from
 GitHub and data/checkpoints stored on Google Drive.
 
+The current replacement-candidate workflow is isolated on
+`research/next-candidate-v1`. Every notebook fetches, checks out, and verifies
+that branch by default, then prints the exact commit. Override
+`YENIBOT_REPO_BRANCH` only for a deliberate reviewed run.
+
 Run in strict order:
 
 1. [`01_data_preparation.ipynb`](notebooks/01_data_preparation.ipynb)
@@ -193,9 +198,10 @@ Rerun rules:
 | Label semantics | `03 -> 04 -> 05` |
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
-| Frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
+| Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
+| Post-failure historical recency research | `04 -> 05`; the failed OOS window remains diagnostic-only |
 
-Before the frozen evaluation, follow
+Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is
 authoritative; a calendar date alone does not establish label readiness.
 

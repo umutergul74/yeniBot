@@ -27,6 +27,11 @@ The canonical environment is Google Colab with:
 - the repository cloned to `/content/yenibot_repo`
 - dependencies installed from `requirements.txt`
 
+During the current replacement-candidate cycle, notebooks default to
+`research/next-candidate-v1`, verify the checked-out branch, and print the
+exact commit. This prevents a Colab runtime left on `main` from silently
+running older notebook logic.
+
 After every pull:
 
 1. Use `Runtime -> Restart session`.
@@ -42,8 +47,8 @@ because imported modules remain cached.
 01 raw klines
   -> 02 processed features
   -> 03 labeled rows
-  -> 04 fold artifacts and predictions
-  -> 05 diagnostics, manifests, and bundles
+  -> 04 fold artifacts, historical recency research, and run handoff
+  -> 05 diagnostics, manifests, and bundles for that exact run
 ```
 
 Do not rerun more expensive stages unless their inputs changed:
@@ -55,6 +60,12 @@ Do not rerun more expensive stages unless their inputs changed:
 | Labels or ATR semantics | `03 -> 04 -> 05` |
 | Feature formulas or columns | `02 -> 03 -> 04 -> 05` |
 | Raw source or date range | `01 -> 02 -> 03`, then required downstream stages |
+
+Notebook 04 writes `notebook04_run.json` under the Drive checkpoint root only
+after its configured recency research completes. Notebook 05 consumes this
+handoff before falling back to the most recent experiment directory. This
+avoids diagnosing a different run when training artifacts were reused from an
+older matching run id.
 
 ## Data Integrity
 
