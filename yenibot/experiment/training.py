@@ -759,6 +759,8 @@ def _comparison_markdown(comparison: pd.DataFrame, decision: dict[str, Any]) -> 
             "passed_phase1_official_threshold",
             "passed_phase1_legacy_v3",
             "active_validation_charter",
+            "historical_walk_forward_evidence_passed",
+            "frozen_future_oos_evidence_passed",
             "model_evidence_passed_active_charter",
             "phase2_ready",
             "phase1_status",

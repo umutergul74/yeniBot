@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import shutil
 from pathlib import Path
 from typing import Any
 import pandas as pd
@@ -185,7 +184,10 @@ from yenibot.experiment.root_cause import (
     _write_phase1_blocker_action_plan,
     _write_root_cause_reports,
 )
-from yenibot.experiment.rolling_research import research_protocol_payload
+from yenibot.experiment.rolling_research import (
+    publish_recency_research_reports,
+    research_protocol_payload,
+)
 
 from yenibot.experiment.separation import (
     _bad_fold_signature_frame,
@@ -1226,15 +1228,9 @@ def write_experiment_diagnostics(
         preflight=future_oos_preflight_status,
     )
     recency_research_dir = run_dir / "recency_research"
-    recency_research_summary = pd.DataFrame()
-    if recency_research_dir.exists():
-        for source in sorted(recency_research_dir.glob("recency_ensemble_*")):
-            if not source.is_file() or source.name.startswith("cross_predictions_fold_"):
-                continue
-            shutil.copy2(source, report_dir / source.name)
-        summary_path = recency_research_dir / "recency_ensemble_summary.csv"
-        if summary_path.exists():
-            recency_research_summary = pd.read_csv(summary_path)
+    recency_research_summary, recency_policy_decision = (
+        publish_recency_research_reports(recency_research_dir, report_dir)
+    )
     next_research_protocol = research_protocol_payload(diagnostic_config)
     _write_json(
         report_dir / "next_research_protocol.json",
@@ -1288,6 +1284,7 @@ def write_experiment_diagnostics(
     decision["recency_ensemble_research"] = recency_research_summary.to_dict(
         orient="records"
     )
+    decision["recency_ensemble_decision"] = recency_policy_decision
     decision["next_research_protocol"] = next_research_protocol
     if bool(future_oos_readiness.get("evaluation_completed", False)):
         if future_oos_readiness.get("primary_candidate_passed") is True:
@@ -1469,6 +1466,7 @@ def write_experiment_diagnostics(
         bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
         phase2_readiness={},
         settings=settings,
+        recency_policy_decision=recency_policy_decision,
     )
     _write_phase1_blocker_action_plan(report_dir, pre_phase1_blocker_action_plan)
     _write_root_cause_reports(
@@ -1571,6 +1569,7 @@ def write_experiment_diagnostics(
         bad_fold_mechanism_summary=bad_fold_mechanism_summary,
         phase2_readiness=decision["phase2_readiness"],
         settings=settings,
+        recency_policy_decision=recency_policy_decision,
     )
     decision["phase1_blocker_action_plan"] = phase1_blocker_action_plan.to_dict(orient="records")
     decision["phase1_blocker_root_cause"] = phase1_blocker_root_cause.to_dict(orient="records")

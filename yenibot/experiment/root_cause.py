@@ -1144,16 +1144,18 @@ def _phase1_decision_ladder_payload(
     bad_fold_mechanism_summary: pd.DataFrame,
     phase2_readiness: dict[str, Any] | None,
     settings: dict[str, Any],
+    recency_policy_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     readiness = phase2_readiness or {}
+    recency_decision = recency_policy_decision or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
-    active_charter = str(readiness.get("active_validation_charter") or "v3_legacy")
     only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
         {
             "future_unseen_oos_not_ready",
             "future_unseen_oos_not_evaluated",
         }
     )
+    future_oos_failed = "future_unseen_oos_candidate_failed" in blockers
     run_04_now = bool(
         not phase1_blocker_root_cause.empty
         and phase1_blocker_root_cause.get("run_04_now", pd.Series(dtype=bool)).astype(bool).any()
@@ -1181,13 +1183,26 @@ def _phase1_decision_ladder_payload(
     )
     threshold_transfer_blocker = bool(
         not only_future_oos_blocked
+        and not future_oos_failed
         and control_oracle.get("threshold_transfer_blocker", False)
     )
     score_reversal_blocker = bool(
         not only_future_oos_blocked
+        and not future_oos_failed
         and str(mechanism.get("dominant_mechanism", "")).startswith("score_ranking_reversal")
     )
-    if only_future_oos_blocked:
+    recency_ready = bool(
+        recency_decision.get("candidate_ready_for_preregistration", False)
+    )
+    if future_oos_failed and recency_ready:
+        recommended_next_action = (
+            "explicitly_review_and_preregister_historical_recency_winner"
+        )
+    elif future_oos_failed:
+        recommended_next_action = (
+            "no_recency_policy_cleared_gates_design_new_pre_registered_hypothesis"
+        )
+    elif only_future_oos_blocked:
         recommended_next_action = "refresh_data_and_run_05_when_future_oos_minimum_is_available"
     elif run_04_now:
         recommended_next_action = "run_04_only_after_pre_registered_hypothesis"
@@ -1207,7 +1222,9 @@ def _phase1_decision_ladder_payload(
         "full_zip_required_now": False,
         "next_notebook": "04" if run_04_now else "05",
         "root_cause": (
-            "future_oos_governance_gate"
+            "failed_future_oos_ranking_and_payoff_breakdown"
+            if future_oos_failed
+            else "future_oos_governance_gate"
             if only_future_oos_blocked
             else str(control_root.get("root_cause") or mechanism.get("dominant_mechanism") or "")
         ),
@@ -1216,10 +1233,17 @@ def _phase1_decision_ladder_payload(
         "threshold_work_required": threshold_transfer_blocker,
         "bad_fold_mechanism": str(mechanism.get("dominant_mechanism") or ""),
         "score_reversal_work_required": score_reversal_blocker,
-        "candidate_generation_allowed": bool(run_04_now and "future_unseen_oos_not_ready" not in blockers),
+        "candidate_generation_allowed": bool(
+            future_oos_failed
+            or (run_04_now and "future_unseen_oos_not_ready" not in blockers)
+        ),
+        "recency_policy_decision_status": recency_decision.get("status"),
+        "recency_recommended_policy": recency_decision.get("recommended_policy"),
+        "replacement_candidate_ready_for_preregistration": recency_ready,
+        "new_future_oos_anchor_required": bool(future_oos_failed),
         "why_no_04": (
             ""
-            if run_04_now
+            if run_04_now or future_oos_failed
             else "frozen candidate must remain unchanged until future unseen OOS evaluation"
             if only_future_oos_blocked
             else "no pre-registered feature or training hypothesis cleared the root-cause and memory audits"

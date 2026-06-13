@@ -123,9 +123,11 @@ def test_active_charter_status_separates_model_evidence_from_phase2() -> None:
 
     row = enriched.iloc[0]
     assert bool(row["passed_phase1_legacy_v3"]) is False
+    assert bool(row["historical_walk_forward_evidence_passed"]) is True
+    assert bool(row["frozen_future_oos_evidence_passed"]) is False
     assert bool(row["model_evidence_passed_active_charter"]) is True
     assert bool(row["phase2_ready"]) is False
-    assert row["phase1_status"] == "model_evidence_passed_future_oos_pending"
+    assert row["phase1_status"] == "historical_evidence_passed_future_oos_pending"
 
 
 def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) -> None:
@@ -341,7 +343,8 @@ def test_model_dashboard_fails_model_evidence_for_non_future_blocker(
     )
 
     assert bool(enriched.iloc[0]["model_evidence_passed_active_charter"]) is False
-    assert enriched.iloc[0]["phase1_status"] == "active_charter_model_evidence_failed"
+    assert bool(enriched.iloc[0]["historical_walk_forward_evidence_passed"]) is False
+    assert enriched.iloc[0]["phase1_status"] == "historical_walk_forward_evidence_failed"
 
 
 def test_future_oos_candidate_failure_is_model_evidence_failure() -> None:
@@ -356,5 +359,8 @@ def test_future_oos_candidate_failure_is_model_evidence_failure() -> None:
         control_profile=CONTROL,
     )
 
-    assert bool(enriched.iloc[0]["model_evidence_passed_active_charter"]) is False
-    assert enriched.iloc[0]["phase1_status"] == "active_charter_model_evidence_failed"
+    row = enriched.iloc[0]
+    assert bool(row["historical_walk_forward_evidence_passed"]) is True
+    assert bool(row["frozen_future_oos_evidence_passed"]) is False
+    assert bool(row["model_evidence_passed_active_charter"]) is False
+    assert row["phase1_status"] == "historical_evidence_passed_future_oos_failed"

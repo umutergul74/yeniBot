@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from dataclasses import asdict, dataclass
+from math import comb
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -21,6 +24,7 @@ __all__ = [
     "recency_weights",
     "aggregate_recency_predictions",
     "research_protocol_payload",
+    "publish_recency_research_reports",
     "run_recency_ensemble_research",
 ]
 
@@ -97,6 +101,9 @@ def recency_weights(
     if policy == "latest_only":
         selected = [eligible[-1]]
         raw = np.ones(1, dtype=float)
+    elif policy == "equal_all_eligible":
+        selected = eligible
+        raw = np.ones(len(selected), dtype=float)
     elif policy == "equal_recent_k":
         k = max(1, int(recent_k or 1))
         selected = eligible[-k:]
@@ -197,6 +204,77 @@ def research_protocol_payload(config: dict[str, Any]) -> dict[str, Any]:
         "recency_ensemble": cycle.get("recency_ensemble", {}),
         "phase2_code_allowed": False,
     }
+
+
+def publish_recency_research_reports(
+    source_dir: str | Path,
+    report_dir: str | Path,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Copy compact recency artifacts into diagnostics and return decision data."""
+
+    source_path = Path(source_dir)
+    report_path = Path(report_dir)
+    if not source_path.exists():
+        return pd.DataFrame(), {}
+    for source in sorted(source_path.glob("recency_ensemble_*")):
+        if source.is_file():
+            shutil.copy2(source, report_path / source.name)
+    summary_path = source_path / "recency_ensemble_summary.csv"
+    decision_path = source_path / "recency_ensemble_decision.json"
+    summary = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame()
+    decision = (
+        json.loads(decision_path.read_text(encoding="utf-8"))
+        if decision_path.exists()
+        else {}
+    )
+    return summary, decision
+
+
+def _load_compatible_cross_prediction_cache(
+    output_path: Path,
+    *,
+    target_fold: int,
+    eligible_model_folds: list[int],
+    required_start: pd.Timestamp,
+    required_end: pd.Timestamp,
+) -> pd.DataFrame | None:
+    required_columns = {
+        "timestamp",
+        "model_fold",
+        "prob_long",
+        "label",
+        "forward_return",
+    }
+    pattern = f"cross_predictions_*_fold_{int(target_fold):03d}.parquet"
+    for candidate_path in sorted(
+        output_path.glob(pattern),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            candidate = pd.read_parquet(candidate_path)
+        except Exception:
+            continue
+        if not required_columns.issubset(candidate.columns):
+            continue
+        candidate["timestamp"] = pd.to_datetime(candidate["timestamp"], utc=True)
+        candidate["model_fold"] = pd.to_numeric(
+            candidate["model_fold"],
+            errors="coerce",
+        )
+        if candidate[["timestamp", "model_fold", "prob_long"]].isna().any().any():
+            continue
+        observed_folds = sorted(candidate["model_fold"].astype(int).unique().tolist())
+        if observed_folds != sorted(int(item) for item in eligible_model_folds):
+            continue
+        coverage = candidate.groupby("model_fold")["timestamp"].agg(["min", "max"])
+        if not bool(
+            (coverage["min"] <= required_start).all()
+            and (coverage["max"] >= required_end).all()
+        ):
+            continue
+        return candidate
+    return None
 
 
 def _select_validation_threshold(
@@ -301,6 +379,343 @@ def _policy_kwargs(policy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _two_sided_sign_test_pvalue(wins: int, losses: int) -> float:
+    trials = int(wins) + int(losses)
+    if trials <= 0:
+        return np.nan
+    tail = min(int(wins), int(losses))
+    probability = sum(comb(trials, index) for index in range(tail + 1)) / (2**trials)
+    return float(min(1.0, 2.0 * probability))
+
+
+def _moving_block_bootstrap_mean(
+    values: np.ndarray,
+    *,
+    repeats: int,
+    block_length: int,
+    confidence_level: float,
+    random_seed: int,
+) -> dict[str, float]:
+    clean = np.asarray(values, dtype=float)
+    clean = clean[np.isfinite(clean)]
+    if clean.size == 0:
+        return {
+            "mean": np.nan,
+            "ci_low": np.nan,
+            "ci_high": np.nan,
+            "probability_above_zero": np.nan,
+        }
+    if clean.size == 1 or repeats <= 0:
+        mean = float(clean.mean())
+        return {
+            "mean": mean,
+            "ci_low": mean,
+            "ci_high": mean,
+            "probability_above_zero": float(mean > 0),
+        }
+    length = max(1, min(int(block_length), int(clean.size)))
+    starts = np.arange(clean.size)
+    rng = np.random.default_rng(int(random_seed))
+    sampled_means = np.empty(int(repeats), dtype=float)
+    blocks_needed = int(np.ceil(clean.size / length))
+    for repeat in range(int(repeats)):
+        sampled: list[float] = []
+        for start in rng.choice(starts, size=blocks_needed, replace=True):
+            sampled.extend(
+                clean[(int(start) + offset) % clean.size]
+                for offset in range(length)
+            )
+        sampled_means[repeat] = float(np.mean(sampled[: clean.size]))
+    alpha = (1.0 - float(confidence_level)) / 2.0
+    return {
+        "mean": float(clean.mean()),
+        "ci_low": float(np.quantile(sampled_means, alpha)),
+        "ci_high": float(np.quantile(sampled_means, 1.0 - alpha)),
+        "probability_above_zero": float(np.mean(sampled_means > 0)),
+    }
+
+
+def _paired_policy_comparison(
+    by_fold: pd.DataFrame,
+    summary: pd.DataFrame,
+    *,
+    control_policy: str,
+    comparison_config: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    metrics = [
+        "rank_ic",
+        "f1",
+        "prauc_lift_vs_prevalence",
+        "precision_lift_vs_prevalence",
+        "top_10_lift",
+        "top_10_forward_return",
+        "selected_forward_return",
+    ]
+    columns = [
+        "control_policy",
+        "candidate_policy",
+        "metric",
+        "paired_fold_count",
+        "control_mean",
+        "candidate_mean",
+        "mean_delta",
+        "bootstrap_ci_low",
+        "bootstrap_ci_high",
+        "bootstrap_probability_delta_positive",
+        "candidate_win_count",
+        "control_win_count",
+        "tie_count",
+        "candidate_win_rate_ex_ties",
+        "two_sided_sign_test_pvalue",
+        "block_length_folds",
+        "bootstrap_repeats",
+        "selection_data_role",
+    ]
+    if by_fold.empty or control_policy not in set(by_fold["policy_name"].astype(str)):
+        return pd.DataFrame(columns=columns), {
+            "status": "missing_control_policy",
+            "control_policy": control_policy,
+            "recommended_policy": None,
+            "candidate_ready_for_preregistration": False,
+        }
+    repeats = int(comparison_config.get("bootstrap_repeats", 5000))
+    block_length = int(comparison_config.get("block_length_folds", 3))
+    confidence_level = float(comparison_config.get("confidence_level", 0.95))
+    random_seed = int(comparison_config.get("random_seed", 42))
+    rows: list[dict[str, Any]] = []
+    policy_names = [
+        str(item)
+        for item in summary["policy_name"].tolist()
+        if str(item) != control_policy
+    ]
+    for candidate_policy in policy_names:
+        for metric in metrics:
+            pivot = by_fold.pivot_table(
+                index="target_fold",
+                columns="policy_name",
+                values=metric,
+                aggfunc="first",
+            )
+            if not {control_policy, candidate_policy}.issubset(pivot.columns):
+                continue
+            paired = pivot[[control_policy, candidate_policy]].dropna()
+            delta = (
+                pd.to_numeric(paired[candidate_policy], errors="coerce")
+                - pd.to_numeric(paired[control_policy], errors="coerce")
+            ).dropna()
+            bootstrap = _moving_block_bootstrap_mean(
+                delta.to_numpy(dtype=float),
+                repeats=repeats,
+                block_length=block_length,
+                confidence_level=confidence_level,
+                random_seed=random_seed,
+            )
+            wins = int((delta > 0).sum())
+            losses = int((delta < 0).sum())
+            ties = int((delta == 0).sum())
+            rows.append(
+                {
+                    "control_policy": control_policy,
+                    "candidate_policy": candidate_policy,
+                    "metric": metric,
+                    "paired_fold_count": int(len(delta)),
+                    "control_mean": float(paired[control_policy].mean()),
+                    "candidate_mean": float(paired[candidate_policy].mean()),
+                    "mean_delta": bootstrap["mean"],
+                    "bootstrap_ci_low": bootstrap["ci_low"],
+                    "bootstrap_ci_high": bootstrap["ci_high"],
+                    "bootstrap_probability_delta_positive": bootstrap[
+                        "probability_above_zero"
+                    ],
+                    "candidate_win_count": wins,
+                    "control_win_count": losses,
+                    "tie_count": ties,
+                    "candidate_win_rate_ex_ties": (
+                        float(wins / (wins + losses)) if wins + losses else np.nan
+                    ),
+                    "two_sided_sign_test_pvalue": _two_sided_sign_test_pvalue(
+                        wins,
+                        losses,
+                    ),
+                    "block_length_folds": block_length,
+                    "bootstrap_repeats": repeats,
+                    "selection_data_role": "historical_walk_forward_only",
+                }
+            )
+    comparison = pd.DataFrame(rows, columns=columns)
+    summary_by_policy = summary.set_index("policy_name")
+    gates = comparison_config.get("gates", {}) or {}
+    decisions: list[dict[str, Any]] = []
+    control = summary_by_policy.loc[control_policy]
+    rank_rows = comparison.loc[comparison["metric"].eq("rank_ic")].set_index(
+        "candidate_policy"
+    )
+    for candidate_policy in policy_names:
+        candidate = summary_by_policy.loc[candidate_policy]
+        rank_pair = (
+            rank_rows.loc[candidate_policy].to_dict()
+            if candidate_policy in rank_rows.index
+            else {}
+        )
+        checks = {
+            "mean_rank_ic_delta": (
+                float(candidate["mean_rank_ic"] - control["mean_rank_ic"])
+                >= float(gates.get("min_mean_rank_ic_delta", 0.005))
+            ),
+            "std_rank_ic_delta": (
+                float(candidate["std_rank_ic"] - control["std_rank_ic"])
+                <= float(gates.get("max_std_rank_ic_delta", 0.005))
+            ),
+            "positive_ic_fraction_delta": (
+                float(
+                    candidate["positive_ic_fraction"]
+                    - control["positive_ic_fraction"]
+                )
+                >= float(gates.get("min_positive_ic_fraction_delta", 0.0))
+            ),
+            "worst_5_rank_ic_delta": (
+                float(
+                    candidate["worst_5_rank_ic_mean"]
+                    - control["worst_5_rank_ic_mean"]
+                )
+                >= float(gates.get("min_worst_5_rank_ic_delta", 0.0))
+            ),
+            "top_10_lift_delta": (
+                float(
+                    candidate["mean_top_10_lift"]
+                    - control["mean_top_10_lift"]
+                )
+                >= float(gates.get("min_mean_top_10_lift_delta", 0.02))
+            ),
+            "positive_selected_return_fraction_delta": (
+                float(
+                    candidate["positive_selected_return_fraction"]
+                    - control["positive_selected_return_fraction"]
+                )
+                >= float(
+                    gates.get(
+                        "min_positive_selected_return_fraction_delta",
+                        0.0,
+                    )
+                )
+            ),
+            "paired_rank_ic_probability": (
+                float(
+                    rank_pair.get(
+                        "bootstrap_probability_delta_positive",
+                        np.nan,
+                    )
+                )
+                >= float(gates.get("min_rank_ic_delta_probability", 0.80))
+            ),
+            "paired_rank_ic_win_rate": (
+                float(rank_pair.get("candidate_win_rate_ex_ties", np.nan))
+                >= float(gates.get("min_rank_ic_win_rate", 0.55))
+            ),
+        }
+        failed = [name for name, passed in checks.items() if not bool(passed)]
+        decisions.append(
+            {
+                "policy_name": candidate_policy,
+                "passed_all_gates": not failed,
+                "failed_gates": failed,
+                "checks": checks,
+                "mean_rank_ic": float(candidate["mean_rank_ic"]),
+                "mean_rank_ic_delta": float(
+                    candidate["mean_rank_ic"] - control["mean_rank_ic"]
+                ),
+                "std_rank_ic_delta": float(
+                    candidate["std_rank_ic"] - control["std_rank_ic"]
+                ),
+                "positive_ic_fraction_delta": float(
+                    candidate["positive_ic_fraction"]
+                    - control["positive_ic_fraction"]
+                ),
+                "worst_5_rank_ic_delta": float(
+                    candidate["worst_5_rank_ic_mean"]
+                    - control["worst_5_rank_ic_mean"]
+                ),
+                "mean_top_10_lift_delta": float(
+                    candidate["mean_top_10_lift"]
+                    - control["mean_top_10_lift"]
+                ),
+                "positive_selected_return_fraction_delta": float(
+                    candidate["positive_selected_return_fraction"]
+                    - control["positive_selected_return_fraction"]
+                ),
+                "paired_rank_ic_probability": rank_pair.get(
+                    "bootstrap_probability_delta_positive"
+                ),
+                "paired_rank_ic_win_rate": rank_pair.get(
+                    "candidate_win_rate_ex_ties"
+                ),
+            }
+        )
+    passing = [item for item in decisions if item["passed_all_gates"]]
+    passing.sort(
+        key=lambda item: (
+            item["mean_rank_ic_delta"],
+            item["worst_5_rank_ic_delta"],
+            item["mean_top_10_lift_delta"],
+        ),
+        reverse=True,
+    )
+    recommended = passing[0]["policy_name"] if passing else None
+    decision = {
+        "status": (
+            "historical_policy_cleared_all_gates"
+            if recommended
+            else "no_policy_cleared_historical_gates"
+        ),
+        "control_policy": control_policy,
+        "recommended_policy": recommended,
+        "candidate_ready_for_preregistration": bool(recommended),
+        "automatic_freeze_allowed": False,
+        "new_future_oos_anchor_required": True,
+        "failed_future_oos_used_for_selection": False,
+        "selection_data_role": "historical_walk_forward_only",
+        "comparison_method": (
+            "paired_target_fold_deltas_with_circular_moving_block_bootstrap"
+        ),
+        "comparison_config": {
+            "bootstrap_repeats": repeats,
+            "block_length_folds": block_length,
+            "confidence_level": confidence_level,
+            "random_seed": random_seed,
+            "gates": gates,
+        },
+        "policy_decisions": decisions,
+    }
+    return comparison, decision
+
+
+def _recency_decision_markdown(decision: dict[str, Any]) -> str:
+    lines = [
+        "# Recency Ensemble Decision",
+        "",
+        f"- Status: `{decision.get('status')}`",
+        f"- Causal control: `{decision.get('control_policy')}`",
+        f"- Recommended policy: `{decision.get('recommended_policy')}`",
+        (
+            "- Candidate ready for explicit pre-registration: "
+            f"`{decision.get('candidate_ready_for_preregistration')}`"
+        ),
+        "- Automatic freeze allowed: `False`",
+        "- Failed future-OOS used for selection: `False`",
+        "- A replacement candidate requires a new future-OOS anchor.",
+        "",
+        "## Policy Gates",
+        "",
+    ]
+    for item in decision.get("policy_decisions", []) or []:
+        failed = ", ".join(item.get("failed_gates", [])) or "none"
+        lines.append(
+            f"- `{item.get('policy_name')}`: passed=`{item.get('passed_all_gates')}`; "
+            f"failed gates=`{failed}`"
+        )
+    return "\n".join(lines)
+
+
 def _research_summary(by_fold: pd.DataFrame) -> pd.DataFrame:
     if by_fold.empty:
         return pd.DataFrame()
@@ -381,8 +796,6 @@ def run_recency_ensemble_research(
     manifest_path = scope_path / "training_manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"Missing training manifest: {manifest_path}")
-    import json
-
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     profile = str(manifest["profile"])
     feature_columns = list(manifest["feature_columns"])
@@ -393,6 +806,10 @@ def run_recency_ensemble_research(
         or {}
     )
     policies = list(research_cfg.get("policies", []) or [])
+    comparison_cfg = research_cfg.get("comparison", {}) or {}
+    control_policy = str(
+        comparison_cfg.get("control_policy", "all_eligible_equal")
+    )
     if not bool(research_cfg.get("enabled", False)) or not policies:
         return {
             "enabled": False,
@@ -410,7 +827,7 @@ def run_recency_ensemble_research(
     )
     if not available_model_folds:
         raise FileNotFoundError(f"No model_fold_*.pt files found under {scope_path}")
-    signature = _hash_payload(
+    prediction_signature = _hash_payload(
         {
             "profile": profile,
             "feature_columns": feature_columns,
@@ -418,14 +835,28 @@ def run_recency_ensemble_research(
             "data_start": str(pd.to_datetime(frame["timestamp"], utc=True).min()),
             "data_end": str(pd.to_datetime(frame["timestamp"], utc=True).max()),
             "rows": int(len(frame)),
-            "policies": policies,
             "walk_forward": profile_cfg.get("walk_forward", {}),
+        }
+    )
+    signature = _hash_payload(
+        {
+            "prediction_signature": prediction_signature,
+            "policies": policies,
+            "comparison": comparison_cfg,
         }
     )
     summary_path = output_path / "recency_ensemble_summary.csv"
     by_fold_path = output_path / "recency_ensemble_by_fold.csv"
     protocol_path = output_path / "recency_ensemble_manifest.json"
-    if summary_path.exists() and by_fold_path.exists() and protocol_path.exists():
+    paired_path = output_path / "recency_ensemble_paired_comparison.csv"
+    decision_path = output_path / "recency_ensemble_decision.json"
+    if (
+        summary_path.exists()
+        and by_fold_path.exists()
+        and protocol_path.exists()
+        and paired_path.exists()
+        and decision_path.exists()
+    ):
         previous = json.loads(protocol_path.read_text(encoding="utf-8"))
         if previous.get("signature_hash") == signature:
             return {
@@ -437,6 +868,8 @@ def run_recency_ensemble_research(
                 "eligibility_audit": pd.read_csv(
                     output_path / "recency_ensemble_eligibility_audit.csv"
                 ),
+                "paired_comparison": pd.read_csv(paired_path),
+                "decision": json.loads(decision_path.read_text(encoding="utf-8")),
                 "signature_hash": signature,
             }
     cv_cfg = profile_cfg.get("walk_forward", {}) or {}
@@ -491,37 +924,45 @@ def run_recency_ensemble_research(
         context_end = int(fold.test[-1]) + 1
         context = frame.iloc[context_start:context_end].copy().reset_index(drop=True)
         cache_path = output_path / (
-            f"cross_predictions_{signature[:12]}_fold_{target_fold:03d}.parquet"
+            f"cross_predictions_{prediction_signature[:12]}_fold_{target_fold:03d}.parquet"
         )
         if cache_path.exists():
             raw = pd.read_parquet(cache_path)
         else:
-            raw = _predict_holdout_for_profile(
-                scope_dir=scope_path,
-                manifest={
-                    "profile": profile,
-                    "feature_columns": feature_columns,
-                },
-                holdout_context=context,
-                holdout_start=timestamps.iloc[int(fold.val[0])],
-                holdout_end=timestamps.iloc[int(fold.test[-1])],
-                model_folds=set(eligible),
-                config=profile_cfg,
+            raw = _load_compatible_cross_prediction_cache(
+                output_path,
+                target_fold=target_fold,
+                eligible_model_folds=eligible,
+                required_start=timestamps.iloc[int(fold.val[0])],
+                required_end=timestamps.iloc[int(fold.test[-1])],
             )
-            compact_columns = [
-                column
-                for column in (
-                    "timestamp",
-                    "model_fold",
-                    "prob_long",
-                    "label",
-                    "forward_return",
-                    "tb_return",
-                    "hit_type",
+            if raw is None:
+                raw = _predict_holdout_for_profile(
+                    scope_dir=scope_path,
+                    manifest={
+                        "profile": profile,
+                        "feature_columns": feature_columns,
+                    },
+                    holdout_context=context,
+                    holdout_start=timestamps.iloc[int(fold.val[0])],
+                    holdout_end=timestamps.iloc[int(fold.test[-1])],
+                    model_folds=set(eligible),
+                    config=profile_cfg,
                 )
-                if column in raw.columns
-            ]
-            raw = raw[compact_columns].copy()
+                compact_columns = [
+                    column
+                    for column in (
+                        "timestamp",
+                        "model_fold",
+                        "prob_long",
+                        "label",
+                        "forward_return",
+                        "tb_return",
+                        "hit_type",
+                    )
+                    if column in raw.columns
+                ]
+                raw = raw[compact_columns].copy()
             raw.to_parquet(cache_path, index=False)
         raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
         val_raw = raw.loc[
@@ -562,6 +1003,7 @@ def run_recency_ensemble_research(
                     "test_start": timestamps.iloc[int(fold.test[0])],
                     "test_end": timestamps.iloc[int(fold.test[-1])],
                     "eligible_model_count": len(eligible),
+                    "selected_model_count": int(test["model_count"].iloc[0]),
                     "latest_eligible_model_fold": max(eligible),
                     "validation_threshold": threshold["threshold"],
                     "validation_f1": threshold["f1"],
@@ -572,6 +1014,12 @@ def run_recency_ensemble_research(
             )
     by_fold = pd.DataFrame(rows)
     summary = _research_summary(by_fold)
+    paired_comparison, policy_decision = _paired_policy_comparison(
+        by_fold,
+        summary,
+        control_policy=control_policy,
+        comparison_config=comparison_cfg,
+    )
     eligibility_audit = pd.DataFrame(eligibility_rows)
     schedule.to_csv(output_path / "recency_ensemble_schedule.csv", index=False)
     eligibility_audit.to_csv(
@@ -580,19 +1028,30 @@ def run_recency_ensemble_research(
     )
     by_fold.to_csv(by_fold_path, index=False)
     summary.to_csv(summary_path, index=False)
+    paired_comparison.to_csv(paired_path, index=False)
+    _write_json(decision_path, policy_decision)
+    (output_path / "recency_ensemble_decision.md").write_text(
+        _recency_decision_markdown(policy_decision),
+        encoding="utf-8",
+    )
     protocol = {
         **research_protocol_payload(config),
         "signature_hash": signature,
+        "prediction_signature_hash": prediction_signature,
         "profile": profile,
         "source_scope_dir": str(scope_path),
         "fit_operations_performed": 0,
         "threshold_selection": "validation_only_per_target_fold",
-        "test_labels_used_for_policy_selection": False,
+        "target_fold_test_labels_used_for_threshold_selection": False,
+        "historical_walk_forward_test_outcomes_used_for_policy_comparison": True,
+        "test_labels_used_for_policy_selection": True,
         "failed_future_oos_used_for_policy_selection": False,
         "eligibility_audit_passed": bool(
             not eligibility_audit.empty and eligibility_audit["eligible"].all()
         ),
         "status": "completed",
+        "policy_decision_status": policy_decision.get("status"),
+        "recommended_policy": policy_decision.get("recommended_policy"),
     }
     _write_json(protocol_path, protocol)
     return {
@@ -602,5 +1061,7 @@ def run_recency_ensemble_research(
         "by_fold": by_fold,
         "schedule": schedule,
         "eligibility_audit": eligibility_audit,
+        "paired_comparison": paired_comparison,
+        "decision": policy_decision,
         "signature_hash": signature,
     }

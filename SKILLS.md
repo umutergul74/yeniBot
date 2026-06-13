@@ -22,6 +22,9 @@ The current safe control profile is configured in `config.yaml`:
   evaluation on June 13, 2026 and failed. It is retired and must not be tuned
   or retested on that same window.
 - `experiments.next_research_cycle.status`: `open_after_failed_future_oos`
+- Post-failure deployment-policy research must compare recency policies against
+  the causal `all_eligible_equal` control. Comparing only recency variants with
+  each other is insufficient evidence.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -132,6 +135,9 @@ Holdout is a one-shot validation gate, not a development playground.
 - Replacement candidates require a new pre-registration and a new future-OOS
   anchor. Their deployment policy must be selected on historical rolling-origin
   windows only.
+- Recency-policy comparisons must use paired target-fold deltas, temporal
+  moving-block uncertainty, positive-fold coverage, worst-fold IC, and
+  economic payoff. A higher average IC alone cannot select a replacement.
 
 ## Phase 1 Readiness Gates
 
@@ -235,6 +241,13 @@ Required diagnostic artifacts include:
 - `future_oos_model_metrics.csv`
 - `future_oos_failure_summary.json`
 - `next_research_protocol.json`
+- `recency_ensemble_summary.csv`
+- `recency_ensemble_by_fold.csv`
+- `recency_ensemble_schedule.csv`
+- `recency_ensemble_eligibility_audit.csv`
+- `recency_ensemble_paired_comparison.csv`
+- `recency_ensemble_decision.json`
+- `recency_ensemble_manifest.json`
 - `experiment_registry_snapshot.jsonl`
 - `holdout_evaluation.csv`
 - `holdout_policy_decision.csv`

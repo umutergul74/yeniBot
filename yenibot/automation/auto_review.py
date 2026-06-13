@@ -236,6 +236,17 @@ def _missing_required_files(
                 "future_oos_failure_summary.md",
             ]
         )
+        protocol = _read_json(report_dir / "next_research_protocol.json")
+        if bool((protocol.get("recency_ensemble", {}) or {}).get("enabled", False)):
+            required.extend(
+                [
+                    "recency_ensemble_summary.csv",
+                    "recency_ensemble_by_fold.csv",
+                    "recency_ensemble_paired_comparison.csv",
+                    "recency_ensemble_decision.json",
+                    "recency_ensemble_decision.md",
+                ]
+            )
     return [name for name in required if not (report_dir / name).exists()]
 
 
@@ -936,6 +947,12 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     future_oos_evaluation = _read_csv(report_path / "future_oos_evaluation.csv")
     future_oos_failure = _read_json(report_path / "future_oos_failure_summary.json")
     recency_research = _read_csv(report_path / "recency_ensemble_summary.csv")
+    recency_paired_comparison = _read_csv(
+        report_path / "recency_ensemble_paired_comparison.csv"
+    )
+    recency_policy_decision = _read_json(
+        report_path / "recency_ensemble_decision.json"
+    )
     next_research_protocol = _read_json(report_path / "next_research_protocol.json")
     training = _read_json(report_path / "training_execution_summary.json")
     missing_files = _missing_required_files(
@@ -1082,6 +1099,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             "policy_count": int(len(recency_research)),
             "best_mean_rank_ic_policy": _best_row(recency_research, "mean_rank_ic"),
             "rows": _records(recency_research),
+            "paired_comparison_rows": _records(recency_paired_comparison),
+            "decision": recency_policy_decision,
         },
         "next_research_protocol": next_research_protocol,
         "frozen_candidate": frozen_candidate,
@@ -1361,7 +1380,10 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         "## Post-Failure Research",
         f"- Recency ensemble research available: `{recency.get('available')}`",
         f"- Policies compared: `{recency.get('policy_count', 0)}`",
+        f"- Causal control policy: `{recency.get('decision', {}).get('control_policy', '')}`",
         f"- Best historical rolling-origin policy: `{recency.get('best_mean_rank_ic_policy', {}).get('policy_name', '')}`",
+        f"- Gate-clearing policy: `{recency.get('decision', {}).get('recommended_policy', '')}`",
+        f"- Recency decision status: `{recency.get('decision', {}).get('status', '')}`",
         f"- Failed OOS used for policy selection: `{recency.get('best_mean_rank_ic_policy', {}).get('failed_future_oos_used_for_selection', '')}`",
         f"- New future-OOS anchor required: `{review.get('next_research_protocol', {}).get('new_future_oos_anchor_required')}`",
         "",

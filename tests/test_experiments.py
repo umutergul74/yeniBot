@@ -1806,6 +1806,36 @@ def test_root_cause_reports_classify_threshold_and_memory_reuse() -> None:
     assert ladder["recommended_next_action"] == "run_05_threshold_transfer_diagnostics_only"
 
 
+def test_decision_ladder_routes_failed_future_oos_to_replacement_research() -> None:
+    ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=pd.DataFrame(),
+        threshold_oracle_gap=pd.DataFrame(),
+        bad_fold_mechanism_summary=pd.DataFrame(),
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["future_unseen_oos_candidate_failed"],
+        },
+        settings={"control_profile": "control"},
+        recency_policy_decision={
+            "status": "historical_policy_cleared_all_gates",
+            "recommended_policy": "recent_3_equal",
+            "candidate_ready_for_preregistration": True,
+        },
+    )
+
+    assert ladder["phase2_allowed"] is False
+    assert ladder["root_cause"] == "failed_future_oos_ranking_and_payoff_breakdown"
+    assert ladder["threshold_work_required"] is False
+    assert ladder["score_reversal_work_required"] is False
+    assert ladder["candidate_generation_allowed"] is True
+    assert ladder["replacement_candidate_ready_for_preregistration"] is True
+    assert ladder["recency_recommended_policy"] == "recent_3_equal"
+    assert ladder["new_future_oos_anchor_required"] is True
+    assert ladder["recommended_next_action"] == (
+        "explicitly_review_and_preregister_historical_recency_winner"
+    )
+
+
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:
     config = {"experiments": {"diagnostics": {"prediction_error_audit_rows_per_case": 2}}}
     rows = []

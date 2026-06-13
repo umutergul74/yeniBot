@@ -63,6 +63,8 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "recency_ensemble_by_fold.csv" in diagnostics
     assert "recency_ensemble_schedule.csv" in diagnostics
     assert "recency_ensemble_eligibility_audit.csv" in diagnostics
+    assert "recency_ensemble_paired_comparison.csv" in diagnostics
+    assert "recency_ensemble_decision.json" in diagnostics
     assert "next_research_protocol.json" in diagnostics
 
 

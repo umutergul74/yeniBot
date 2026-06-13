@@ -42,7 +42,7 @@ def _number(value: Any, default: float = np.nan) -> float:
 
 
 def _model_evidence_passed(phase2_readiness: dict[str, Any]) -> bool:
-    future_only = {
+    pending_future_only = {
         "future_unseen_oos_not_ready",
         "future_unseen_oos_not_evaluated",
     }
@@ -50,7 +50,23 @@ def _model_evidence_passed(phase2_readiness: dict[str, Any]) -> bool:
         str(item)
         for item in phase2_readiness.get("blockers", []) or []
     }
-    return not (blockers - future_only)
+    return not (blockers - pending_future_only)
+
+
+def _historical_walk_forward_evidence_passed(
+    phase2_readiness: dict[str, Any],
+) -> bool:
+    promotion_only = {
+        "future_unseen_oos_not_ready",
+        "future_unseen_oos_not_evaluated",
+        "future_unseen_oos_candidate_failed",
+        "frozen_candidate_manifest_unavailable",
+    }
+    blockers = {
+        str(item)
+        for item in phase2_readiness.get("blockers", []) or []
+    }
+    return not (blockers - promotion_only)
 
 
 def _first(frame: pd.DataFrame, mask: pd.Series | None = None) -> dict[str, Any]:
@@ -154,6 +170,8 @@ def attach_active_charter_status(
     frame["active_validation_charter"] = str(
         phase2_readiness.get("active_validation_charter") or "unknown"
     )
+    frame["historical_walk_forward_evidence_passed"] = False
+    frame["frozen_future_oos_evidence_passed"] = False
     frame["model_evidence_passed_active_charter"] = False
     frame["phase2_ready"] = False
     frame["phase1_status"] = "not_evaluated_under_active_charter"
@@ -161,21 +179,40 @@ def attach_active_charter_status(
         frame["profile"].astype(str).eq(control_profile)
         & frame["fold_scope"].astype(str).eq("full")
     )
+    historical_passed = _historical_walk_forward_evidence_passed(phase2_readiness)
     model_passed = _model_evidence_passed(phase2_readiness)
+    future_oos_passed = not any(
+        str(item).startswith("future_unseen_oos_")
+        for item in phase2_readiness.get("blockers", []) or []
+    )
+    frame.loc[control_mask, "historical_walk_forward_evidence_passed"] = (
+        historical_passed
+    )
+    frame.loc[control_mask, "frozen_future_oos_evidence_passed"] = (
+        future_oos_passed
+    )
     frame.loc[control_mask, "model_evidence_passed_active_charter"] = model_passed
     frame.loc[control_mask, "phase2_ready"] = bool(
         phase2_readiness.get("ready_for_phase2", False)
     )
     if bool(phase2_readiness.get("ready_for_phase2", False)):
         status = "ready_for_phase2"
-    elif model_passed and "future_unseen_oos_not_ready" in (
+    elif historical_passed and "future_unseen_oos_candidate_failed" in (
         phase2_readiness.get("blockers", []) or []
     ):
-        status = "model_evidence_passed_future_oos_pending"
-    elif model_passed:
-        status = "model_evidence_passed_other_governance_blocker"
+        status = "historical_evidence_passed_future_oos_failed"
+    elif historical_passed and "future_unseen_oos_not_ready" in (
+        phase2_readiness.get("blockers", []) or []
+    ):
+        status = "historical_evidence_passed_future_oos_pending"
+    elif historical_passed and "future_unseen_oos_not_evaluated" in (
+        phase2_readiness.get("blockers", []) or []
+    ):
+        status = "historical_evidence_passed_future_oos_pending"
+    elif historical_passed:
+        status = "historical_evidence_passed_other_governance_blocker"
     else:
-        status = "active_charter_model_evidence_failed"
+        status = "historical_walk_forward_evidence_failed"
     frame.loc[control_mask, "phase1_status"] = status
     return frame
 
@@ -272,14 +309,6 @@ def _scorecard_frame(
         (rank_ic_evidence["candidate"].astype(str) == control_profile)
         & rank_ic_evidence["fold_scope"].astype(str).eq("full")
         if not rank_ic_evidence.empty
-        else None,
-    )
-    skill = _first(
-        classification_skill,
-        (classification_skill["candidate"].astype(str) == control_profile)
-        & classification_skill["fold_scope"].astype(str).eq("full")
-        & classification_skill["policy_name"].astype(str).eq("official_threshold")
-        if not classification_skill.empty
         else None,
     )
     quality = _first(
@@ -484,6 +513,8 @@ def _save_scorecard_figure(
     ax.axis("off")
     blockers = phase2_readiness.get("blockers", []) or []
     model_pass = _model_evidence_passed(phase2_readiness)
+    historical_pass = _historical_walk_forward_evidence_passed(phase2_readiness)
+    future_failed = "future_unseen_oos_candidate_failed" in blockers
     headline_color = GREEN if model_pass else RED
     ax.text(0.02, 0.97, "yeniBot Phase 1 Model Evidence", fontsize=21, weight="bold", color=INK, va="top")
     ax.text(
@@ -493,6 +524,21 @@ def _save_scorecard_figure(
         fontsize=15,
         weight="bold",
         color=headline_color,
+    )
+    ax.text(
+        0.02,
+        0.825,
+        (
+            f"HISTORICAL WALK-FORWARD: {'PASS' if historical_pass else 'REVIEW'}"
+            + (
+                " | FROZEN FUTURE-OOS: FAIL"
+                if future_failed
+                else ""
+            )
+        ),
+        fontsize=10,
+        weight="bold",
+        color=GREEN if historical_pass and not future_failed else AMBER,
     )
     ax.text(
         0.98,
@@ -730,6 +776,10 @@ def _dashboard_markdown(
         "# yeniBot Phase 1 Model Performance Dashboard",
         "",
         f"- Active charter: `{phase2_readiness.get('active_validation_charter', 'unknown')}`",
+        (
+            "- Historical walk-forward evidence: "
+            f"`{'PASS' if _historical_walk_forward_evidence_passed(phase2_readiness) else 'REVIEW'}`"
+        ),
         f"- Model evidence gates: `{'PASS' if _model_evidence_passed(phase2_readiness) else 'REVIEW'}`",
         f"- Phase 2 readiness: `{'READY' if phase2_readiness.get('ready_for_phase2') else 'BLOCKED'}`",
         f"- Active blockers: `{', '.join(blockers) if blockers else 'none'}`",
@@ -883,6 +933,13 @@ def write_model_performance_dashboard(
     (path / "model_performance_dashboard.md").write_text(markdown, encoding="utf-8")
     summary = {
         "active_charter": phase2_readiness.get("active_validation_charter"),
+        "historical_walk_forward_evidence_passed": (
+            _historical_walk_forward_evidence_passed(phase2_readiness)
+        ),
+        "frozen_future_oos_evidence_passed": not any(
+            str(item).startswith("future_unseen_oos_")
+            for item in phase2_readiness.get("blockers", []) or []
+        ),
         "model_evidence_passed": _model_evidence_passed(phase2_readiness),
         "phase2_ready": bool(phase2_readiness.get("ready_for_phase2", False)),
         "blockers": phase2_readiness.get("blockers", []) or [],

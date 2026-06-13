@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -124,6 +126,12 @@ def test_recency_weights_are_causal_and_normalized() -> None:
 
     assert sum(weights.values()) == pytest.approx(1.0)
     assert weights[3] > weights[2] > weights[1] > weights[0]
+    all_eligible = recency_weights(
+        [0, 1, 2, 3],
+        target_fold=3,
+        policy="equal_all_eligible",
+    )
+    assert all_eligible == pytest.approx({0: 0.25, 1: 0.25, 2: 0.25, 3: 0.25})
     with pytest.raises(ValueError, match="Future model folds"):
         recency_weights(
             [0, 1, 4],
@@ -277,6 +285,10 @@ def test_recency_research_selects_thresholds_on_validation_only(
                 "recency_ensemble": {
                     "enabled": True,
                     "policies": [
+                        {
+                            "name": "all_eligible",
+                            "policy": "equal_all_eligible",
+                        },
                         {"name": "latest", "policy": "latest_only"},
                         {
                             "name": "recent_2",
@@ -284,6 +296,23 @@ def test_recency_research_selects_thresholds_on_validation_only(
                             "recent_k": 2,
                         },
                     ],
+                    "comparison": {
+                        "control_policy": "all_eligible",
+                        "bootstrap_repeats": 100,
+                        "block_length_folds": 2,
+                        "confidence_level": 0.95,
+                        "random_seed": 42,
+                        "gates": {
+                            "min_mean_rank_ic_delta": -1.0,
+                            "max_std_rank_ic_delta": 1.0,
+                            "min_positive_ic_fraction_delta": -1.0,
+                            "min_worst_5_rank_ic_delta": -1.0,
+                            "min_mean_top_10_lift_delta": -1.0,
+                            "min_positive_selected_return_fraction_delta": -1.0,
+                            "min_rank_ic_delta_probability": 0.0,
+                            "min_rank_ic_win_rate": 0.0,
+                        },
+                    },
                 },
             }
         },
@@ -297,7 +326,33 @@ def test_recency_research_selects_thresholds_on_validation_only(
     )
 
     assert result["status"] == "completed"
-    assert set(result["summary"]["policy_name"]) == {"latest", "recent_2"}
+    assert set(result["summary"]["policy_name"]) == {
+        "all_eligible",
+        "latest",
+        "recent_2",
+    }
     assert result["summary"]["failed_future_oos_used_for_selection"].eq(False).all()
     assert result["eligibility_audit"]["eligible"].all()
-    assert (tmp_path / "research" / "recency_ensemble_manifest.json").exists()
+    assert not result["paired_comparison"].empty
+    assert result["decision"]["control_policy"] == "all_eligible"
+    assert result["decision"]["automatic_freeze_allowed"] is False
+    assert "selected_model_count" in result["by_fold"].columns
+    manifest = json.loads(
+        (tmp_path / "research" / "recency_ensemble_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert bool(manifest["test_labels_used_for_policy_selection"]) is True
+    assert (
+        bool(manifest["target_fold_test_labels_used_for_threshold_selection"])
+        is False
+    )
+    assert (
+        bool(
+            manifest[
+                "historical_walk_forward_test_outcomes_used_for_policy_comparison"
+            ]
+        )
+        is True
+    )
+    assert (tmp_path / "research" / "recency_ensemble_decision.json").exists()
