@@ -8,6 +8,8 @@ import pytest
 
 import yenibot.experiment.rolling_research as rolling_module
 from yenibot.experiment.future_oos_diagnostics import (
+    empty_future_oos_diagnostic_frames,
+    empty_future_oos_model_metrics,
     future_oos_diagnostic_frames,
     future_oos_failure_summary,
     future_oos_model_metrics,
@@ -54,6 +56,20 @@ def test_future_oos_diagnostics_cover_time_bands_regimes_and_disagreement() -> N
     assert frames["score_bands"]["score_decile"].nunique() == 10
     assert set(frames["regime_metrics"]["regime"]) == {"0", "1"}
     assert frames["ensemble_disagreement"].loc[0, "model_count_min"] == 4
+
+
+def test_empty_future_oos_diagnostics_preserve_csv_headers(tmp_path) -> None:
+    frames = empty_future_oos_diagnostic_frames()
+    frames["model_metrics"] = empty_future_oos_model_metrics()
+
+    for name, frame in frames.items():
+        assert frame.empty
+        assert len(frame.columns) > 0
+        path = tmp_path / f"{name}.csv"
+        frame.to_csv(path, index=False)
+        loaded = pd.read_csv(path)
+        assert loaded.empty
+        assert loaded.columns.tolist() == frame.columns.tolist()
 
 
 def test_future_oos_failure_summary_distinguishes_ranking_from_threshold_only() -> None:

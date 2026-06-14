@@ -11,11 +11,99 @@ from sklearn.metrics import average_precision_score, f1_score, precision_score, 
 from yenibot.experiment.common import _rank_ic_for_frame
 
 __all__ = [
+    "empty_future_oos_diagnostic_frames",
+    "empty_future_oos_model_metrics",
     "future_oos_diagnostic_frames",
     "future_oos_failure_summary",
     "future_oos_model_metrics",
     "future_oos_failure_markdown",
 ]
+
+_METRIC_COLUMNS = [
+    "rows",
+    "rank_ic",
+    "label_prevalence",
+    "pred_long_rate",
+    "precision",
+    "recall",
+    "f1",
+    "prauc",
+    "prauc_lift_vs_prevalence",
+    "precision_lift_vs_prevalence",
+    "top_10_lift",
+    "top_10_forward_return",
+    "selected_forward_return",
+    "score_mean",
+    "score_std",
+]
+_TEMPORAL_BLOCK_COLUMNS = [
+    "candidate_id",
+    "block_id",
+    "data_start",
+    "data_end",
+    "threshold",
+    *_METRIC_COLUMNS,
+]
+_SCORE_BAND_COLUMNS = [
+    "candidate_id",
+    "score_decile",
+    "band",
+    "rows",
+    "score_min",
+    "score_mean",
+    "score_max",
+    "label_rate",
+    "label_lift",
+    "mean_forward_return",
+    "mean_tb_return",
+    "frozen_threshold_selection_rate",
+]
+_REGIME_METRIC_COLUMNS = [
+    "candidate_id",
+    "regime",
+    "threshold",
+    *_METRIC_COLUMNS,
+]
+_ENSEMBLE_DISAGREEMENT_COLUMNS = [
+    "candidate_id",
+    "rows",
+    "model_count_min",
+    "model_count_max",
+    "prob_long_model_std_mean",
+    "prob_long_model_std_p90",
+    "prob_long_model_range_mean",
+    "error_model_std_mean",
+    "correct_model_std_mean",
+    "selected_model_std_mean",
+    "not_selected_model_std_mean",
+    "high_disagreement_error_rate",
+]
+_MODEL_METRIC_COLUMNS = [
+    "candidate_id",
+    "profile",
+    "model_fold",
+    "threshold",
+    *_METRIC_COLUMNS,
+]
+
+
+def empty_future_oos_diagnostic_frames() -> dict[str, pd.DataFrame]:
+    """Return header-preserving empty frames for every compact OOS report."""
+
+    return {
+        "temporal_blocks": pd.DataFrame(columns=_TEMPORAL_BLOCK_COLUMNS),
+        "score_bands": pd.DataFrame(columns=_SCORE_BAND_COLUMNS),
+        "regime_metrics": pd.DataFrame(columns=_REGIME_METRIC_COLUMNS),
+        "ensemble_disagreement": pd.DataFrame(
+            columns=_ENSEMBLE_DISAGREEMENT_COLUMNS
+        ),
+    }
+
+
+def empty_future_oos_model_metrics() -> pd.DataFrame:
+    """Return an empty per-model report that remains readable as CSV."""
+
+    return pd.DataFrame(columns=_MODEL_METRIC_COLUMNS)
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:
@@ -90,7 +178,7 @@ def _temporal_blocks(
                     **_metrics(part, threshold=threshold),
                 }
             )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=_TEMPORAL_BLOCK_COLUMNS)
 
 
 def _score_bands(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFrame:
@@ -129,7 +217,7 @@ def _score_bands(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFrame
                     ),
                 }
             )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=_SCORE_BAND_COLUMNS)
 
 
 def _regime_metrics(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFrame:
@@ -137,7 +225,7 @@ def _regime_metrics(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFr
         column for column in predictions.columns if column.startswith("regime_prob_")
     )
     if not regime_columns:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=_REGIME_METRIC_COLUMNS)
     frame = predictions.copy()
     frame["regime"] = (
         frame[regime_columns]
@@ -158,13 +246,13 @@ def _regime_metrics(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFr
                 **_metrics(part, threshold=threshold),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=_REGIME_METRIC_COLUMNS)
 
 
 def _ensemble_disagreement(predictions: pd.DataFrame, *, threshold: float) -> pd.DataFrame:
     required = {"prob_long_model_std", "prob_long_model_min", "prob_long_model_max"}
     if not required.issubset(predictions.columns):
-        return pd.DataFrame()
+        return pd.DataFrame(columns=_ENSEMBLE_DISAGREEMENT_COLUMNS)
     rows: list[dict[str, Any]] = []
     for candidate_id, part in predictions.groupby("candidate_id", sort=False):
         selected = pd.to_numeric(part["prob_long"], errors="coerce") >= threshold
@@ -196,7 +284,7 @@ def _ensemble_disagreement(predictions: pd.DataFrame, *, threshold: float) -> pd
                 ),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=_ENSEMBLE_DISAGREEMENT_COLUMNS)
 
 
 def future_oos_diagnostic_frames(
@@ -232,7 +320,7 @@ def future_oos_model_metrics(
     """Summarize each frozen component model on the same untouched OOS rows."""
 
     if raw_predictions.empty or "model_fold" not in raw_predictions.columns:
-        return pd.DataFrame()
+        return empty_future_oos_model_metrics()
     rows = []
     for model_fold, part in raw_predictions.groupby("model_fold", sort=True):
         rows.append(
@@ -244,7 +332,7 @@ def future_oos_model_metrics(
                 **_metrics(part, threshold=threshold),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=_MODEL_METRIC_COLUMNS)
 
 
 def future_oos_failure_summary(

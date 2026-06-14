@@ -15,6 +15,8 @@ from yenibot.experiment.frozen import (
     verify_frozen_manifest_artifacts,
 )
 from yenibot.experiment.future_oos_diagnostics import (
+    empty_future_oos_diagnostic_frames,
+    empty_future_oos_model_metrics,
     future_oos_diagnostic_frames,
     future_oos_failure_markdown,
     future_oos_failure_summary,
@@ -554,37 +556,38 @@ def evaluate_future_oos(
         {"status": status, "rows": evaluation.to_dict(orient="records")},
     )
     _write_json(report_path / "future_oos_readiness.json", status)
+    empty_diagnostics = empty_future_oos_diagnostic_frames()
     diagnostic_outputs = {
         "future_oos_temporal_blocks.csv": pd.concat(
             [item for item in temporal_diagnostics if not item.empty],
             ignore_index=True,
         )
         if any(not item.empty for item in temporal_diagnostics)
-        else pd.DataFrame(),
+        else empty_diagnostics["temporal_blocks"],
         "future_oos_score_bands.csv": pd.concat(
             [item for item in score_band_diagnostics if not item.empty],
             ignore_index=True,
         )
         if any(not item.empty for item in score_band_diagnostics)
-        else pd.DataFrame(),
+        else empty_diagnostics["score_bands"],
         "future_oos_regime_metrics.csv": pd.concat(
             [item for item in regime_diagnostics if not item.empty],
             ignore_index=True,
         )
         if any(not item.empty for item in regime_diagnostics)
-        else pd.DataFrame(),
+        else empty_diagnostics["regime_metrics"],
         "future_oos_ensemble_disagreement.csv": pd.concat(
             [item for item in disagreement_diagnostics if not item.empty],
             ignore_index=True,
         )
         if any(not item.empty for item in disagreement_diagnostics)
-        else pd.DataFrame(),
+        else empty_diagnostics["ensemble_disagreement"],
         "future_oos_model_metrics.csv": pd.concat(
             [item for item in model_diagnostics if not item.empty],
             ignore_index=True,
         )
         if any(not item.empty for item in model_diagnostics)
-        else pd.DataFrame(),
+        else empty_future_oos_model_metrics(),
     }
     for filename, frame in diagnostic_outputs.items():
         frame.to_csv(report_path / filename, index=False)
