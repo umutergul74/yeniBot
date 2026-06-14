@@ -2567,11 +2567,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_train_clip_4h_large_trade",
-        "baseline_stable_train_reliability_mask_4h_flow",
-        "baseline_stable_train_clip_and_reliability_mask",
-    ]
+    assert config["experiments"]["candidate_profiles"] == []
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
     assert config["experiments"]["profile_blends"]["weighted"] == []
@@ -2586,7 +2582,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["policy_review"]["future_oos_candidates"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
-    assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is True
+    assert config["experiments"]["policy_review"]["future_oos_monitor"]["enabled"] is False
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_run_id"] == "20260522_135424"
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["anchor_data_end"] == "2026-05-13 08:00:00+00:00"
     assert config["experiments"]["policy_review"]["future_oos_monitor"]["min_new_bars"] == 720
@@ -2597,11 +2593,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "superseded_not_active"
     assert config["validation"]["charter"]["versions"]["v4_evidence"]["status"] == "active"
     frozen = config["experiments"]["frozen_candidates"]
-    assert frozen["primary_candidate_id"] == "control_fold_ensemble_v1"
-    assert frozen["candidates"][0]["profile"] == config["experiments"]["control_profile"]
-    assert frozen["candidates"][0]["required_for_evaluation"] is True
-    assert frozen["candidates"][1]["required_for_evaluation"] is False
-    assert frozen["candidates"][1]["evaluation_role"] == "optional_historical_benchmark"
+    assert frozen["lifecycle_state"] == "awaiting_replacement_preregistration"
+    assert frozen["primary_candidate_id"] is None
+    assert frozen["anchor_data_end"] is None
+    assert frozen["candidates"] == []
     assert config["experiments"]["future_oos_validation"]["enabled"] is False
     assert config["experiments"]["future_oos_validation"]["min_rows"] == 720
     assert config["experiments"]["future_oos_validation"]["gates"]["min_rank_ic"] == 0.03
@@ -2675,6 +2670,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert mask_profile["config_overrides"]["training"]["preprocessing"]["stability_mask"]["enabled"] is True
     assert combo_profile["config_overrides"]["training"]["preprocessing"]["quantile_clip"]["enabled"] is True
     assert combo_profile["config_overrides"]["training"]["preprocessing"]["stability_mask"]["enabled"] is True
+    rejected = config["experiments"]["experiment_memory"]["rejected_profiles"]
+    assert "non-promotable" in rejected["baseline_stable_train_clip_4h_large_trade"]["reason"]
+    assert "hard train-fold masking" in rejected["baseline_stable_train_reliability_mask_4h_flow"]["reason"]
+    assert "did not stabilize" in rejected["baseline_stable_train_clip_and_reliability_mask"]["reason"]
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
@@ -4628,6 +4627,28 @@ def test_seed_audit_coverage_reports_missing_and_invalid_folds() -> None:
     assert coverage.loc[0, "observed_fold_count"] == 2
     assert bool(coverage.loc[0, "coverage_passed"]) is False
     assert coverage.loc[0, "status"] == "invalid_configured_fold_ids"
+
+
+def test_disabled_seed_audit_is_reported_as_not_evaluated() -> None:
+    settings = {
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "always_full_profiles": ["control"],
+        "seed_audit": {
+            "enabled": False,
+            "profiles": ["control"],
+            "seeds": [42, 43, 44],
+        },
+    }
+
+    selection = _experiment_selection_frame(settings)
+    coverage = _seed_audit_coverage_frame([], settings)
+
+    seed_row = selection.loc[selection["role"] == "seed_audit_profile"].iloc[0]
+    assert bool(seed_row["selected"]) is False
+    assert seed_row["skip_reason"] == "seed_audit_disabled_not_evaluated"
+    assert bool(coverage.loc[0, "coverage_passed"]) is False
+    assert coverage.loc[0, "status"] == "disabled_not_evaluated"
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:

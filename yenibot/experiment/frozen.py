@@ -213,10 +213,20 @@ def freeze_candidate_manifests(
             _table_markdown("Frozen Candidate Index", index),
             encoding="utf-8",
         )
+        awaiting_replacement = enabled and not anchor_value
         disabled = {
             "available": False,
             "enabled": enabled,
-            "unavailable_reasons": ["frozen_candidate_protocol_disabled_or_missing_anchor"],
+            "candidate_status": (
+                "awaiting_replacement_preregistration"
+                if awaiting_replacement
+                else "frozen_candidate_protocol_disabled"
+            ),
+            "unavailable_reasons": [
+                "replacement_candidate_not_preregistered"
+                if awaiting_replacement
+                else "frozen_candidate_protocol_disabled"
+            ],
         }
         _write_json(report_path / "frozen_candidate_manifests.json", {"candidates": []})
         _write_json(report_path / "frozen_candidate_manifest.json", disabled)

@@ -71,25 +71,28 @@ The reliability evidence does not support probability-sized positions.
 - Improve diagnostics, tests, documentation, CI, and operator safety.
 - Use the failed OOS window for diagnosis only.
 - Repair the retained control on historical purged walk-forward folds.
-- Test only train-fold-fitted preprocessing hypotheses that address the
-  observed 4H flow reversal and large-trade distribution drift.
+- Design a distinct pre-registered mechanism that addresses ranking reversal
+  without repeating global deletion, hard reliability masking, or simple
+  large-trade clipping.
 - Add the failed window to future training data only after preserving its
   immutable evaluation record.
 - Pre-register the replacement before collecting a new future-OOS window.
 
-## Immediate Run Sequence
+## Latest Mechanism Cycle
 
-1. Run notebook `04` once on a GPU. It compares the retained control with
-   train-only 4H large-trade clipping, 4H flow reliability masking, and their
-   factorial combination on the pre-registered mechanism folds.
-2. Run notebook `05` on CPU/high-RAM.
-3. Review `profile_comparison.csv`, `profile_delta_vs_control.csv`,
-   `fold_stability_summary.csv`, and `preprocessing_audit.csv`.
-4. Full CV is allowed for at most one triage winner. Freeze nothing until that
-   winner preserves mean IC and top-decile payoff while improving downside
-   folds and Rank IC dispersion.
-- Fix code defects only when the frozen numerical contract remains unchanged
-  and the change is covered by regression tests.
+Bundle `20260614_054446` completed the train-only preprocessing experiment:
+
+- Simple `4h_large_trade_ratio` clipping was controlled but not promotable:
+  mean IC improved slightly while official F1 stayed flat and top-10 lift fell.
+- Hard 4H-flow reliability masking changed 10 of 12 triage folds, increased
+  Rank IC dispersion, reduced positive-fold coverage, and weakened economic
+  concentration.
+- Adding clipping did not repair the masking instability.
+
+There is currently no active candidate profile and no active future-OOS
+primary candidate. Notebook `04` should not be rerun until a distinct
+pre-registered hypothesis is committed. Notebook `05` may be run for
+diagnostic/report verification without GPU.
 
 ## What Is Frozen
 
@@ -103,3 +106,8 @@ The reliability evidence does not support probability-sized positions.
 Do not modify the retired candidate's profile, threshold, weights, model
 artifacts, or manifest hash. Do not choose replacement ensemble weights or
 thresholds from the failed OOS window.
+
+The retired manifest remains historical evidence in prior bundles and
+`frozen_candidate_outcomes`. It is intentionally absent from the active
+`frozen_candidates` slot. A new anchor and counter begin only after a
+replacement is selected and pre-registered.

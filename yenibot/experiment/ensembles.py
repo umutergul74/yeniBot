@@ -245,8 +245,8 @@ def _seed_audit_coverage_frame(
             [
                 {
                     "enabled": False,
-                    "coverage_passed": True,
-                    "status": "disabled",
+                    "coverage_passed": False,
+                    "status": "disabled_not_evaluated",
                 }
             ],
             columns=columns,

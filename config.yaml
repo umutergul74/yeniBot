@@ -1958,10 +1958,7 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles:
-    - baseline_stable_train_clip_4h_large_trade
-    - baseline_stable_train_reliability_mask_4h_flow
-    - baseline_stable_train_clip_and_reliability_mask
+  candidate_profiles: []
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -1971,15 +1968,17 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: active
+    status: mechanism_cycle_completed_no_promotion
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
     frozen_oos_history_policy: "Retain prior outcomes unchanged; do not select this cycle against the failed future-OOS window."
-    hypotheses:
+    completed_hypotheses:
       - train_only_large_trade_distribution_clipping
       - train_only_4h_flow_reliability_mask
-      - factorial_combination
+      - train_only_clip_and_reliability_mask
+    conclusion: "Bundle 20260614_054446 produced no promotable candidate. Hard reliability masking increased fold dispersion and damaged positive-fold coverage; clipping was controlled but economically non-inferior evidence was insufficient."
+    next_step: "Keep the control profile. Require a distinct pre-registered mechanism that evaluates ranking stability and top-score payoff together; do not rerun this preprocessing family automatically."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2000,13 +1999,13 @@ experiments:
     future_oos_candidates:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     future_oos_monitor:
-      enabled: true
+      enabled: false
       anchor_run_id: "20260522_135424"
       anchor_data_end: "2026-05-13 08:00:00+00:00"
       min_new_bars: 720
       preferred_new_bars: 2160
       allow_holdout_roll_forward: false
-      policy: "Monitor the failed frozen top_10 policy only as a historical benchmark. Do not change profile, blend weights, score band, or threshold from this holdout; define any replacement before a future unseen window."
+      policy: "Historical failed-window metadata only. Reactivate with a new anchor only after a replacement candidate is selected and pre-registered."
     robustness:
       enabled: true
       min_rows: 720
@@ -2022,47 +2021,13 @@ experiments:
         - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
   frozen_candidates:
     enabled: true
+    lifecycle_state: awaiting_replacement_preregistration
     protocol_version: v1
-    anchor_run_id: "20260522_135424"
-    anchor_data_end: "2026-05-13 08:00:00+00:00"
-    primary_candidate_id: control_fold_ensemble_v1
+    anchor_run_id: null
+    anchor_data_end: null
+    primary_candidate_id: null
     artifact_policy: "reference_and_hash_existing_pre_anchor_fold_artifacts; never refit during future OOS evaluation"
-    candidates:
-      - candidate_id: control_fold_ensemble_v1
-        candidate_type: profile
-        profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-        source_run_id: "20260605_211102"
-        expected_manifest_hash: "5c2acd94b3ea46a509b8a8c8b7327f6cc5ed34045a4e97e21a0b34b3313ae302"
-        threshold:
-          value: 0.4236384365293715
-          source: validation_constrained_threshold
-          selected_from: pre_anchor_walk_forward_validation
-        fold_scope: full
-        status: preregistered
-        evaluation_role: primary
-        required_for_evaluation: true
-      - candidate_id: control_long_pressure_65_35_v1
-        candidate_type: blend
-        blend_method: prob_weighted
-        profiles:
-          - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-          - baseline_no_4h_tier1_4h_large_trade_pressure_long
-        weights: [0.65, 0.35]
-        fold_scope: full
-        status: preregistered_benchmark
-        evaluation_role: optional_historical_benchmark
-        required_for_evaluation: false
-      - candidate_id: control_recent3_equal_v2
-        candidate_type: recency_profile
-        profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-        source_run_id: "20260613_134953"
-        anchor_data_end: "2026-06-13 01:00:00+00:00"
-        fold_scope: replacement_recent3
-        recency_policy: equal_recent_k
-        recent_k: 3
-        status: preregistration_build_manifest_pin_pending
-        evaluation_role: replacement_candidate_pending_pin
-        required_for_evaluation: false
+    candidates: []
   future_oos_validation:
     enabled: false
     pause_reason: "Paused after immutable candidate failure while walk-forward CV feature reliability is repaired. Phase 2 remains blocked."
@@ -2188,9 +2153,9 @@ experiments:
     reject_retests: true
     allow_retest_profiles: []
     reference_notes:
-      baseline_stable_train_clip_4h_large_trade: "Pre-registered from bundle 20260613_134953 root-cause evidence. Tests train-fold-only clipping of 4h_large_trade_ratio distribution drift; distinct from the rejected global feature deletion."
-      baseline_stable_train_reliability_mask_4h_flow: "Pre-registered from bundle 20260613_134953. Masks only train-fold flow features with joint recent return-IC and label-gap reversal; distinct from global ablation and direct interaction experiments."
-      baseline_stable_train_clip_and_reliability_mask: "Factorial combination of the two train-only mechanism hypotheses. Evaluate attribution against each single intervention before promotion."
+      baseline_stable_train_clip_4h_large_trade: "Bundle 20260614_054446: train-only clipping was controlled and improved triage mean IC by 0.0047 with a small std reduction, but official F1 was flat and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive/non-promotable; do not auto-rerun."
+      baseline_stable_train_reliability_mask_4h_flow: "Bundle 20260614_054446: hard reliability masking touched 10/12 triage folds and produced unstable alternating wins/losses. Mean IC rose, but std increased to 0.1121, positive folds fell to 50%, official F1 and top-10 lift deteriorated. Reject this masking rule."
+      baseline_stable_train_clip_and_reliability_mask: "Bundle 20260614_054446: adding clipping did not repair hard-mask instability. Std remained 0.1110, positive folds 50%, official F1 0.4323, and top-10 lift 1.1770. Reject the combined rule."
       baseline_plus_4h_bounded_whale_no_4h_tier1: "Legacy baseline kept for continuity; latest full run mean IC 0.0575, std 0.1012, positive folds 78.6%."
       baseline_no_4h_tier1_4h_large_trade_pressure_long: "Tail-lift benchmark; latest clean holdout run 20260522_135424 was weak as a standalone profile: IC 0.0143, top-10 lift 0.9485, and negative top-10 forward return. Keep as a comparison source only."
       baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility: "Best current single-profile stability branch; run 20260526_185416 mean IC 0.0734, std 0.0708, positive folds 86.1%, official F1 0.4313. Main blockers remain fold std, official F1, and future unseen OOS."
@@ -2212,6 +2177,12 @@ experiments:
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
       training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
     rejected_profiles:
+      baseline_stable_train_clip_4h_large_trade:
+        reason: "Bundle 20260614_054446: controlled but non-promotable. Triage mean IC improved only 0.0047, std improvement missed the preregistered minimum, official F1 was flat, and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive and require an explicit retest reason."
+      baseline_stable_train_reliability_mask_4h_flow:
+        reason: "Bundle 20260614_054446: hard train-fold masking altered 10/12 folds, increased std from 0.0985 to 0.1121, reduced positive folds from 58.3% to 50%, lowered official F1, and weakened top-10 lift. The broad binary mask is rejected."
+      baseline_stable_train_clip_and_reliability_mask:
+        reason: "Bundle 20260614_054446: clipping did not stabilize the reliability mask; std remained 0.1110, positive folds remained 50%, official F1 fell, and top-10 lift weakened. Reject this factorial combination."
       baseline_control_plus_futures_context:
         reason: "Run 20260524_072602 broad futures-context profile improved frozen holdout top-10 but failed CV stability; use narrower futures OI/positioning/funding tracks instead."
       baseline_control_plus_futures_oi_change_context:

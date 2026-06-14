@@ -31,6 +31,9 @@ candidate is built from its pre-anchor fold ensemble.
 | Global deletion of 4H taker mean-12 | Removed useful good-period signal and worsened CV |
 | Global deletion of 4H large-trade ratio | Improved isolated F1/lift but damaged IC stability |
 | Direct taker-flow x large-trade interactions | Failed to preserve the retained control |
+| Hard train-fold 4H-flow reliability masking | Altered 10/12 triage folds, increased dispersion, and reduced positive-fold coverage |
+| Simple train-only 4H large-trade clipping | Controlled but non-promotable; small IC gain came with lower top-10 lift |
+| Clipping plus hard reliability masking | Did not repair masking instability |
 
 ## Governance Rule
 
@@ -42,7 +45,7 @@ requires:
 3. pre-registration in experiment memory, and
 4. a comparison that does not use the seen holdout for selection.
 
-## Active Mechanism Experiment
+## Completed Mechanism Experiment
 
 The retained control's five negative folds are not explained by label balance.
 The dominant mechanism is score-ranking reversal:
@@ -50,11 +53,14 @@ The dominant mechanism is score-ranking reversal:
 - `4h_taker_imbalance_mean_12` changes sign between good and bad periods.
 - `4h_large_trade_ratio` shows material distribution drift.
 
-The active factorial test preserves the control and compares:
+Bundle `20260614_054446` compared:
 
 1. train-only clipping of `4h_large_trade_ratio`,
 2. train-only reliability masking of `4h_taker_imbalance_mean_*`, and
 3. their combination.
 
-This is distinct from the rejected global deletions and direct interaction
-families. Every fold decision is written to `preprocessing_audit.csv`.
+Every fold decision was written to `preprocessing_audit.csv`. No candidate
+passed the pre-registered promotion gates. The hard masking rule is rejected;
+clipping is archived as inconclusive/non-promotable. The next experiment must
+use a distinct mechanism and improve both ranking stability and top-score
+payoff rather than optimizing mean IC alone.

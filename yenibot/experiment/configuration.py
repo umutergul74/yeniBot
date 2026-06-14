@@ -855,15 +855,11 @@ def _experiment_selection_frame(settings: dict[str, Any]) -> pd.DataFrame:
     for role, key in (
         ("candidate_profile", "candidate_profiles"),
         ("always_full_profile", "always_full_profiles"),
-        ("seed_audit_profile", "seed_audit_profiles"),
     ):
         values = settings.get(key, [])
-        if key == "seed_audit_profiles":
-            values = (settings.get("seed_audit", {}) or {}).get("profiles", [])
         expected_scope = {
             "candidate_profile": "triage",
             "always_full_profile": "full",
-            "seed_audit_profile": "seed_audit",
         }[role]
         for profile in values or []:
             rows.append(
@@ -875,6 +871,18 @@ def _experiment_selection_frame(settings: dict[str, Any]) -> pd.DataFrame:
                     "skip_reason": "",
                 }
             )
+    seed_audit = settings.get("seed_audit", {}) or {}
+    seed_enabled = bool(seed_audit.get("enabled", False))
+    for profile in seed_audit.get("profiles", []) or []:
+        rows.append(
+            {
+                "profile": str(profile),
+                "role": "seed_audit_profile",
+                "selected": seed_enabled,
+                "expected_fold_scope": "seed_audit" if seed_enabled else "",
+                "skip_reason": "" if seed_enabled else "seed_audit_disabled_not_evaluated",
+            }
+        )
     for skipped in settings.get("skipped_profiles", []) or []:
         rows.append(
             {

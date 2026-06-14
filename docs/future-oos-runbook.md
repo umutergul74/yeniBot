@@ -5,7 +5,7 @@
 Evaluate the pre-registered candidate on fresh mature labels without changing
 the candidate, fitting any object, or using notebook `04`.
 
-## Frozen Identity
+## Historical Frozen Identity
 
 Before doing anything, confirm:
 
@@ -19,7 +19,14 @@ anchor: 2026-05-13 08:00:00+00:00
 
 If any value differs, stop. Do not regenerate a replacement candidate.
 
-## Colab Sequence
+This candidate was evaluated and retired on June 13, 2026. The values above
+are historical verification data, not the active candidate configuration.
+The active frozen slot now reports
+`awaiting_replacement_preregistration`. Do not run future-OOS evaluation until
+a new primary candidate, source run, manifest hash, threshold, and anchor have
+all been committed.
+
+## Colab Sequence For A New Frozen Candidate
 
 1. `git pull`
 2. `Runtime -> Restart session`
@@ -28,7 +35,9 @@ If any value differs, stop. Do not regenerate a replacement candidate.
 5. Run `03_labeling.ipynb`
 6. Run `05_diagnostics_validation.ipynb`
 
-Do **not** run `04_training_walk_forward.ipynb`.
+Do **not** run `04_training_walk_forward.ipynb` after the new candidate is
+frozen. Before a replacement has been selected, notebook `04` remains a
+historical walk-forward research tool only.
 
 The data refresh extends raw, processed, and labeled rows. It must not replace
 the frozen source-run artifacts.
@@ -57,6 +66,19 @@ fit_operations_performed: 0
 
 The date is not the gate. Label maturity and the configured minimum of 720
 fresh labeled rows are the gate.
+
+### Awaiting Replacement State
+
+```text
+state: awaiting_replacement_preregistration
+ready_for_evaluation: false
+fit_operations_performed: 0
+```
+
+This is the expected state after a failed candidate is retired and before a
+replacement is frozen. It is not an artifact-integrity error. Select the
+replacement on historical walk-forward evidence, commit its manifest and new
+anchor, then begin counting genuinely unseen rows.
 
 ### Ready State
 

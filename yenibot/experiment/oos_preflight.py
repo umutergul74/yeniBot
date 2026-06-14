@@ -135,6 +135,58 @@ def future_oos_preflight(
     anchor = pd.to_datetime(anchor_value, utc=True, errors="coerce")
     min_rows = int(future.get("min_rows", 720))
     preferred_rows = int(future.get("preferred_rows", 2160))
+    if not primary_id or pd.isna(anchor):
+        return {
+            "preflight_version": "future_oos_preflight_v1",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "side_effect_free": True,
+            "fit_operations_performed": 0,
+            "state": "awaiting_replacement_preregistration",
+            "invariants_passed": False,
+            "ready_for_evaluation": False,
+            "next_action": "select_and_preregister_replacement_before_new_oos_anchor",
+            "required_notebook_sequence_when_refreshing": [],
+            "forbidden_before_frozen_evaluation": [
+                "future_oos_scoring_without_preregistered_candidate",
+                "threshold_selection_from_failed_future_oos",
+                "manifest_regeneration_from_retired_candidate",
+            ],
+            "primary_candidate": {
+                "candidate_id": primary_id,
+                "source_run_id": source_run_id,
+                "anchor_data_end": None,
+                "expected_manifest_hash": expected_hash,
+                "manifest_path": "",
+                "manifest_hash": "",
+                "threshold_expected": expected_threshold,
+                "threshold_manifest": None,
+                "threshold_source": "",
+                "profile": str(spec.get("profile", "")),
+                "component_count": 0,
+                "model_count": 0,
+            },
+            "data": {
+                "fresh_labeled_rows": 0,
+                "min_rows": min_rows,
+                "preferred_rows": preferred_rows,
+                "min_rows_remaining": None,
+                "preferred_rows_remaining": None,
+            },
+            "checks": {
+                "protocol_enabled": bool(frozen.get("enabled", False)),
+                "active_primary_candidate_present": False,
+                "new_anchor_present": False,
+            },
+            "failed_checks": [
+                "active_primary_candidate_present",
+                "new_anchor_present",
+            ],
+            "artifact_integrity_errors": [],
+            "missing_frozen_feature_columns": [],
+            "warnings": [
+                "The prior frozen candidate is retired. This is an expected research state, not an artifact-integrity failure."
+            ],
+        }
     manifest, manifest_path = _load_primary_manifest(
         checkpoint_dir=checkpoint_dir,
         config=config,

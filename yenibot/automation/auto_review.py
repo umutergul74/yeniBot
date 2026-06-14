@@ -434,6 +434,7 @@ def _next_action(
     cv_promotable: list[dict[str, Any]],
     decision: dict[str, Any],
     future_oos: dict[str, Any],
+    frozen_candidate: dict[str, Any],
     replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
@@ -446,9 +447,19 @@ def _next_action(
     if not bool(decision.get("holdout_boundary_passed", True)):
         reasons.append("holdout_boundary_audit_failed")
         return "rerun_training_with_holdout_split", reasons
-    if bool(policy.get("future_oos_ready", False)) and not bool(
-        future_oos.get("evaluation_completed", False)
-    ):
+    window_data_ready = bool(policy.get("future_oos_ready", False))
+    frozen_candidate_available = bool(frozen_candidate.get("available", False))
+    evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
+    if not frozen_candidate_available:
+        reasons.append("replacement_candidate_not_preregistered")
+        return (
+            "continue_walk_forward_research_until_replacement_preregistered",
+            reasons,
+        )
+    if window_data_ready and not bool(future_oos.get("evaluation_completed", False)):
+        if not evaluation_ready:
+            reasons.append("future_oos_evaluation_preflight_not_ready")
+            return "repair_future_oos_preflight_without_refit", reasons
         reasons.append("future_oos_ready_but_not_evaluated")
         return "run_no_refit_future_oos_evaluator", reasons
     if bool(future_oos.get("evaluation_completed", False)) and not bool(
@@ -488,10 +499,12 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
     seed_coverage = review.get("seed_audit_coverage", {}) or {}
+    policy = review.get("holdout", {}).get("policy", {}) or {}
     future_oos = review.get("future_oos", {}).get("readiness", {}) or {}
     frozen_candidate = review.get("frozen_candidate", {}) or {}
     charter = review.get("validation_charter_status", {}) or {}
-    future_ready = bool(future_oos.get("ready_for_evaluation", False))
+    future_window_data_ready = bool(policy.get("future_oos_ready", False))
+    future_evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     future_evaluated = bool(future_oos.get("evaluation_completed", False))
     future_passed = future_oos.get("primary_candidate_passed") is True
@@ -669,11 +682,11 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "check": "future_unseen_oos_ready",
-            "passed": future_ready,
-            "value": future_ready,
+            "passed": future_window_data_ready,
+            "value": future_window_data_ready,
             "target": True,
             "blocker": "future_unseen_oos_not_ready",
-            "applicable": True,
+            "applicable": frozen_candidate_available,
         },
         {
             "check": "frozen_candidate_manifest",
@@ -684,12 +697,20 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "applicable": True,
         },
         {
+            "check": "future_unseen_oos_evaluation_ready",
+            "passed": future_evaluation_ready,
+            "value": future_evaluation_ready,
+            "target": True,
+            "blocker": "future_unseen_oos_evaluation_not_ready",
+            "applicable": future_window_data_ready and frozen_candidate_available,
+        },
+        {
             "check": "future_unseen_oos_evaluated",
-            "passed": future_evaluated if future_ready and frozen_candidate_available else None,
+            "passed": future_evaluated if future_evaluation_ready else None,
             "value": future_oos.get("evaluation_completed"),
             "target": True,
             "blocker": "future_unseen_oos_not_evaluated",
-            "applicable": future_ready and frozen_candidate_available,
+            "applicable": future_evaluation_ready,
         },
         {
             "check": "future_unseen_oos_passed",
@@ -720,12 +741,13 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
         and not bool(item["passed"])
     ]
     ready = not blockers
-    if future_evaluated and not future_passed:
-        next_action = "retire_failed_frozen_candidate_and_open_new_research_anchor"
-    elif ready:
+    if ready:
         next_action = "freeze_phase1_candidate_and_prepare_phase2_design"
     else:
-        next_action = "continue_phase1_validation_until_all_blockers_clear"
+        next_action = str(
+            (review.get("next_action", {}) or {}).get("action")
+            or "continue_phase1_validation_until_all_blockers_clear"
+        )
     return {
         "ready_for_phase2": ready,
         "decision": "READY_FOR_PHASE2" if ready else "DO_NOT_PROCEED_TO_PHASE2",
@@ -1081,6 +1103,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         cv_promotable=cv_promotable,
         decision=decision,
         future_oos=future_oos_readiness,
+        frozen_candidate=frozen_candidate,
         replacement_candidate_fit=replacement_candidate_fit,
     )
     review = {
@@ -1114,7 +1137,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "holdout": {
             "policy": policy,
             "best": holdout_best,
-            "diagnostic_only": not bool(policy.get("future_oos_ready", False)),
+            "diagnostic_only": True,
         },
         "future_oos": {
             "candidate_count": int(len(policy_plan)) if not policy_plan.empty else 0,

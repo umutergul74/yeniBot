@@ -24,9 +24,17 @@ The current safe control profile is configured in `config.yaml`:
 - `experiments.research_focus.mode`: `walk_forward_cv_repair`
 - Future-OOS and recency replacement work is paused, not erased. Phase 2 remains
   blocked while the historical walk-forward failure mechanism is repaired.
-- The active mechanism experiment keeps the strong control feature set and
-  tests train-fold-only preprocessing. It must never fit clipping bounds or
-  reliability decisions on validation, test, holdout, or failed future-OOS rows.
+- The active frozen-candidate slot is intentionally empty after the failed
+  June 13 candidate. The old manifest lives in immutable historical reports
+  and `frozen_candidate_outcomes`; do not regenerate or re-hash it as a current
+  primary. Start a new OOS counter only after a replacement and new anchor are
+  pre-registered.
+- Bundle `20260614_054446` completed the train-fold-only preprocessing cycle
+  without a promotable candidate. Hard reliability masking changed 10 of 12
+  triage folds, raised dispersion, reduced positive-fold coverage, and damaged
+  top-score payoff. Train-only clipping was controlled but too weak and reduced
+  top-10 lift. Both masking variants are rejected and clipping is archived as
+  inconclusive/non-promotable; do not rerun this family automatically.
 - Historical rolling-origin evidence from bundle `20260613_134953` showed a
   real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
   coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
@@ -120,9 +128,11 @@ Known lessons:
 - Bundle `20260613_134953` root-cause evidence localized the remaining control
   weakness to score-ranking reversal rather than label balance. The strongest
   suspects are `4h_taker_imbalance_mean_12` sign reversal and
-  `4h_large_trade_ratio` distribution drift. Global deletion and direct
-  interaction variants already failed; the active new hypothesis is
-  fold-fitted reliability masking plus train-only clipping.
+  `4h_large_trade_ratio` distribution drift. Global deletion, direct
+  interaction, hard fold-fitted masking, and simple train-only clipping have
+  now failed to produce a promotable replacement. A later hypothesis must use
+  a distinct mechanism and must improve ranking stability and top-score payoff
+  together.
 
 ## Holdout And Future-OOS Policy
 

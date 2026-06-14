@@ -764,3 +764,47 @@ def test_auto_review_retires_failed_future_oos_candidate(tmp_path) -> None:
     assert review["phase1_transition_plan"]["metric_gaps"][
         "future_oos_min_bars_remaining"
     ] == 0
+
+
+def test_auto_review_does_not_run_evaluator_without_frozen_manifest(tmp_path) -> None:
+    _write_minimal_report(tmp_path, future_oos_ready=True)
+    (tmp_path / "frozen_candidate_manifest.json").write_text(
+        json.dumps(
+            {
+                "available": False,
+                "enabled": True,
+                "unavailable_reasons": ["replacement_candidate_not_preregistered"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "future_oos_readiness.json").write_text(
+        json.dumps(
+            {
+                "ready_for_evaluation": False,
+                "evaluation_completed": False,
+                "primary_candidate_passed": False,
+                "new_labeled_rows": 737,
+                "min_rows_remaining": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["next_action"]["action"] == (
+        "continue_walk_forward_research_until_replacement_preregistered"
+    )
+    assert review["next_action"]["reasons"] == [
+        "replacement_candidate_not_preregistered"
+    ]
+    checks = {row["check"]: row for row in review["phase2_readiness"]["checks"]}
+    assert checks["future_unseen_oos_ready"]["status"] == "pending"
+    assert checks["frozen_candidate_manifest"]["status"] == "failed"
+    assert checks["future_unseen_oos_evaluation_ready"]["status"] == "pending"
+    assert "future_unseen_oos_not_ready" not in review["phase2_readiness"]["blockers"]
+    assert "frozen_candidate_manifest_unavailable" in review["phase2_readiness"]["blockers"]
+    assert review["phase2_readiness"]["next_action"] == (
+        "continue_walk_forward_research_until_replacement_preregistered"
+    )

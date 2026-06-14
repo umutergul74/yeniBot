@@ -545,6 +545,32 @@ def test_future_oos_preflight_is_read_only_while_waiting(tmp_path: Path) -> None
     assert before == after
 
 
+def test_future_oos_preflight_reports_expected_research_state_without_replacement(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config["experiments"]["frozen_candidates"].update(
+        {
+            "anchor_run_id": None,
+            "anchor_data_end": None,
+            "primary_candidate_id": None,
+            "candidates": [],
+        }
+    )
+
+    result = future_oos_preflight(
+        checkpoint_dir=tmp_path / "checkpoints",
+        config=config,
+    )
+
+    assert result["state"] == "awaiting_replacement_preregistration"
+    assert result["ready_for_evaluation"] is False
+    assert result["artifact_integrity_errors"] == []
+    assert result["next_action"] == (
+        "select_and_preregister_replacement_before_new_oos_anchor"
+    )
+
+
 def test_future_oos_preflight_reports_ready_without_refitting(tmp_path: Path) -> None:
     config, checkpoint_dir, manifests = _preflight_fixture(tmp_path, fresh_rows=24)
 

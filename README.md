@@ -29,6 +29,12 @@ unseen out-of-sample evaluation. It is retired. The active research cycle has
 returned to the strongest historical walk-forward control to repair the
 identified score-reversal mechanism before a new candidate is frozen.
 
+The latest train-only clipping/reliability-mask cycle produced no promotable
+replacement. Hard masking increased fold instability; simple clipping was too
+weak and reduced top-decile lift. The active candidate and future-OOS primary
+slots are therefore intentionally empty until a distinct hypothesis is
+pre-registered.
+
 Latest retained walk-forward evidence snapshot, generated from run
 `20260605_211102` and reviewed again on **June 14, 2026**:
 
@@ -205,6 +211,10 @@ Rerun rules:
 | Diagnostics/reporting only | `05` |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
+
+When `candidate_profiles` is empty, do not run notebook `04` merely to recreate
+the control. Use notebook `05` for reporting changes and wait until a distinct
+candidate is explicitly pre-registered.
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is
