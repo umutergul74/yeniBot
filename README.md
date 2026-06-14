@@ -1,7 +1,7 @@
 # yeniBot
 
 [![Phase](https://img.shields.io/badge/phase-1%20model%20validation-16794b)](#current-status)
-[![Phase 2](https://img.shields.io/badge/phase%202-blocked%20by%20future%20OOS-c47b13)](#current-status)
+[![Phase 2](https://img.shields.io/badge/phase%202-blocked%20after%20failed%20OOS-c47b13)](#current-status)
 [![CI](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml/badge.svg)](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
 [![PyTorch](https://img.shields.io/badge/PyTorch-TCN%20%2B%20GRU-EE4C2C?logo=pytorch&logoColor=white)](yenibot/models/hybrid.py)
@@ -24,11 +24,13 @@ artifact-verified evidence for or against promotion.
 **Model evidence passes the active `v4_evidence` research charter. Phase 2 is
 still blocked.**
 
-The frozen primary candidate must complete a pre-registered future unseen
-out-of-sample evaluation before any backtesting or execution work begins.
+The frozen primary candidate completed and failed its pre-registered future
+unseen out-of-sample evaluation. It is retired. The active research cycle has
+returned to the strongest historical walk-forward control to repair the
+identified score-reversal mechanism before a new candidate is frozen.
 
-Latest reviewed evidence snapshot, generated from run `20260605_211102` and
-reviewed on **June 10, 2026**:
+Latest retained walk-forward evidence snapshot, generated from run
+`20260605_211102` and reviewed again on **June 14, 2026**:
 
 | Evidence | Result | Interpretation |
 |---|---:|---|
@@ -40,7 +42,8 @@ reviewed on **June 10, 2026**:
 | Positive-return folds | `69.4%` | Passes the active consistency gate |
 | Top-decile OOS forward return | `0.00317` | Positive walk-forward economic ordering |
 | Raw probability calibration | Not deployment-ready | Use outputs as ranking scores |
-| Fresh future-OOS rows | `253 / 720` | Promotion remains blocked |
+| Frozen future-OOS Rank IC | `-0.0075` | Failed; exact candidate retired |
+| Frozen future-OOS top-10 lift | `0.990` | Failed to concentrate long labels |
 
 The legacy monitors remain visible:
 
@@ -58,7 +61,8 @@ The current interpretation is deliberately narrow:
 - The model does **not** yet have reliable probability calibration.
 - The already-seen holdout produced a negative top-decile return and is not
   used for further tuning.
-- Phase 2 requires the frozen candidate to pass fresh, no-refit future OOS.
+- Phase 2 requires a newly pre-registered replacement to pass a new, no-refit
+  future-OOS window. The failed window is diagnostic/training history only.
 
 ## Research Boundary
 
@@ -71,6 +75,7 @@ The current interpretation is deliberately narrow:
 - Long-only binary triple-barrier labeling
 - TCN+GRU binary sequence encoder
 - Purged walk-forward cross-validation with train-only scaling
+- Audited train-fold-only quantile clipping and feature reliability masking
 - Forward-only HMM regime metadata
 - Versioned validation charters and append-only experiment memory
 - Frozen candidate manifests with content-hashed artifacts
@@ -173,7 +178,7 @@ Operational references:
 All production research notebooks run on Google Colab with source code from
 GitHub and data/checkpoints stored on Google Drive.
 
-The current replacement-candidate workflow is isolated on
+The current walk-forward repair workflow is isolated on
 `research/next-candidate-v1`. Every notebook fetches, checks out, and verifies
 that branch by default, then prints the exact commit. Override
 `YENIBOT_REPO_BRANCH` only for a deliberate reviewed run.
@@ -199,7 +204,7 @@ Rerun rules:
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
-| Post-failure historical recency research | `04 -> 05`; the failed OOS window remains diagnostic-only |
+| Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is

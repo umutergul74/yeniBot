@@ -28,6 +28,9 @@ candidate is built from its pre-anchor fold ensemble.
 | Forward-return pairwise loss | Worsened mean IC, stability, F1, and worst folds |
 | Stable-tanh taker-flow gating | Produced weaker IC and stronger reversal risk |
 | Regime-specific thresholds | Did not improve official F1 causally |
+| Global deletion of 4H taker mean-12 | Removed useful good-period signal and worsened CV |
+| Global deletion of 4H large-trade ratio | Improved isolated F1/lift but damaged IC stability |
+| Direct taker-flow x large-trade interactions | Failed to preserve the retained control |
 
 ## Governance Rule
 
@@ -39,5 +42,19 @@ requires:
 3. pre-registration in experiment memory, and
 4. a comparison that does not use the seen holdout for selection.
 
-The current priority is frozen future-OOS confirmation, not profile search.
+## Active Mechanism Experiment
 
+The retained control's five negative folds are not explained by label balance.
+The dominant mechanism is score-ranking reversal:
+
+- `4h_taker_imbalance_mean_12` changes sign between good and bad periods.
+- `4h_large_trade_ratio` shows material distribution drift.
+
+The active factorial test preserves the control and compares:
+
+1. train-only clipping of `4h_large_trade_ratio`,
+2. train-only reliability masking of `4h_taker_imbalance_mean_*`, and
+3. their combination.
+
+This is distinct from the rejected global deletions and direct interaction
+families. Every fold decision is written to `preprocessing_audit.csv`.

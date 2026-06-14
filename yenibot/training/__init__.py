@@ -7,6 +7,7 @@ __all__ = [
     "SequenceDataset",
     "FoldIndices",
     "PurgedWalkForwardCV",
+    "CausalFoldPreprocessor",
     "run_walk_forward_training",
     "set_random_seed",
     "train_one_fold",
@@ -14,6 +15,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "CausalFoldPreprocessor":
+        from yenibot.training.preprocessing import CausalFoldPreprocessor
+
+        return CausalFoldPreprocessor
     if name in {"run_walk_forward_training", "set_random_seed", "train_one_fold"}:
         import importlib
 

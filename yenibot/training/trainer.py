@@ -10,7 +10,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.preprocessing import RobustScaler
 from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
@@ -19,6 +18,7 @@ from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, Pairwis
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
 from yenibot.training.dataset import SequenceDataset
+from yenibot.training.preprocessing import CausalFoldPreprocessor
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
 
 
@@ -252,10 +252,18 @@ def train_one_fold(
     val_part = frame.iloc[fold.val].copy().reset_index(drop=True)
     test_part = frame.iloc[fold.test].copy().reset_index(drop=True)
 
-    scaler = RobustScaler()
-    scaler.fit(train_part[feature_columns])
+    forward_column = _forward_return_column(train_part, config)
+    scaler = CausalFoldPreprocessor(feature_columns, config)
+    scaler.fit(
+        train_part[feature_columns],
+        forward_returns=train_part[forward_column],
+        labels=train_part["label"],
+    )
     for part in (train_part, val_part, test_part):
         part.loc[:, feature_columns] = scaler.transform(part[feature_columns])
+    preprocessing_audit = scaler.audit_frame()
+    if not preprocessing_audit.empty:
+        preprocessing_audit.insert(0, "fold", int(fold.fold))
 
     hmm = _fit_hmm(train_part, config, random_state=fold_seed)
     val_part = _add_regime_probs(val_part, hmm, config)
@@ -425,6 +433,7 @@ def train_one_fold(
         "scaler": scaler,
         "hmm": hmm,
         "history": pd.DataFrame(history),
+        "preprocessing_audit": preprocessing_audit,
         "predictions": predictions,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -458,6 +467,7 @@ def run_walk_forward_training(
 
     fold_results = []
     predictions = []
+    preprocessing_audits = []
     selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
         if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
@@ -474,18 +484,27 @@ def run_walk_forward_training(
         )
         fold_results.append(result)
         predictions.append(result["predictions"])
+        if not result["preprocessing_audit"].empty:
+            preprocessing_audits.append(result["preprocessing_audit"])
 
     if not predictions:
         raise ValueError("No folds were produced; check dataset length and CV configuration")
 
     all_predictions = pd.concat(predictions, ignore_index=True)
+    preprocessing_audit = (
+        pd.concat(preprocessing_audits, ignore_index=True)
+        if preprocessing_audits
+        else pd.DataFrame(columns=["fold", *CausalFoldPreprocessor.AUDIT_COLUMNS])
+    )
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         all_predictions.to_parquet(output_dir / "predictions_all.parquet", index=False)
+        preprocessing_audit.to_csv(output_dir / "preprocessing_audit.csv", index=False)
     report = phase1_report(all_predictions[all_predictions["split"] == "test"], config)
     return {
         "fold_results": fold_results,
         "predictions": all_predictions,
+        "preprocessing_audit": preprocessing_audit,
         "report": report,
     }

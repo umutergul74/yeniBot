@@ -21,10 +21,12 @@ The current safe control profile is configured in `config.yaml`:
 - Frozen candidate `control_fold_ensemble_v1` completed its 737-row future-OOS
   evaluation on June 13, 2026 and failed. It is retired and must not be tuned
   or retested on that same window.
-- `experiments.next_research_cycle.status`: `open_after_failed_future_oos`
-- Post-failure deployment-policy research must compare recency policies against
-  the causal `all_eligible_equal` control. Comparing only recency variants with
-  each other is insufficient evidence.
+- `experiments.research_focus.mode`: `walk_forward_cv_repair`
+- Future-OOS and recency replacement work is paused, not erased. Phase 2 remains
+  blocked while the historical walk-forward failure mechanism is repaired.
+- The active mechanism experiment keeps the strong control feature set and
+  tests train-fold-only preprocessing. It must never fit clipping bounds or
+  reliability decisions on validation, test, holdout, or failed future-OOS rows.
 - Historical rolling-origin evidence from bundle `20260613_134953` showed a
   real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
   coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
@@ -33,10 +35,9 @@ The current safe control profile is configured in `config.yaml`:
 - Bundle 70 rejected `dual_horizon_all_recent3_50_50`: its IC improvement was
   real, but mean F1 was `0.4383` and positive top-decile return occurred in
   only `69.4%` of folds. `recent_3_equal` alone cleared every committed
-  balanced non-inferiority gate. The active follow-up is therefore
-  `control_recent3_equal_v2`, built through the June 13, 2026 01:00 UTC
-  pre-registration anchor. Its generated artifact manifest must be reviewed
-  and pinned before it becomes the new frozen primary candidate.
+  balanced non-inferiority gate. `control_recent3_equal_v2` was fitted and is
+  retained as historical research, but its manifest-pinning workflow is paused
+  until the underlying control profile is repaired on historical CV.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -85,6 +86,9 @@ Forbidden feature behavior:
 - The model is binary TCN+GRU with sigmoid `P(Long)`.
 - Keep hyperparameters in `config.yaml`; do not hardcode research settings in source.
 - Fit scalers on train folds only. Never fit on validation, test, or holdout rows.
+- Train-fold quantile clipping and feature reliability masks are allowed only
+  when their fitted bounds, block statistics, mask decision, and reason are
+  persisted in `preprocessing_audit.csv`.
 - Use purged walk-forward CV with configured purge and embargo.
 - HMM regimes are diagnostics/filter metadata only, not a second-stage predictor.
 - HMM validation, test, holdout, and live-style inference must be forward-only.
@@ -113,6 +117,12 @@ Known lessons:
 - Run `20260528_214759` showed that pairwise label-margin loss weight `0.05` improved top-10 lift but worsened mean IC, Rank IC std, positive-fold coverage, worst folds, and official F1. Do not repeat that exact label-margin objective; the next score-separation experiment should target forward-return ordering instead of class-only separation.
 - Run `20260604_141520` showed that the forward-return pairwise loss candidate also failed: it lowered mean IC, worsened std, reduced positive-fold coverage, lowered official F1, and weakened top-10 lift versus the control. The next step is root-cause diagnostics, not another loss-only candidate.
 - Run `20260605_141414` showed that stable-tanh taker-flow gating by stable large-trade context also failed: mean IC fell to `0.0393`, std rose to `0.0962`, positive folds fell to `66.7%`, and the low-pass guard became the strongest reversal suspect. Do not retry direct deletion, raw interaction, or this guarded-transform family without a distinct causal mechanism.
+- Bundle `20260613_134953` root-cause evidence localized the remaining control
+  weakness to score-ranking reversal rather than label balance. The strongest
+  suspects are `4h_taker_imbalance_mean_12` sign reversal and
+  `4h_large_trade_ratio` distribution drift. Global deletion and direct
+  interaction variants already failed; the active new hypothesis is
+  fold-fitted reliability masking plus train-only clipping.
 
 ## Holdout And Future-OOS Policy
 
@@ -218,6 +228,7 @@ Required diagnostic artifacts include:
 
 - `profile_comparison.csv`
 - `profile_blend.csv`
+- `preprocessing_audit.csv`
 - `performance_gap_analysis.csv`
 - `fold_stability_forensics.csv`
 - `fold_stability_summary.csv`

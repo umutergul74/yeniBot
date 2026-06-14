@@ -48,6 +48,7 @@ New code imports public APIs from `yenibot.experiment`.
 | `payoff.py` | Score-band payoff and frozen-policy robustness |
 | `root_cause.py` | Phase 1 blocker diagnosis |
 | `ensembles.py` | Seed audits, profile blends, deltas |
+| `preprocessing_audit.py` | Experiment-level collection of train-fold preprocessing decisions |
 | `artifacts.py` | Slim/full bundle packaging |
 | `execution.py` | Atomic workflow status and failure traces |
 | `charter.py` | Explicit versioned validation-charter governance |
@@ -56,6 +57,11 @@ New code imports public APIs from `yenibot.experiment`.
 | `future_oos.py` | Artifact-verified, no-refit future-OOS scoring |
 | `registry.py` | Append-only experiment decision history |
 | `orchestration.py` | Top-level notebook-facing workflows |
+
+`yenibot.training.preprocessing.CausalFoldPreprocessor` owns train-fold-only
+clipping, reliability masking, and robust scaling. It is serialized in the
+existing `scaler_fold_*.pkl` slot so holdout and future inference use the exact
+fitted transform without refitting.
 
 The architecture test rejects circular imports and experiment modules over
 1,800 lines. When a module approaches the limit, split by responsibility

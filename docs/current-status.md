@@ -1,6 +1,6 @@
 # Current Phase 1 Status
 
-Last reviewed: **June 13, 2026**
+Last reviewed: **June 14, 2026**
 
 ## Decision
 
@@ -70,22 +70,24 @@ The reliability evidence does not support probability-sized positions.
 
 - Improve diagnostics, tests, documentation, CI, and operator safety.
 - Use the failed OOS window for diagnosis only.
-- Develop a replacement candidate on an isolated research branch.
-- Compare rolling retraining and recency-aware ensemble policies only on
-  historical rolling-origin windows.
+- Repair the retained control on historical purged walk-forward folds.
+- Test only train-fold-fitted preprocessing hypotheses that address the
+  observed 4H flow reversal and large-trade distribution drift.
 - Add the failed window to future training data only after preserving its
   immutable evaluation record.
 - Pre-register the replacement before collecting a new future-OOS window.
 
 ## Immediate Run Sequence
 
-1. Run notebook `04` once on a GPU. Existing training scopes may be reused;
-   the new work is historical cross-model inference for the recency policies.
+1. Run notebook `04` once on a GPU. It compares the retained control with
+   train-only 4H large-trade clipping, 4H flow reliability masking, and their
+   factorial combination on the pre-registered mechanism folds.
 2. Run notebook `05` on CPU/high-RAM.
-3. Review `recency_ensemble_summary.csv`,
-   `recency_ensemble_by_fold.csv`, and the new future-OOS root-cause files.
-4. Freeze nothing unless a recency policy improves historical mean IC,
-   downside folds, payoff consistency, and prediction-rate discipline together.
+3. Review `profile_comparison.csv`, `profile_delta_vs_control.csv`,
+   `fold_stability_summary.csv`, and `preprocessing_audit.csv`.
+4. Full CV is allowed for at most one triage winner. Freeze nothing until that
+   winner preserves mean IC and top-decile payoff while improving downside
+   folds and Rank IC dispersion.
 - Fix code defects only when the frozen numerical contract remains unchanged
   and the change is covered by regression tests.
 

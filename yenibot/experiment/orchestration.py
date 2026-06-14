@@ -151,6 +151,7 @@ from yenibot.experiment.payoff import (
     _write_payoff_alignment,
     _write_payoff_policy_robustness,
 )
+from yenibot.experiment.preprocessing_audit import write_preprocessing_audit
 from yenibot.experiment.rank_ic import (
     _rank_ic_stability_evidence_frames,
     _rank_ic_uncertainty_frames,
@@ -579,6 +580,7 @@ def run_experiment_matrix(
                 result["summary"]["seed"] = seed
                 seed_results.append(result)
     seed_ensemble_results = _seed_ensemble_entries(seed_results, config)
+    write_preprocessing_audit([*profile_results, *seed_results], run_dir)
     profile_blend_results = _profile_blend_entries(profile_results, config)
     all_results = [*profile_results, *seed_results, *seed_ensemble_results, *profile_blend_results]
     executed_results = [result for result in [*profile_results, *seed_results] if not bool(result.get("skipped", False))]
@@ -1047,6 +1049,7 @@ def write_experiment_diagnostics(
     best_blend = _best_profile_blend(profile_blend)
     report_dir = Path(output_dir) / "experiments" / run_dir.name
     report_dir.mkdir(parents=True, exist_ok=True)
+    write_preprocessing_audit(profile_entries, report_dir)
     experiment_selection = _write_experiment_selection(report_dir, settings)
     holdout_reservation = _write_holdout_reservation(report_dir, settings)
     missing_selected = _missing_selected_profiles(experiment_selection, comparison)

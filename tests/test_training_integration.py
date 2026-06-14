@@ -175,3 +175,4 @@ def test_run_walk_forward_training_honors_selected_fold_ids(synthetic_klines, ti
     assert sorted(result["predictions"]["fold"].unique().tolist()) == [1]
     assert not (tmp_path / "model_fold_000.pt").exists()
     assert (tmp_path / "model_fold_001.pt").exists()
+    assert (tmp_path / "preprocessing_audit.csv").exists()

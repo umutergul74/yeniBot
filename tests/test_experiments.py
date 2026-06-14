@@ -2566,12 +2566,15 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
-    assert config["experiments"]["max_auto_full_candidates"] == 2
-    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["max_auto_full_candidates"] == 1
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_stable_train_clip_4h_large_trade",
+        "baseline_stable_train_reliability_mask_4h_flow",
+        "baseline_stable_train_clip_and_reliability_mask",
+    ]
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
-    weighted_blends = config["experiments"]["profile_blends"]["weighted"]
-    assert [item["name"] for item in weighted_blends] == ["control_long_pressure_65_35"]
-    assert weighted_blends[0]["weights"] == [0.65, 0.35]
+    assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
+    assert config["experiments"]["profile_blends"]["weighted"] == []
     assert config["experiments"]["holdout"]["enabled"] is True
     assert config["experiments"]["holdout"]["holdout_bars"] == 4320
     assert config["experiments"]["holdout"]["holdout_filename"] == "holdout_1h.parquet"
@@ -2599,6 +2602,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert frozen["candidates"][0]["required_for_evaluation"] is True
     assert frozen["candidates"][1]["required_for_evaluation"] is False
     assert frozen["candidates"][1]["evaluation_role"] == "optional_historical_benchmark"
+    assert config["experiments"]["future_oos_validation"]["enabled"] is False
     assert config["experiments"]["future_oos_validation"]["min_rows"] == 720
     assert config["experiments"]["future_oos_validation"]["gates"]["min_rank_ic"] == 0.03
     robustness = config["experiments"]["policy_review"]["robustness"]
@@ -2611,7 +2615,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "late_2024_to_q1_2025",
         "pre_holdout_recent",
     ]
-    assert config["experiments"]["seed_audit"]["enabled"] is True
+    assert config["experiments"]["seed_audit"]["enabled"] is False
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
@@ -2659,8 +2663,18 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert regime_threshold["enabled"] is True
     assert regime_threshold["min_regime_val_rows"] == 80
     assert regime_threshold["max_pred_long_rate"] == 0.70
-    assert {0, 2, 4, 8, 17, 21, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
+    assert {7, 8, 22, 30, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
     assert max(config["experiments"]["triage_fold_ids"]) == 35
+    assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
+    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
+    assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is False
+    clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
+    mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]
+    combo_profile = config["features"]["profiles"]["baseline_stable_train_clip_and_reliability_mask"]
+    assert clip_profile["config_overrides"]["training"]["preprocessing"]["quantile_clip"]["enabled"] is True
+    assert mask_profile["config_overrides"]["training"]["preprocessing"]["stability_mask"]["enabled"] is True
+    assert combo_profile["config_overrides"]["training"]["preprocessing"]["quantile_clip"]["enabled"] is True
+    assert combo_profile["config_overrides"]["training"]["preprocessing"]["stability_mask"]["enabled"] is True
     columns = [
         "4h_large_trade_ratio",
         "4h_vpt_zscore",
