@@ -43,6 +43,9 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     training = _source(_load_notebook("04_training_walk_forward.ipynb"))
     diagnostics = _source(_load_notebook("05_diagnostics_validation.ipynb"))
 
+    assert "open_after_failed_future_oos" not in training
+    assert "paused_for_walk_forward_cv_repair" in training
+    assert "walk_forward_cv_repair" in training
     for source in (combined, training):
         assert "run_recency_ensemble_research" in source
         assert "notebook04_run.json" in source
