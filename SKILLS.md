@@ -35,6 +35,11 @@ The current safe control profile is configured in `config.yaml`:
   top-score payoff. Train-only clipping was controlled but too weak and reduced
   top-10 lift. Both masking variants are rejected and clipping is archived as
   inconclusive/non-promotable; do not rerun this family automatically.
+- Bundle 73 confirmed that the retained control clears the active historical
+  model-evidence gates, but its configured multi-seed audit had never run.
+  Complete the isolated seed-audit extension on source run `20260614_054446`
+  before selecting another feature or training hypothesis. This extension must
+  not retrain the source full-CV scope.
 - Historical rolling-origin evidence from bundle `20260613_134953` showed a
   real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
   coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
@@ -133,6 +138,10 @@ Known lessons:
   now failed to produce a promotable replacement. A later hypothesis must use
   a distinct mechanism and must improve ranking stability and top-score payoff
   together.
+- Diagnostics-time lifecycle state must come from the current config, not an
+  old run manifest. Historical profile/fold selections remain source-run
+  evidence, but retired frozen candidates, experiment memory, seed-audit
+  policy, and next-research state must never be resurrected from that manifest.
 
 ## Holdout And Future-OOS Policy
 

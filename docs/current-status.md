@@ -94,6 +94,12 @@ primary candidate. Notebook `04` should not be rerun until a distinct
 pre-registered hypothesis is committed. Notebook `05` may be run for
 diagnostic/report verification without GPU.
 
+The one allowed notebook `04` exception is the isolated seed-audit extension
+configured for source run `20260614_054446`. It trains only seeds `42, 43, 44`
+on eight temporally distributed folds and leaves the source run's 36-fold
+control artifacts untouched. After that extension, run notebook `05` to verify
+`seed_audit_coverage.csv`.
+
 ## What Is Frozen
 
 - Candidate identity and source run

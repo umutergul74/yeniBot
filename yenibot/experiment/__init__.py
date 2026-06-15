@@ -10,6 +10,7 @@ from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 from yenibot.experiment.oos_preflight import future_oos_preflight
 from yenibot.experiment.training import run_profile_experiment
+from yenibot.experiment.seed_audit import run_seed_audit_extension
 from yenibot.experiment.orchestration import run_experiment_matrix
 from yenibot.experiment.orchestration import write_experiment_diagnostics
 from yenibot.experiment.rolling_research import run_recency_ensemble_research
@@ -29,6 +30,7 @@ __all__ = [
     'evaluate_future_oos',
     'future_oos_preflight',
     'run_profile_experiment',
+    'run_seed_audit_extension',
     'run_experiment_matrix',
     'write_experiment_diagnostics',
     'run_recency_ensemble_research',

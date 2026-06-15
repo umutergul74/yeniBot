@@ -11,11 +11,13 @@ import pytest
 from yenibot.config import load_config
 from yenibot.experiments import (
     _attach_holdout_soft_pass,
+    _available_walk_forward_fold_ids,
     _auto_full_profiles,
     _best_profile_blend,
     _experiment_selection_frame,
     _experiment_signature,
     _diagnostics_signature,
+    _diagnostic_config_for_run,
     _experiment_policy_guard_frame,
     _fold_reliability_gate_frame,
     _fold_reliability_gate_summary_frame,
@@ -24,6 +26,7 @@ from yenibot.experiments import (
     _frozen_policy_monitoring_plan_frame,
     _frozen_policy_robustness_frame,
     _future_oos_candidate_plan_frame,
+    _future_oos_monitor_state,
     _feature_drift_forensics_frame,
     _feature_family_drift_summary_frame,
     _bad_fold_mechanism_summary_frame,
@@ -352,6 +355,32 @@ def test_experiment_policy_guard_uses_latest_available_data_end_for_future_oos_c
     assert monitor_frame.loc[0, "new_bars_since_anchor"] == 253
     assert monitor_frame.loc[0, "current_holdout_data_end"] == "2026-05-13 08:00:00+00:00"
     assert monitor_frame.loc[0, "latest_available_data_end"] == "2026-05-23 21:00:00+00:00"
+
+
+def test_disabled_future_oos_monitor_does_not_report_active_readiness() -> None:
+    config = {
+        "experiments": {
+            "policy_review": {
+                "status": "failed_clean_holdout_review",
+                "future_oos_monitor": {
+                    "enabled": False,
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                },
+            }
+        }
+    }
+
+    state = _future_oos_monitor_state(
+        config,
+        "2026-06-13 01:00:00+00:00",
+    )
+
+    assert state["monitor_enabled"] is False
+    assert state["window_data_available"] is True
+    assert state["future_oos_ready"] is False
+    assert state["next_action"] == "monitor_disabled"
 
 
 def test_experiment_policy_guard_unlocks_after_future_oos_minimum_window() -> None:
@@ -2610,7 +2639,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "late_2024_to_q1_2025",
         "pre_holdout_recent",
     ]
-    assert config["experiments"]["seed_audit"]["enabled"] is False
+    assert config["experiments"]["seed_audit"]["enabled"] is True
+    assert config["experiments"]["seed_audit"]["mode"] == "extend_existing_run"
+    assert config["experiments"]["seed_audit"]["source_run_id"] == "20260614_054446"
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
@@ -4649,6 +4680,180 @@ def test_disabled_seed_audit_is_reported_as_not_evaluated() -> None:
     assert seed_row["skip_reason"] == "seed_audit_disabled_not_evaluated"
     assert bool(coverage.loc[0, "coverage_passed"]) is False
     assert coverage.loc[0, "status"] == "disabled_not_evaluated"
+
+
+def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
+    current = {
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "seed_audit": {"enabled": True, "profiles": ["control"]},
+            "experiment_memory": {"enabled": True, "rejected_profiles": {"old": {}}},
+            "frozen_candidates": {
+                "enabled": True,
+                "lifecycle_state": "awaiting_replacement_preregistration",
+                "anchor_data_end": None,
+                "primary_candidate_id": None,
+                "candidates": [],
+            },
+            "future_oos_validation": {"enabled": False},
+            "next_research_cycle": {"status": "seed_robustness_audit_before_new_candidate"},
+            "research_focus": {"status": "mechanism_cycle_completed_no_promotion"},
+        }
+    }
+    historical_settings = {
+        "control_profile": "control",
+        "candidate_profiles": ["old"],
+        "seed_audit": {"enabled": False, "profiles": ["control"]},
+        "experiment_memory": {"enabled": True, "rejected_profiles": {}},
+        "frozen_candidates": {
+            "enabled": True,
+            "anchor_data_end": "2026-05-13 08:00:00+00:00",
+            "primary_candidate_id": "retired",
+            "candidates": [{"candidate_id": "retired"}],
+        },
+        "future_oos_validation": {"enabled": True},
+        "next_research_cycle": {"status": "old_cycle"},
+        "research_focus": {"status": "old_focus"},
+    }
+
+    merged = _diagnostic_config_for_run(current, historical_settings)
+    experiments = merged["experiments"]
+
+    assert experiments["candidate_profiles"] == ["old"]
+    assert experiments["seed_audit"]["enabled"] is True
+    assert experiments["frozen_candidates"]["candidates"] == []
+    assert experiments["future_oos_validation"]["enabled"] is False
+    assert experiments["next_research_cycle"]["status"] == (
+        "seed_robustness_audit_before_new_candidate"
+    )
+    assert experiments["research_focus"]["status"] == (
+        "mechanism_cycle_completed_no_promotion"
+    )
+    assert "old" in experiments["experiment_memory"]["rejected_profiles"]
+
+
+def test_seed_audit_extension_reuses_source_full_cv_without_retraining(
+    synthetic_klines,
+    tiny_config,
+    tmp_path,
+) -> None:
+    base_config = copy.deepcopy(tiny_config)
+    base_config["features"]["profiles"] = {
+        "control": {"include_patterns": ["*"], "exclude_patterns": []},
+    }
+    base_config["experiments"] = {
+        "mode": "staged",
+        "control_profile": "control",
+        "candidate_profiles": [],
+        "triage_fold_ids": [0],
+        "full_cv_profiles": ["control"],
+        "always_full_profiles": ["control"],
+        "resume_existing": True,
+        "force_retrain": False,
+        "seed_audit": {"enabled": False, "profiles": ["control"]},
+        "frozen_candidates": {
+            "enabled": True,
+            "anchor_data_end": None,
+            "primary_candidate_id": None,
+            "candidates": [],
+        },
+        "future_oos_validation": {"enabled": False},
+    }
+    frame, _ = _labeled_frame(synthetic_klines, base_config, periods=220)
+    available_fold_ids = _available_walk_forward_fold_ids(len(frame), base_config)
+    audit_fold_ids = list(
+        dict.fromkeys([available_fold_ids[0], available_fold_ids[-1]])
+    )
+    base = run_experiment_matrix(
+        frame,
+        base_config,
+        checkpoint_dir=tmp_path,
+        run_id="seed_extension_source",
+        device="cpu",
+    )
+    full_manifest = (
+        tmp_path
+        / "experiments"
+        / "seed_extension_source"
+        / "control"
+        / "full"
+        / "training_manifest.json"
+    )
+    full_mtime = full_manifest.stat().st_mtime_ns
+
+    run_manifest_path = (
+        tmp_path / "experiments" / "seed_extension_source" / "experiment_manifest.json"
+    )
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["settings"]["frozen_candidates"] = {
+        "enabled": True,
+        "anchor_data_end": "2026-05-13 08:00:00+00:00",
+        "primary_candidate_id": "retired_candidate",
+        "candidates": [{"candidate_id": "retired_candidate"}],
+    }
+    run_manifest_path.write_text(json.dumps(run_manifest), encoding="utf-8")
+
+    extension_config = copy.deepcopy(base_config)
+    extension_config["experiments"]["seed_audit"] = {
+        "enabled": True,
+        "mode": "extend_existing_run",
+        "source_run_id": "seed_extension_source",
+        "profiles": ["control"],
+        "seeds": [11, 12],
+        "fold_ids": audit_fold_ids,
+        "min_temporal_span_fraction": 1.0,
+    }
+    extension = run_experiment_matrix(
+        frame,
+        extension_config,
+        checkpoint_dir=tmp_path,
+        device="cpu",
+    )
+
+    assert extension["run_id"] == base["run_id"]
+    assert extension["run_id_source"] == "seed_audit_extension"
+    assert extension["training_executed_count"] == 2
+    assert extension["decision"]["source_full_cv_retrained"] is False
+    assert extension["seed_audit_coverage"]["coverage_passed"].all()
+    assert full_manifest.stat().st_mtime_ns == full_mtime
+
+    diagnostics = write_experiment_diagnostics(
+        checkpoint_dir=tmp_path,
+        config=extension_config,
+        output_dir=tmp_path / "reports",
+        run_id="seed_extension_source",
+    )
+    assert diagnostics["seed_audit_coverage"]["coverage_passed"].all()
+    assert diagnostics["decision"]["seed_audit_extension"]["coverage_passed"] is True
+    assert (
+        tmp_path
+        / "reports"
+        / "experiments"
+        / "seed_extension_source"
+        / "seed_audit_extension_summary.json"
+    ).exists()
+    frozen = json.loads(
+        (
+            tmp_path
+            / "reports"
+            / "experiments"
+            / "seed_extension_source"
+            / "frozen_candidate_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    preflight = json.loads(
+        (
+            tmp_path
+            / "reports"
+            / "experiments"
+            / "seed_extension_source"
+            / "future_oos_preflight.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert frozen["candidate_status"] == "awaiting_replacement_preregistration"
+    assert preflight["state"] == "awaiting_replacement_preregistration"
+    assert preflight["artifact_integrity_errors"] == []
 
 
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:

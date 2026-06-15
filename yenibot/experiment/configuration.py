@@ -31,6 +31,19 @@ _TRAINING_EXECUTION_KEYS = (
     "reused_training_scopes",
 )
 
+_CURRENT_DIAGNOSTIC_EXPERIMENT_KEYS = (
+    "diagnostics",
+    "experiment_memory",
+    "frozen_candidate_outcomes",
+    "frozen_candidates",
+    "future_oos_validation",
+    "next_research_cycle",
+    "policy_review",
+    "profile_blends",
+    "research_focus",
+    "seed_audit",
+)
+
 __all__ = [
     'profile_config',
     '_profile_config_overrides',
@@ -51,6 +64,7 @@ __all__ = [
     'experiment_root',
     'new_run_id',
     '_training_config_payload',
+    '_diagnostic_config_for_run',
     '_diagnostics_signature',
     '_experiment_signature',
     '_matching_latest_run',
@@ -639,6 +653,32 @@ def _experiment_signature(
         }
     return payload
 
+def _diagnostic_config_for_run(
+    config: dict[str, Any],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Combine immutable run settings with current diagnostics policy.
+
+    Profile/fold settings describe the historical fitted artifacts and remain
+    sourced from the run manifest. Lifecycle, governance, experiment memory,
+    and seed-audit policy are diagnostics-time state and must come from the
+    current config so retired candidates cannot be resurrected by old runs.
+    """
+
+    diagnostic_config = copy.deepcopy(config)
+    current_experiments = copy.deepcopy(
+        _cfg(diagnostic_config, ["experiments"], default={}) or {}
+    )
+    merged_experiments = copy.deepcopy(current_experiments)
+    merged_experiments.update(copy.deepcopy(settings))
+    for key in _CURRENT_DIAGNOSTIC_EXPERIMENT_KEYS:
+        if key in current_experiments:
+            merged_experiments[key] = copy.deepcopy(current_experiments[key])
+        else:
+            merged_experiments.pop(key, None)
+    _set_cfg(diagnostic_config, ["experiments"], merged_experiments)
+    return diagnostic_config
+
 def _diagnostics_signature(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     """Track report-policy changes without invalidating fitted artifacts."""
 
@@ -1026,12 +1066,21 @@ def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> d
 
     min_new_bars = int(monitor.get("min_new_bars", 0) or 0)
     preferred_new_bars = int(monitor.get("preferred_new_bars", 0) or 0)
-    future_oos_ready = bool(min_new_bars > 0 and new_bars_since_anchor >= min_new_bars)
-    future_oos_preferred_ready = bool(preferred_new_bars > 0 and new_bars_since_anchor >= preferred_new_bars)
+    monitor_enabled = bool(monitor.get("enabled", False))
+    window_data_available = bool(
+        min_new_bars > 0 and new_bars_since_anchor >= min_new_bars
+    )
+    preferred_window_data_available = bool(
+        preferred_new_bars > 0 and new_bars_since_anchor >= preferred_new_bars
+    )
+    future_oos_ready = bool(monitor_enabled and window_data_available)
+    future_oos_preferred_ready = bool(
+        monitor_enabled and preferred_window_data_available
+    )
     allow_roll_forward = bool(monitor.get("allow_holdout_roll_forward", False))
     retired_or_failed = any(token in status for token in ("failed", "invalidated", "retired"))
-    lock_active = bool(monitor.get("enabled", False)) and bool(anchor_data_end) and retired_or_failed and not allow_roll_forward
-    if not bool(monitor.get("enabled", False)):
+    lock_active = monitor_enabled and bool(anchor_data_end) and retired_or_failed and not allow_roll_forward
+    if not monitor_enabled:
         next_action = "monitor_disabled"
     elif future_oos_ready:
         next_action = "future_oos_window_available"
@@ -1039,7 +1088,7 @@ def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> d
         next_action = "wait_for_new_unseen_bars"
 
     return {
-        "monitor_enabled": bool(monitor.get("enabled", False)),
+        "monitor_enabled": monitor_enabled,
         "anchor_run_id": str(monitor.get("anchor_run_id", "")),
         "anchor_data_end": anchor_data_end,
         "latest_available_data_end": latest_text,
@@ -1050,6 +1099,8 @@ def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> d
         "preferred_new_bars_remaining": max(0, preferred_new_bars - new_bars_since_anchor),
         "future_oos_ready": future_oos_ready,
         "future_oos_preferred_ready": future_oos_preferred_ready,
+        "window_data_available": window_data_available,
+        "preferred_window_data_available": preferred_window_data_available,
         "allow_holdout_roll_forward": allow_roll_forward,
         "holdout_roll_forward_locked": lock_active,
         "next_action": next_action,

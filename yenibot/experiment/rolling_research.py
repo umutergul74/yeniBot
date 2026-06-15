@@ -227,6 +227,8 @@ def research_protocol_payload(config: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "status": cycle.get("status", "not_configured"),
+        "primary_hypothesis": cycle.get("primary_hypothesis"),
+        "next_action": cycle.get("next_action"),
         "source_failed_candidate_id": cycle.get("source_failed_candidate_id"),
         "failed_oos_role": cycle.get("failed_oos_role"),
         "same_window_selection_allowed": bool(
@@ -240,6 +242,26 @@ def research_protocol_payload(config: dict[str, Any]) -> dict[str, Any]:
         "replacement_candidate": cycle.get("replacement_candidate", {}),
         "phase2_code_allowed": False,
     }
+
+def research_protocol_markdown(protocol: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Next Phase 1 Research Protocol",
+            "",
+            f"- Status: `{protocol.get('status')}`",
+            f"- Primary hypothesis: `{protocol.get('primary_hypothesis')}`",
+            f"- Next action: `{protocol.get('next_action')}`",
+            f"- Failed candidate: `{protocol.get('source_failed_candidate_id')}`",
+            f"- Failed OOS role: `{protocol.get('failed_oos_role')}`",
+            f"- Same-window selection allowed: `{protocol.get('same_window_selection_allowed')}`",
+            f"- New future-OOS anchor required: `{protocol.get('new_future_oos_anchor_required')}`",
+            "- Phase 2 code allowed: `False`",
+            "",
+            "Candidate policies must be selected on historical rolling-origin windows only. "
+            "The failed future-OOS window is diagnostic evidence, not a policy-selection set.",
+            "",
+        ]
+    )
 
 
 def publish_recency_research_reports(

@@ -2064,12 +2064,13 @@ experiments:
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
   next_research_cycle:
-    status: paused_for_walk_forward_cv_repair
+    status: seed_robustness_audit_before_new_candidate
     source_failed_candidate_id: control_fold_ensemble_v1
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
-    primary_hypothesis: train_fold_feature_reliability_and_distribution_control
+    primary_hypothesis: null
+    next_action: "Complete the retained control's isolated seed audit on run 20260614_054446. Select a distinct ranking-stability hypothesis only after seed robustness is known."
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2292,7 +2293,9 @@ experiments:
       baseline_stable_plus_15m_absorption_efficiency_combo:
         reason: "Bundle 20260513_182426: absorption plus efficiency combo had weak triage mean IC, top-10 lift below 1.0, and unstable fold deltas."
   seed_audit:
-    enabled: false
+    enabled: true
+    mode: extend_existing_run
+    source_run_id: "20260614_054446"
     profiles:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     seeds: [42, 43, 44]

@@ -35,6 +35,7 @@ def _write_experiment_bundle(
         "seed_ensemble.csv",
         "seed_ensemble.md",
         "seed_ensemble.json",
+        "seed_audit_extension_summary.json",
         "profile_blend.csv",
         "profile_blend.md",
         "profile_blend.json",

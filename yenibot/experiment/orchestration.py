@@ -39,6 +39,7 @@ from yenibot.experiment.configuration import (
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
     _diagnostics_signature,
+    _diagnostic_config_for_run,
     _experiment_signature,
     _load_training_execution_summary,
     _missing_selected_profiles,
@@ -172,9 +173,11 @@ from yenibot.experiment.root_cause import (
 )
 from yenibot.experiment.rolling_research import (
     publish_recency_research_reports,
+    research_protocol_markdown,
     research_protocol_payload,
 )
 from yenibot.experiment.replacement import publish_replacement_candidate_reports
+from yenibot.experiment.seed_audit import run_seed_audit_extension
 from yenibot.experiment.separation import (
     _bad_fold_signature_frame,
     _score_separation_forensics_frame,
@@ -451,6 +454,22 @@ def run_experiment_matrix(
     settings = experiment_settings(config)
     settings = _resolve_holdout_settings(settings, config)
     settings = _apply_experiment_policy_guard(settings, config)
+    seed_audit_cfg = settings.get("seed_audit", {}) or {}
+    if bool(seed_audit_cfg.get("enabled", False)) and str(
+        seed_audit_cfg.get("mode", "")
+    ) == "extend_existing_run":
+        source_run_id = str(seed_audit_cfg.get("source_run_id", "") or "")
+        if not source_run_id:
+            raise ValueError(
+                "Seed-audit extension requires experiments.seed_audit.source_run_id"
+            )
+        return run_seed_audit_extension(
+            frame,
+            config,
+            checkpoint_dir=checkpoint_dir,
+            source_run_id=source_run_id,
+            device=device,
+        )
     frame = _selection_frame_before_holdout(frame, settings)
     settings = _preflight_experiment_profiles(settings, frame, config)
     settings = _apply_experiment_policy_guard(settings, config)
@@ -891,7 +910,6 @@ def _profile_dirs(run_dir: Path) -> list[Path]:
             if (scope_dir / "training_manifest.json").exists() and (scope_dir / "predictions_all.parquet").exists():
                 paths.append(scope_dir)
     return sorted(paths)
-
 @traced_workflow("diagnostics", diagnostics_status_path)
 def write_experiment_diagnostics(
     *,
@@ -914,19 +932,17 @@ def write_experiment_diagnostics(
     run_manifest_path = run_dir / "experiment_manifest.json"
     run_manifest = _read_json(run_manifest_path) if run_manifest_path.exists() else {}
     training_execution = _load_training_execution_summary(run_dir, run_manifest)
+    seed_extension_path = run_dir / "seed_audit_extension_summary.json"
+    seed_audit_extension = (
+        _read_json(seed_extension_path) if seed_extension_path.exists() else {}
+    )
     settings = copy.deepcopy(run_manifest.get("settings") or experiment_settings(config))
     settings = _resolve_holdout_settings(settings, config)
-    diagnostic_config = copy.deepcopy(config)
-    current_experiment_cfg = copy.deepcopy(_cfg(diagnostic_config, ["experiments"], default={}) or {})
-    experiment_cfg = copy.deepcopy(current_experiment_cfg)
-    experiment_cfg.update(settings)
-    # Training run settings are historical metadata, but policy review is a
-    # diagnostics-time decision. Keep it sourced from the current config so a
-    # failed/retired frozen policy cannot be resurrected by an old run manifest.
-    if "policy_review" in current_experiment_cfg:
-        experiment_cfg["policy_review"] = copy.deepcopy(current_experiment_cfg["policy_review"])
-    _set_cfg(diagnostic_config, ["experiments"], experiment_cfg)
+    diagnostic_config = _diagnostic_config_for_run(config, settings)
     settings = _apply_experiment_policy_guard(settings, diagnostic_config)
+    settings["seed_audit"] = copy.deepcopy(
+        _cfg(diagnostic_config, ["experiments", "seed_audit"], default={}) or {}
+    )
     scope_dirs = _profile_dirs(run_dir)
     if not scope_dirs:
         root = experiment_root(checkpoint_dir)
@@ -1226,22 +1242,7 @@ def write_experiment_diagnostics(
         next_research_protocol,
     )
     (report_dir / "next_research_protocol.md").write_text(
-        "\n".join(
-            [
-                "# Next Phase 1 Research Protocol",
-                "",
-                f"- Status: `{next_research_protocol.get('status')}`",
-                f"- Failed candidate: `{next_research_protocol.get('source_failed_candidate_id')}`",
-                f"- Failed OOS role: `{next_research_protocol.get('failed_oos_role')}`",
-                f"- Same-window selection allowed: `{next_research_protocol.get('same_window_selection_allowed')}`",
-                f"- New future-OOS anchor required: `{next_research_protocol.get('new_future_oos_anchor_required')}`",
-                "- Phase 2 code allowed: `False`",
-                "",
-                "Candidate policies must be selected on historical rolling-origin windows only. "
-                "The failed future-OOS window is diagnostic evidence, not a policy-selection set.",
-                "",
-            ]
-        ),
+        research_protocol_markdown(next_research_protocol),
         encoding="utf-8",
     )
     registry_record = append_experiment_registry(
@@ -1321,6 +1322,7 @@ def write_experiment_diagnostics(
     decision["validation_charter_review"] = validation_charter_review.to_dict(orient="records")
     decision["validation_charter_proposal"] = validation_charter_proposal.to_dict(orient="records")
     decision["seed_audit_coverage"] = seed_audit_coverage.to_dict(orient="records")
+    decision["seed_audit_extension"] = seed_audit_extension
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -1334,6 +1336,11 @@ def write_experiment_diagnostics(
     decision["latest_slim_bundle_zip"] = str(latest_slim_bundle_path)
     _write_decision_files(report_dir, comparison, decision)
     _write_json(report_dir / "training_execution_summary.json", training_execution)
+    if seed_audit_extension:
+        _write_json(
+            report_dir / "seed_audit_extension_summary.json",
+            seed_audit_extension,
+        )
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_ensemble_files(report_dir, seed_ensemble)

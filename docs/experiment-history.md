@@ -64,3 +64,8 @@ passed the pre-registered promotion gates. The hard masking rule is rejected;
 clipping is archived as inconclusive/non-promotable. The next experiment must
 use a distinct mechanism and improve both ranking stability and top-score
 payoff rather than optimizing mean IC alone.
+
+Before another mechanism experiment, the retained control must complete its
+missing multi-seed audit. The audit is appended to run `20260614_054446` as
+isolated seed scopes; it is not a repeat of full CV and does not reopen the
+failed preprocessing candidates.
