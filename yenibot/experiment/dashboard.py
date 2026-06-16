@@ -262,6 +262,7 @@ def _scorecard_frame(
         "mtf_leakage": "Integrity",
         "stationarity_policy": "Integrity",
         "seed_audit_coverage": "Training robustness",
+        "seed_reproducibility_classified": "Training robustness",
         "future_unseen_oos_ready": "Promotion evidence",
         "frozen_candidate_manifest": "Integrity",
         "future_unseen_oos_evaluated": "Promotion evidence",
@@ -276,6 +277,10 @@ def _scorecard_frame(
         "calibration_separation": (
             "Mean score gap between actual long and not-long rows. This is not "
             "probability calibration."
+        ),
+        "seed_reproducibility_classified": (
+            "Same-seed audit must reproduce the source run before independent-seed "
+            "dispersion is interpreted."
         ),
     }
     for item in phase2_readiness.get("checks", []) or []:

@@ -56,8 +56,13 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
         )
 
     assert "Notebook 04 remains forbidden" not in diagnostics
+    assert "seed_audit_source_run_id" in diagnostics
+    assert "source_run_id" in diagnostics
     assert "notebook04_run.json" in diagnostics
     assert "notebook04_handoff" in diagnostics
+    assert "optional=True" in diagnostics
+    assert "Seed reproducibility audit:" in diagnostics
+    assert "Experiment memory registry:" in diagnostics
     assert "Same-window policy selection allowed:" in diagnostics
     assert "future_oos_failure_summary.json" in diagnostics
     assert "future_oos_temporal_blocks.csv" in diagnostics

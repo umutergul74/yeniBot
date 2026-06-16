@@ -196,6 +196,7 @@ def _missing_required_files(
         "classification_skill_summary.csv",
         "classification_skill_by_fold.csv",
         "seed_audit_coverage.csv",
+        "seed_reproducibility_audit.csv",
         "validation_charter_review.csv",
         "validation_charter_proposal.csv",
         "validation_charter_status.json",
@@ -207,6 +208,7 @@ def _missing_required_files(
         "bad_fold_mechanism_summary.csv",
         "prediction_error_audit.csv",
         "historical_experiment_memory_audit.csv",
+        "experiment_memory_registry.csv",
         "score_reversal_context_audit.csv",
         "model_evidence_uncertainty.csv",
         "probability_calibration_comparison.csv",
@@ -426,6 +428,65 @@ def _forensics_summary(
     }
 
 
+def _seed_reproducibility_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {
+            "available": False,
+            "same_seed_status": "",
+            "same_seed_reproducible": False,
+            "environment_audit_required": True,
+            "rows": [],
+            "same_seed_rows": [],
+        }
+    same_seed = (
+        frame.loc[frame["comparison_role"].astype(str).eq("same_seed_reproduction")].copy()
+        if "comparison_role" in frame.columns
+        else pd.DataFrame(columns=frame.columns)
+    )
+    statuses = set(same_seed.get("reproducibility_status", pd.Series(dtype=str)).astype(str))
+    pass_statuses = {
+        "same_seed_reproduced",
+        "same_seed_ranking_reproduced_with_numeric_drift",
+    }
+    reproducible = bool(statuses and statuses.issubset(pass_statuses))
+    same_seed_status = ";".join(sorted(statuses))
+    return {
+        "available": True,
+        "same_seed_status": same_seed_status,
+        "same_seed_reproducible": reproducible,
+        "environment_audit_required": not reproducible,
+        "row_count": int(len(frame)),
+        "same_seed_row_count": int(len(same_seed)),
+        "rows": _records(frame),
+        "same_seed_rows": _records(same_seed),
+        "failed_rows": _records(
+            same_seed.loc[
+                ~same_seed["reproducibility_status"].astype(str).isin(pass_statuses)
+            ]
+            if "reproducibility_status" in same_seed.columns
+            else same_seed
+        ),
+    }
+
+
+def _experiment_memory_registry_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {"available": False, "rejected_count": 0, "allow_retest_count": 0, "rows": []}
+    rejected = frame.loc[frame["memory_status"].astype(str).eq("rejected")] if "memory_status" in frame.columns else frame
+    allow_retest = frame.loc[frame["allow_retest"].map(_to_bool)] if "allow_retest" in frame.columns else pd.DataFrame()
+    return {
+        "available": True,
+        "rejected_count": int(len(rejected)),
+        "allow_retest_count": int(len(allow_retest)),
+        "auto_retest_blocked_count": (
+            int(frame["auto_retest_blocked"].map(_to_bool).sum())
+            if "auto_retest_blocked" in frame.columns
+            else 0
+        ),
+        "rows": _records(frame),
+    }
+
+
 def _next_action(
     *,
     missing_files: list[str],
@@ -435,6 +496,7 @@ def _next_action(
     decision: dict[str, Any],
     future_oos: dict[str, Any],
     frozen_candidate: dict[str, Any],
+    seed_reproducibility: dict[str, Any] | None = None,
     replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
@@ -447,6 +509,10 @@ def _next_action(
     if not bool(decision.get("holdout_boundary_passed", True)):
         reasons.append("holdout_boundary_audit_failed")
         return "rerun_training_with_holdout_split", reasons
+    seed_repro = seed_reproducibility or {}
+    if seed_repro.get("available") and seed_repro.get("environment_audit_required"):
+        reasons.append("seed_reproducibility_same_seed_not_classified")
+        return "run_05_seed_reproducibility_review_before_new_candidate", reasons
     window_data_ready = bool(policy.get("future_oos_ready", False))
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
@@ -499,6 +565,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     constrained_pred_rate = _metric(control, "test_pred_long_rate_at_constrained_threshold")
     calibration_separation = _metric(control, "calibration_separation")
     seed_coverage = review.get("seed_audit_coverage", {}) or {}
+    seed_reproducibility = review.get("seed_reproducibility_audit", {}) or {}
     policy = review.get("holdout", {}).get("policy", {}) or {}
     future_oos = review.get("future_oos", {}).get("readiness", {}) or {}
     frozen_candidate = review.get("frozen_candidate", {}) or {}
@@ -679,6 +746,13 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "value": seed_coverage.get("coverage_passed", False),
             "target": True,
             "blocker": "seed_audit_fold_coverage_incomplete",
+        },
+        {
+            "check": "seed_reproducibility_classified",
+            "passed": bool(seed_reproducibility.get("same_seed_reproducible", False)),
+            "value": seed_reproducibility.get("same_seed_status", ""),
+            "target": "same_seed_reproduced or same_seed_ranking_reproduced_with_numeric_drift",
+            "blocker": "seed_reproducibility_unclassified",
         },
         {
             "check": "future_unseen_oos_ready",
@@ -985,6 +1059,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         report_path / "probability_calibration_comparison.csv"
     )
     seed_audit_coverage = _read_csv(report_path / "seed_audit_coverage.csv")
+    seed_reproducibility_audit = _read_csv(report_path / "seed_reproducibility_audit.csv")
+    experiment_memory_registry = _read_csv(report_path / "experiment_memory_registry.csv")
     validation_charter = _read_csv(report_path / "validation_charter_review.csv")
     validation_charter_proposal = _read_csv(report_path / "validation_charter_proposal.csv")
     score_reversal_context = _read_csv(report_path / "score_reversal_context_audit.csv")
@@ -1096,6 +1172,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         and "coverage_passed" in seed_audit_coverage.columns
         and seed_audit_coverage["coverage_passed"].map(_to_bool).all()
     )
+    seed_reproducibility = _seed_reproducibility_summary(seed_reproducibility_audit)
+    memory_registry = _experiment_memory_registry_summary(experiment_memory_registry)
     action, reasons = _next_action(
         missing_files=missing_files,
         missing_profiles=missing_profiles,
@@ -1104,6 +1182,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         decision=decision,
         future_oos=future_oos_readiness,
         frozen_candidate=frozen_candidate,
+        seed_reproducibility=seed_reproducibility,
         replacement_candidate_fit=replacement_candidate_fit,
     )
     review = {
@@ -1222,6 +1301,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
                 else []
             ),
         },
+        "seed_reproducibility_audit": seed_reproducibility,
+        "experiment_memory_registry": memory_registry,
         "validation_charter_review": {
             "rows": _records(validation_charter),
             "formal_revision_recommended": bool(
@@ -1381,6 +1462,8 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         {},
     )
     recency = review.get("recency_ensemble_research", {}) or {}
+    seed_repro = review.get("seed_reproducibility_audit", {}) or {}
+    memory_registry = review.get("experiment_memory_registry", {}) or {}
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
         "",
@@ -1497,6 +1580,13 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"`{review.get('validation_charter_review', {}).get('formal_revision_recommended', False)}`",
         f"- Seed audit fold coverage passed: "
         f"`{review.get('seed_audit_coverage', {}).get('coverage_passed', False)}`",
+        f"- Same-seed reproducibility status: "
+        f"`{seed_repro.get('same_seed_status', 'not_available')}`",
+        f"- Same-seed reproducibility accepted: "
+        f"`{seed_repro.get('same_seed_reproducible', False)}`",
+        f"- Rejected experiment-memory entries: "
+        f"`{memory_registry.get('rejected_count', 0)}` "
+        f"(auto-retest blocked: `{memory_registry.get('auto_retest_blocked_count', 0)}`)",
         f"- Validation charter proposal status: "
         f"`{review.get('validation_charter_proposal', {}).get('proposal_status', 'not_produced')}` "
         f"(active: `{review.get('validation_charter_proposal', {}).get('active_for_phase1_readiness', False)}`)",

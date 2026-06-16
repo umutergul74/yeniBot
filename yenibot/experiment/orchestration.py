@@ -98,10 +98,7 @@ from yenibot.experiment.evidence import (
     _write_model_evidence_uncertainty,
     _write_probability_calibration_comparison,
 )
-from yenibot.experiment.dashboard import (
-    attach_active_charter_status,
-    write_model_performance_dashboard,
-)
+from yenibot.experiment.dashboard import attach_active_charter_status, write_model_performance_dashboard
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 from yenibot.experiment.oos_preflight import (
@@ -137,6 +134,7 @@ from yenibot.experiment.holdout import (
     _write_holdout_reservation,
     _write_performance_gap_analysis,
 )
+from yenibot.experiment.memory import _experiment_memory_registry_frame, _write_experiment_memory_registry
 from yenibot.experiment.payoff import (
     _frozen_policy_robustness_frame,
     _payoff_alignment_frame,
@@ -174,10 +172,7 @@ from yenibot.experiment.rolling_research import (
 from yenibot.experiment.replacement import publish_replacement_candidate_reports
 from yenibot.experiment.seed_audit import run_seed_audit_extension
 from yenibot.experiment.seed_reproducibility import _seed_reproducibility_reports, _write_seed_reproducibility_files
-from yenibot.experiment.separation import (
-    _bad_fold_signature_frame,
-    _score_separation_forensics_frame,
-)
+from yenibot.experiment.separation import _bad_fold_signature_frame, _score_separation_forensics_frame
 from yenibot.experiment.thresholds import (
     _regime_stability_frames,
     _regime_threshold_policy_frames,
@@ -1006,6 +1001,7 @@ def write_experiment_diagnostics(
     frozen_policy_monitoring_plan = _frozen_policy_monitoring_plan_frame(diagnostic_config, settings)
     experiment_policy_guard = _experiment_policy_guard_frame(settings, diagnostic_config)
     future_oos_candidate_plan = _future_oos_candidate_plan_frame(settings, diagnostic_config)
+    experiment_memory_registry = _experiment_memory_registry_frame(diagnostic_config)
     decision_lookup = {
         (str(row["profile"]), str(row["fold_scope"])): row
         for row in [*triage_rows, *full_rows]
@@ -1274,6 +1270,7 @@ def write_experiment_diagnostics(
     decision["recency_ensemble_decision"] = recency_policy_decision
     decision["replacement_candidate_fit"] = replacement_candidate_fit
     decision["next_research_protocol"] = next_research_protocol
+    decision["experiment_memory_registry"] = experiment_memory_registry.to_dict(orient="records")
     if bool(future_oos_readiness.get("evaluation_completed", False)):
         if future_oos_readiness.get("primary_candidate_passed") is True:
             decision["recommendation"] = "review_passed_frozen_candidate_for_phase2_readiness"
@@ -1342,6 +1339,7 @@ def write_experiment_diagnostics(
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_reproducibility_files(report_dir, seed_reproducibility_audit)
+    _write_experiment_memory_registry(report_dir, experiment_memory_registry)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
@@ -1628,6 +1626,7 @@ def write_experiment_diagnostics(
     _write_json(_training_execution_summary_path(run_dir), training_execution)
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
+    _write_experiment_memory_registry(run_dir, experiment_memory_registry)
     _write_seed_ensemble_files(run_dir, seed_ensemble)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
@@ -1725,6 +1724,7 @@ def write_experiment_diagnostics(
         "bad_fold_mechanism_summary": bad_fold_mechanism_summary,
         "prediction_error_audit": prediction_error_audit,
         "historical_experiment_memory_audit": historical_experiment_memory_audit,
+        "experiment_memory_registry": experiment_memory_registry,
         "phase1_decision_ladder": phase1_decision_ladder,
         "model_performance_scorecard": model_performance_dashboard["scorecard"],
         "model_performance_summary": model_performance_dashboard["summary"],

@@ -309,6 +309,38 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "profile": control,
+                "source_fold_scope": "full",
+                "audit_fold_scope": "seed_042",
+                "audit_seed": 42,
+                "expected_source_seed": 42,
+                "comparison_role": "same_seed_reproduction",
+                "manifest_compatible": True,
+                "overlap_fold_count": 8,
+                "probability_spearman": 0.9999,
+                "mean_rank_ic_delta": 0.0001,
+                "fold_rank_ic_sign_agreement": 1.0,
+                "reproducibility_status": "same_seed_ranking_reproduced_with_numeric_drift",
+                "likely_cause": "minor_numeric_runtime_drift",
+                "recommended_action": "record_runtime_versions",
+            }
+        ]
+    ).to_csv(path / "seed_reproducibility_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "profile": "failed_profile",
+                "memory_status": "rejected",
+                "reason": "fixture rejected experiment",
+                "allow_retest": False,
+                "auto_retest_blocked": True,
+                "source": "config.experiments.experiment_memory.rejected_profiles",
+            }
+        ]
+    ).to_csv(path / "experiment_memory_registry.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "criterion": "rank_ic_std",
                 "control_profile": control,
                 "charter_review_recommended": True,
@@ -530,6 +562,13 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
         == "calibration_reduces_ece_but_does_not_beat_climatology"
     )
     assert review["seed_audit_coverage"]["coverage_passed"] is True
+    assert review["seed_reproducibility_audit"]["same_seed_reproducible"] is True
+    assert (
+        review["seed_reproducibility_audit"]["same_seed_status"]
+        == "same_seed_ranking_reproduced_with_numeric_drift"
+    )
+    assert review["experiment_memory_registry"]["rejected_count"] == 1
+    assert review["experiment_memory_registry"]["auto_retest_blocked_count"] == 1
     assert review["validation_charter_review"]["formal_revision_recommended"] is True
     assert review["validation_charter_proposal"]["active_for_phase1_readiness"] is False
     assert review["score_reversal_context"]["hypothesis_count"] == 1
@@ -660,6 +699,7 @@ def test_auto_review_uses_explicit_active_evidence_charter_without_legacy_blocke
     checks = {row["check"]: row for row in review["phase2_readiness"]["checks"]}
     assert checks["rank_ic_std"]["status"] == "monitor"
     assert checks["raw_long_f1"]["status"] == "monitor"
+    assert checks["seed_reproducibility_classified"]["status"] == "passed"
     assert review["phase2_readiness"]["active_validation_charter"] == "v4_evidence"
     assert review["phase2_readiness"]["long_f1_source"] == "evidence_based_classification_skill"
 

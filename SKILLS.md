@@ -35,11 +35,12 @@ The current safe control profile is configured in `config.yaml`:
   top-score payoff. Train-only clipping was controlled but too weak and reduced
   top-10 lift. Both masking variants are rejected and clipping is archived as
   inconclusive/non-promotable; do not rerun this family automatically.
-- Bundle 73 confirmed that the retained control clears the active historical
-  model-evidence gates, but its configured multi-seed audit had never run.
-  Complete the isolated seed-audit extension on source run `20260614_054446`
-  before selecting another feature or training hypothesis. This extension must
-  not retrain the source full-CV scope.
+- Bundle 74 completed the isolated seed-audit extension on source run
+  `20260614_054446` without retraining the source full-CV scope. Treat
+  `seed_audit_coverage.csv` and `seed_reproducibility_audit.csv` as mandatory
+  current evidence before selecting another feature or training hypothesis.
+  Independent-seed dispersion is not interpretable until the same-seed audit is
+  classified as reproduced or as acceptable numeric drift.
 - Historical rolling-origin evidence from bundle `20260613_134953` showed a
   real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
   coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
@@ -203,10 +204,11 @@ Phase 2 is blocked until `auto_review.py` reports all readiness checks passing:
 13. `mtf_leakage`: MTF leakage audit passes.
 14. `stationarity_policy`: stationarity policy audit passes.
 15. `seed_audit_coverage`: configured seed/fold coverage is complete.
-16. `future_unseen_oos_ready`: enough fresh unseen bars exist after the anchor.
-17. `frozen_candidate_manifest`: the pre-anchor candidate artifacts are complete and hash-verified.
-18. `future_unseen_oos_evaluated`: the frozen candidate has been scored on the fresh window without refitting.
-19. `future_unseen_oos_passed`: the pre-registered future-OOS evidence gates pass.
+16. `seed_reproducibility_classified`: the same-seed audit is reproduced or classified as acceptable numeric drift.
+17. `future_unseen_oos_ready`: enough fresh unseen bars exist after the anchor.
+18. `frozen_candidate_manifest`: the pre-anchor candidate artifacts are complete and hash-verified.
+19. `future_unseen_oos_evaluated`: the frozen candidate has been scored on the fresh window without refitting.
+20. `future_unseen_oos_passed`: the pre-registered future-OOS evidence gates pass.
 
 The active validation charter is `v4_evidence`. It was activated by an explicit reviewed config and documentation commit after run `20260605_211102` showed:
 
@@ -303,6 +305,7 @@ Required diagnostic artifacts include:
 - `bad_fold_mechanism_summary.csv`
 - `prediction_error_audit.csv`
 - `historical_experiment_memory_audit.csv`
+- `experiment_memory_registry.csv`
 - `score_reversal_context_audit.csv`
 - `phase1_decision_ladder.json`
 - `model_performance_dashboard.md`
@@ -345,6 +348,7 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
    - Before interpreting multi-seed dispersion, compare the source full run with the audit run that uses the same base seed in `seed_reproducibility_audit.csv`.
    - A same-seed mismatch with compatible frame, feature, and training-config hashes is a reproducibility/runtime issue, not evidence of initialization sensitivity.
    - Independent-seed rows may measure robustness only after the same-seed control is classified.
+   - `experiment_memory_registry.csv` must expose rejected profiles and whether automatic retest is blocked; never rely on memory hidden only inside `config.yaml`.
 9. Validation charter: use `validation_charter_status.json` to identify the active committed charter and `validation_charter_proposal.csv` as its criterion-level evidence table. Reports may evaluate the active charter, but they may never change `active_version` automatically.
 10. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
 11. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.
