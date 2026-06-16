@@ -60,6 +60,8 @@ from yenibot.experiments import (
     _rank_ic_uncertainty_frames,
     _score_separation_forensics_frame,
     _seed_audit_coverage_frame,
+    _reconcile_seed_extension_summary,
+    _seed_reproducibility_audit_frame,
     _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
@@ -512,7 +514,8 @@ def test_future_oos_candidate_plan_records_ready_dates() -> None:
     future = plan.loc[plan["candidate"] == "blend_control_benchmark_65_35"].iloc[0]
     assert future["required_profiles"] == "control,benchmark"
     assert bool(future["all_required_profiles_allowed"]) is True
-    assert future["evaluation_status"] == "wait_for_future_oos"
+    assert future["candidate_status"] == "research_candidate_not_preregistered"
+    assert future["evaluation_status"] == "not_preregistered"
 
 
 def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
@@ -630,6 +633,38 @@ def test_future_oos_candidate_plan_adds_cv_robust_policy_candidates() -> None:
     assert blend_policy["candidate_type"] == "weighted_blend_score_band"
     assert blend_policy["required_profiles"] == "control,benchmark"
     assert bool(blend_policy["all_required_profiles_allowed"]) is True
+    assert blend_policy["candidate_status"] == "historical_cv_policy_candidate_not_preregistered"
+    assert blend_policy["evaluation_status"] == "not_preregistered"
+
+
+def test_future_oos_candidate_plan_marks_active_frozen_candidate_as_preregistered() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control"],
+            "policy_review": {
+                "future_oos_candidates": ["control"],
+                "future_oos_monitor": {"enabled": True, "min_new_bars": 720},
+            },
+            "frozen_candidates": {
+                "enabled": True,
+                "primary_candidate_id": "control",
+                "candidates": [{"candidate_id": "control"}],
+            },
+            "future_oos_validation": {"enabled": True},
+        },
+    }
+
+    plan = _future_oos_candidate_plan_frame(experiment_settings(config), config)
+    candidate = plan.loc[plan["stage"].eq("future_oos_candidate")].iloc[0]
+
+    assert candidate["candidate_status"] == "pre_registered_future_oos_candidate"
+    assert candidate["evaluation_status"] == "wait_for_future_oos"
 
 
 def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
@@ -1862,6 +1897,48 @@ def test_decision_ladder_routes_failed_future_oos_to_replacement_research() -> N
     assert ladder["new_future_oos_anchor_required"] is True
     assert ladder["recommended_next_action"] == (
         "explicitly_review_and_preregister_historical_recency_winner"
+    )
+
+
+def test_root_cause_uses_readiness_check_and_preserves_new_anchor_requirement() -> None:
+    readiness = {
+        "active_validation_charter": "v4_evidence",
+        "blockers": ["frozen_candidate_manifest_unavailable"],
+        "checks": [
+            {
+                "check": "future_unseen_oos_ready",
+                "passed": False,
+                "value": False,
+                "status": "pending",
+            }
+        ],
+    }
+    settings = {
+        "control_profile": "control",
+        "next_research_cycle": {"new_future_oos_anchor_required": True},
+    }
+    root = _phase1_blocker_root_cause_frame(
+        phase1_blocker_action_plan=pd.DataFrame(),
+        threshold_oracle_gap=pd.DataFrame(),
+        bad_fold_mechanism_summary=pd.DataFrame(),
+        historical_experiment_memory_audit=pd.DataFrame(),
+        phase2_readiness=readiness,
+        settings=settings,
+        config={},
+    )
+    ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=root,
+        threshold_oracle_gap=pd.DataFrame(),
+        bad_fold_mechanism_summary=pd.DataFrame(),
+        phase2_readiness=readiness,
+        settings=settings,
+    )
+
+    future_row = root.loc[root["blocker"].eq("future_unseen_oos")].iloc[0]
+    assert "future OOS ready=False" in future_row["evidence"]
+    assert ladder["new_future_oos_anchor_required"] is True
+    assert ladder["recommended_next_action"] == (
+        "complete_seed_reproducibility_review_before_replacement_preregistration"
     )
 
 
@@ -4610,6 +4687,7 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert "seeded/seed_audit_coverage.csv" in names
     assert "seeded/seed_stability.csv" in names
     assert "seeded/seed_ensemble.csv" in names
+    assert "seeded/seed_reproducibility_audit.csv" in names
 
 
 def test_fold_plan_validation_rejects_unavailable_ids() -> None:
@@ -4682,6 +4760,84 @@ def test_disabled_seed_audit_is_reported_as_not_evaluated() -> None:
     assert coverage.loc[0, "status"] == "disabled_not_evaluated"
 
 
+def test_seed_reproducibility_audit_distinguishes_same_and_independent_seeds(
+    tmp_path,
+) -> None:
+    profile = "control"
+    timestamps = pd.date_range("2024-01-01", periods=8, freq="h", tz="UTC")
+    source_predictions = pd.DataFrame(
+        {
+            "fold": [0] * 4 + [1] * 4,
+            "split": ["test"] * 8,
+            "timestamp": timestamps,
+            "label": [0, 1, 0, 1, 0, 1, 0, 1],
+            "fwd_return_10h": [-0.02, 0.03, -0.01, 0.02, -0.03, 0.01, -0.02, 0.04],
+            "prob_long": [0.1, 0.8, 0.2, 0.7, 0.2, 0.7, 0.1, 0.9],
+        }
+    )
+    entries = []
+    for scope, seed, scores in (
+        ("full", 42, source_predictions["prob_long"]),
+        ("seed_audit_seed_042", 42, source_predictions["prob_long"]),
+        ("seed_audit_seed_043", 43, 1.0 - source_predictions["prob_long"]),
+    ):
+        scope_dir = tmp_path / profile / scope
+        scope_dir.mkdir(parents=True)
+        manifest = {
+            "profile": profile,
+            "fold_scope": scope,
+            "frame_fingerprint": "frame",
+            "feature_columns_hash": "features",
+            "training_config_hash": "seed42" if seed == 42 else "seed43",
+        }
+        (scope_dir / "training_manifest.json").write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+        prediction = source_predictions.copy()
+        prediction["prob_long"] = np.asarray(scores)
+        entries.append(
+            {
+                "scope_dir": scope_dir,
+                "profile": profile,
+                "fold_scope": scope,
+                "predictions": prediction,
+            }
+        )
+
+    audit = _seed_reproducibility_audit_frame(
+        entries,
+        {"control_profile": profile},
+        {"project": {"random_seed": 42}},
+    )
+
+    same_seed = audit.loc[audit["audit_seed"].eq(42)].iloc[0]
+    independent = audit.loc[audit["audit_seed"].eq(43)].iloc[0]
+    assert same_seed["reproducibility_status"] == "same_seed_reproduced"
+    assert float(same_seed["probability_allclose_fraction"]) == pytest.approx(1.0)
+    assert independent["reproducibility_status"] == "independent_seed_reference"
+    assert independent["comparison_role"] == "independent_seed"
+
+
+def test_seed_extension_summary_is_reconciled_from_persisted_coverage() -> None:
+    coverage = pd.DataFrame(
+        [
+            {"coverage_passed": True, "status": "passed"},
+            {"coverage_passed": True, "status": "passed"},
+        ]
+    )
+
+    summary = _reconcile_seed_extension_summary(
+        {"coverage_passed": False, "source_run_id": "source"},
+        coverage,
+    )
+
+    assert summary["coverage_passed_at_extension"] is False
+    assert summary["coverage_passed"] is True
+    assert summary["coverage_reconciled_at_diagnostics"] is True
+    assert summary["coverage_rows_at_diagnostics"] == 2
+
+
 def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
     current = {
         "experiments": {
@@ -4697,7 +4853,7 @@ def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
                 "candidates": [],
             },
             "future_oos_validation": {"enabled": False},
-            "next_research_cycle": {"status": "seed_robustness_audit_before_new_candidate"},
+            "next_research_cycle": {"status": "seed_audit_complete_reproducibility_review"},
             "research_focus": {"status": "mechanism_cycle_completed_no_promotion"},
         }
     }
@@ -4725,7 +4881,7 @@ def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
     assert experiments["frozen_candidates"]["candidates"] == []
     assert experiments["future_oos_validation"]["enabled"] is False
     assert experiments["next_research_cycle"]["status"] == (
-        "seed_robustness_audit_before_new_candidate"
+        "seed_audit_complete_reproducibility_review"
     )
     assert experiments["research_focus"]["status"] == (
         "mechanism_cycle_completed_no_promotion"
@@ -4825,6 +4981,7 @@ def test_seed_audit_extension_reuses_source_full_cv_without_retraining(
         run_id="seed_extension_source",
     )
     assert diagnostics["seed_audit_coverage"]["coverage_passed"].all()
+    assert not diagnostics["seed_reproducibility_audit"].empty
     assert diagnostics["decision"]["seed_audit_extension"]["coverage_passed"] is True
     assert (
         tmp_path

@@ -266,6 +266,7 @@ Required diagnostic artifacts include:
 - `classification_skill_summary.csv`
 - `classification_skill_by_fold.csv`
 - `seed_audit_coverage.csv`
+- `seed_reproducibility_audit.csv`
 - `validation_charter_review.csv`
 - `validation_charter_proposal.csv`
 - `validation_charter_status.json`
@@ -341,6 +342,9 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
    - Probability calibration must be fit on each fold's validation split and evaluated on that fold's test split. Report macro-fold and pooled Brier/log-loss skill separately, plus the fraction of folds with positive skill.
    - Negative Brier or log-loss skill versus climatology means the score may still rank observations, but it must not be described or deployed as a calibrated probability.
 8. Seed robustness: `seed_audit_coverage.csv` must prove that every configured seed fold exists, completed, and spans the available walk-forward history. Never silently ignore unavailable fold ids.
+   - Before interpreting multi-seed dispersion, compare the source full run with the audit run that uses the same base seed in `seed_reproducibility_audit.csv`.
+   - A same-seed mismatch with compatible frame, feature, and training-config hashes is a reproducibility/runtime issue, not evidence of initialization sensitivity.
+   - Independent-seed rows may measure robustness only after the same-seed control is classified.
 9. Validation charter: use `validation_charter_status.json` to identify the active committed charter and `validation_charter_proposal.csv` as its criterion-level evidence table. Reports may evaluate the active charter, but they may never change `active_version` automatically.
 10. Score-band payoff: verify that high-score bands produce positive forward return, not only label lift.
 11. Future-OOS readiness: do not promote until enough fresh unseen bars have accumulated.

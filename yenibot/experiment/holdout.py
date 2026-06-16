@@ -1135,6 +1135,37 @@ def _future_oos_candidate_plan_frame(
     ready_at = _future_oos_ready_at_fields(guard)
     profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
     weighted_blends = _cfg(config, ["experiments", "profile_blends", "weighted"], []) or []
+    frozen_cfg = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
+    frozen_primary = str(frozen_cfg.get("primary_candidate_id") or "").strip()
+    frozen_ids = {
+        str(item.get("candidate_id") or "").strip()
+        for item in frozen_cfg.get("candidates", []) or []
+        if isinstance(item, dict)
+    }
+    frozen_primary_spec = next(
+        (
+            item
+            for item in frozen_cfg.get("candidates", []) or []
+            if isinstance(item, dict)
+            and str(item.get("candidate_id") or "").strip() == frozen_primary
+        ),
+        {},
+    )
+    frozen_primary_aliases = {
+        frozen_primary,
+        str(frozen_primary_spec.get("profile") or "").strip(),
+        str(frozen_primary_spec.get("candidate") or "").strip(),
+        str(frozen_primary_spec.get("blend_name") or "").strip(),
+    } - {""}
+    future_protocol_enabled = bool(
+        _cfg(config, ["experiments", "future_oos_validation", "enabled"], False)
+    )
+    active_preregistration = bool(
+        frozen_cfg.get("enabled", False)
+        and frozen_primary
+        and frozen_primary in frozen_ids
+        and future_protocol_enabled
+    )
     rows: list[dict[str, Any]] = []
 
     def weighted_blend_profiles(candidate: str) -> list[str]:
@@ -1171,14 +1202,38 @@ def _future_oos_candidate_plan_frame(
         allowed = set(str(item) for item in guard.get("allowed_benchmark_profiles", []) or [])
         all_required_allowed = all(profile in allowed for profile in required) if required else candidate in allowed
         is_retired = stage == "retired_frozen_policy"
-        candidate_status = {
-            "control_profile": "active_control",
-            "future_oos_candidate": "pre_registered_future_oos_candidate",
-            "future_oos_score_band_policy": "pre_registered_future_oos_policy",
-            "retired_frozen_policy": "historical_retired_policy_do_not_promote",
-        }.get(stage, "diagnostic_candidate")
         candidate_id = candidate if not policy_name else f"{candidate}::{policy_name}"
+        row_preregistered = bool(
+            active_preregistration
+            and (candidate in frozen_primary_aliases or candidate_id in frozen_primary_aliases)
+        )
+        if stage == "control_profile":
+            candidate_status = "active_control"
+        elif stage == "retired_frozen_policy":
+            candidate_status = "historical_retired_policy_do_not_promote"
+        elif stage == "future_oos_score_band_policy":
+            candidate_status = (
+                "pre_registered_future_oos_policy"
+                if row_preregistered
+                else "historical_cv_policy_candidate_not_preregistered"
+            )
+        elif stage == "future_oos_candidate":
+            candidate_status = (
+                "pre_registered_future_oos_candidate"
+                if row_preregistered
+                else "research_candidate_not_preregistered"
+            )
+        else:
+            candidate_status = "diagnostic_candidate"
         candidate_label = candidate if not policy_name else f"{candidate} [{policy_name}]"
+        if is_retired:
+            evaluation_status = "retired_do_not_evaluate"
+        elif stage.startswith("future_oos") and not active_preregistration:
+            evaluation_status = "not_preregistered"
+        elif not bool(guard.get("future_oos_ready", False)):
+            evaluation_status = "wait_for_future_oos"
+        else:
+            evaluation_status = "ready_for_future_oos_review"
         rows.append(
             {
                 "candidate_id": candidate_id,
@@ -1196,9 +1251,10 @@ def _future_oos_candidate_plan_frame(
                 "min_ready_at": ready_at["min_ready_at"],
                 "preferred_ready_at": ready_at["preferred_ready_at"],
                 "action": str(guard.get("action", "")),
-                "evaluation_status": "wait_for_future_oos" if not bool(guard.get("future_oos_ready", False)) else "ready_for_future_oos_review",
+                "evaluation_status": evaluation_status,
                 "promotion_allowed_now": (
-                    bool(guard.get("future_oos_ready", False))
+                    row_preregistered
+                    and bool(guard.get("future_oos_ready", False))
                     and bool(all_required_allowed)
                     and not is_retired
                 ),
@@ -1309,7 +1365,8 @@ def _future_oos_candidate_plan_frame(
                 stage="future_oos_score_band_policy",
                 required_profiles=required_profiles,
                 note=(
-                    "CV payoff-policy robustness pre-registered this score band for future unseen OOS review. "
+                    "CV payoff-policy robustness identified this score band as a research candidate. "
+                    "It is not pre-registered until an active frozen manifest references it. "
                     "Current holdout remains diagnostic-only and must not be used for promotion."
                 ),
                 policy_name=band,

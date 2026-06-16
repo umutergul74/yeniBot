@@ -2064,13 +2064,13 @@ experiments:
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
   next_research_cycle:
-    status: seed_robustness_audit_before_new_candidate
+    status: seed_audit_complete_reproducibility_review
     source_failed_candidate_id: control_fold_ensemble_v1
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
     primary_hypothesis: null
-    next_action: "Complete the retained control's isolated seed audit on run 20260614_054446. Select a distinct ranking-stability hypothesis only after seed robustness is known."
+    next_action: "Run notebook 05 only and review seed_reproducibility_audit. Do not pre-register a replacement until the same-seed full-vs-audit discrepancy is classified."
     rolling_origin:
       enabled: false
       train_bars: 5040

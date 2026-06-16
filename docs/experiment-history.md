@@ -69,3 +69,19 @@ Before another mechanism experiment, the retained control must complete its
 missing multi-seed audit. The audit is appended to run `20260614_054446` as
 isolated seed scopes; it is not a repeat of full CV and does not reopen the
 failed preprocessing candidates.
+
+## Seed Audit Completion
+
+The June 15 seed extension completed all configured scopes:
+
+- seed `42`: mean IC `0.0316`, positive folds `50.0%`
+- seed `43`: mean IC `0.0188`, positive folds `62.5%`
+- seed `44`: mean IC `0.0602`, positive folds `75.0%`
+- equal seed ensemble: mean IC `0.0407`, positive folds `75.0%`
+
+The result confirms meaningful seed sensitivity, but it does not yet isolate
+initialization as the only cause. The original full seed-42 run has mean IC
+`0.0494` on the same eight folds, versus `0.0316` in the appended seed-42
+scope. The next diagnostic is therefore an exact same-seed reproducibility
+audit. No feature or loss experiment may be selected until manifest and
+runtime compatibility are reviewed.

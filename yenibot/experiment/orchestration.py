@@ -6,13 +6,8 @@ import copy
 from pathlib import Path
 from typing import Any
 import pandas as pd
-from yenibot.diagnostics import (
-    write_phase1_diagnostic_bundle,
-)
-from yenibot.experiment.artifacts import (
-    _write_experiment_bundle,
-    _write_experiment_slim_bundle,
-)
+from yenibot.diagnostics import write_phase1_diagnostic_bundle
+from yenibot.experiment.artifacts import _write_experiment_bundle, _write_experiment_slim_bundle
 from yenibot.experiment.classification import (
     _causal_threshold_policy_frames,
     _classification_skill_frames,
@@ -178,11 +173,11 @@ from yenibot.experiment.rolling_research import (
 )
 from yenibot.experiment.replacement import publish_replacement_candidate_reports
 from yenibot.experiment.seed_audit import run_seed_audit_extension
+from yenibot.experiment.seed_reproducibility import _seed_reproducibility_reports, _write_seed_reproducibility_files
 from yenibot.experiment.separation import (
     _bad_fold_signature_frame,
     _score_separation_forensics_frame,
 )
-
 from yenibot.experiment.thresholds import (
     _regime_stability_frames,
     _regime_threshold_policy_frames,
@@ -194,7 +189,6 @@ from yenibot.experiment.thresholds import (
     _write_threshold_policy_review,
     _write_threshold_transfer_review,
 )
-
 from yenibot.experiment.training import (
     _auto_full_profiles,
     _best_candidate,
@@ -1000,6 +994,9 @@ def write_experiment_diagnostics(
     profile_delta = _profile_delta_vs_control(profile_entries, settings["control_profile"])
     seed_audit, seed_stability = _seed_audit_entries_to_frames(entries)
     seed_audit_coverage = _seed_audit_coverage_frame(entries, settings)
+    seed_audit_extension, seed_reproducibility_audit = _seed_reproducibility_reports(
+        profile_entries, settings, diagnostic_config, seed_audit_extension, seed_audit_coverage
+    )
     seed_ensemble = _seed_ensemble_frame(entries)
     profile_blend = _profile_blend_frame(entries)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
@@ -1323,6 +1320,7 @@ def write_experiment_diagnostics(
     decision["validation_charter_proposal"] = validation_charter_proposal.to_dict(orient="records")
     decision["seed_audit_coverage"] = seed_audit_coverage.to_dict(orient="records")
     decision["seed_audit_extension"] = seed_audit_extension
+    decision["seed_reproducibility_audit"] = seed_reproducibility_audit.to_dict(orient="records")
     decision["payoff_alignment_summary"] = payoff_alignment_summary.to_dict(orient="records")
     decision["payoff_policy_robustness_summary"] = payoff_policy_robustness_summary.to_dict(orient="records")
     bundle_path = Path(output_dir) / f"phase1_experiment_bundle_{run_dir.name}.zip" if write_full_bundles else None
@@ -1343,6 +1341,7 @@ def write_experiment_diagnostics(
         )
     _write_profile_delta(report_dir, profile_delta)
     _write_seed_audit_files(report_dir, seed_audit, seed_stability, seed_audit_coverage)
+    _write_seed_reproducibility_files(report_dir, seed_reproducibility_audit)
     _write_seed_ensemble_files(report_dir, seed_ensemble)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
@@ -1716,6 +1715,7 @@ def write_experiment_diagnostics(
         "seed_audit": seed_audit,
         "seed_stability": seed_stability,
         "seed_audit_coverage": seed_audit_coverage,
+        "seed_reproducibility_audit": seed_reproducibility_audit,
         "seed_ensemble": seed_ensemble,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,

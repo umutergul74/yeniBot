@@ -173,7 +173,9 @@ def future_oos_preflight(
                 "preferred_rows_remaining": None,
             },
             "checks": {
-                "protocol_enabled": bool(frozen.get("enabled", False)),
+                "protocol_enabled": bool(
+                    frozen.get("enabled", False) and future.get("enabled", False)
+                ),
                 "active_primary_candidate_present": False,
                 "new_anchor_present": False,
             },
@@ -277,7 +279,9 @@ def future_oos_preflight(
     )
 
     checks = {
-        "protocol_enabled": bool(frozen.get("enabled", False)),
+        "protocol_enabled": bool(
+            frozen.get("enabled", False) and future.get("enabled", False)
+        ),
         "future_oos_enabled": bool(future.get("enabled", False)),
         "anchor_valid": not pd.isna(anchor),
         "primary_spec_present": bool(spec),

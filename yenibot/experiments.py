@@ -27,4 +27,5 @@ from yenibot.experiment.rolling_research import *  # noqa: F401,F403
 from yenibot.experiment.oos_preflight import *  # noqa: F401,F403
 from yenibot.experiment.registry import *  # noqa: F401,F403
 from yenibot.experiment.seed_audit import *  # noqa: F401,F403
+from yenibot.experiment.seed_reproducibility import *  # noqa: F401,F403
 from yenibot.experiment.orchestration import *  # noqa: F401,F403

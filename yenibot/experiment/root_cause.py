@@ -977,6 +977,14 @@ def _prediction_error_audit_frame(
         ["candidate_type", "candidate", "fold_scope", "case_type", "fold"],
     ).reset_index(drop=True)
 
+def _readiness_check_state(readiness: dict[str, Any], check_name: str) -> tuple[bool, str]:
+    for row in readiness.get("checks", []) or []:
+        if str(row.get("check", "")) == check_name:
+            passed = row.get("passed") is True and row.get("value") is True
+            return bool(passed), str(row.get("status", ""))
+    return False, "missing"
+
+
 def _phase1_blocker_root_cause_frame(
     *,
     phase1_blocker_action_plan: pd.DataFrame,
@@ -1013,8 +1021,13 @@ def _phase1_blocker_root_cause_frame(
         not in {
             "future_unseen_oos_not_ready",
             "future_unseen_oos_not_evaluated",
+            "frozen_candidate_manifest_unavailable",
         }
     }
+    future_oos_ready, future_oos_status = _readiness_check_state(
+        readiness,
+        "future_unseen_oos_ready",
+    )
     action_by_blocker = {
         str(row.get("blocker")): row.to_dict()
         for _, row in phase1_blocker_action_plan.iterrows()
@@ -1078,7 +1091,7 @@ def _phase1_blocker_root_cause_frame(
             "governance_gate_not_model_tuning",
             (
                 f"Phase2 blockers={sorted(blockers)}; future OOS ready="
-                f"{'future_unseen_oos_not_ready' not in blockers}."
+                f"{future_oos_ready}; readiness status={future_oos_status}."
             ),
             "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
         )
@@ -1131,7 +1144,7 @@ def _phase1_blocker_root_cause_frame(
             "governance_gate_not_model_tuning",
             (
                 f"Phase2 blockers={sorted(blockers)}; future OOS ready="
-                f"{'future_unseen_oos_not_ready' not in blockers}."
+                f"{future_oos_ready}; readiness status={future_oos_status}."
             ),
             "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
         )
@@ -1151,10 +1164,13 @@ def _phase1_decision_ladder_payload(
     recency_decision = recency_policy_decision or {}
     replacement_fit = replacement_candidate_fit or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
+    next_cycle = settings.get("next_research_cycle", {}) or {}
+    new_anchor_required = bool(next_cycle.get("new_future_oos_anchor_required", False))
     only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
         {
             "future_unseen_oos_not_ready",
             "future_unseen_oos_not_evaluated",
+            "frozen_candidate_manifest_unavailable",
         }
     )
     future_oos_failed = "future_unseen_oos_candidate_failed" in blockers
@@ -1211,6 +1227,10 @@ def _phase1_decision_ladder_payload(
         recommended_next_action = (
             "no_recency_policy_cleared_gates_design_new_pre_registered_hypothesis"
         )
+    elif only_future_oos_blocked and new_anchor_required:
+        recommended_next_action = (
+            "complete_seed_reproducibility_review_before_replacement_preregistration"
+        )
     elif only_future_oos_blocked:
         recommended_next_action = "refresh_data_and_run_05_when_future_oos_minimum_is_available"
     elif run_04_now:
@@ -1253,7 +1273,7 @@ def _phase1_decision_ladder_payload(
         "replacement_candidate_manifest_pin_required": bool(
             replacement_fit.get("manifest_pin_required", False)
         ),
-        "new_future_oos_anchor_required": bool(future_oos_failed),
+        "new_future_oos_anchor_required": bool(future_oos_failed or new_anchor_required),
         "why_no_04": (
             ""
             if run_04_now or future_oos_failed

@@ -44,7 +44,7 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     diagnostics = _source(_load_notebook("05_diagnostics_validation.ipynb"))
 
     assert "open_after_failed_future_oos" not in training
-    assert "seed_robustness_audit_before_new_candidate" in training
+    assert "seed_audit_complete_reproducibility_review" in training
     assert "walk_forward_cv_repair" in training
     assert "extend_existing_run" in training
     assert "20260614_054446" in training

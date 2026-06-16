@@ -1,6 +1,6 @@
 # Current Phase 1 Status
 
-Last reviewed: **June 14, 2026**
+Last reviewed: **June 15, 2026**
 
 ## Decision
 
@@ -94,11 +94,17 @@ primary candidate. Notebook `04` should not be rerun until a distinct
 pre-registered hypothesis is committed. Notebook `05` may be run for
 diagnostic/report verification without GPU.
 
-The one allowed notebook `04` exception is the isolated seed-audit extension
-configured for source run `20260614_054446`. It trains only seeds `42, 43, 44`
-on eight temporally distributed folds and leaves the source run's 36-fold
-control artifacts untouched. After that extension, run notebook `05` to verify
-`seed_audit_coverage.csv`.
+The isolated seed-audit extension for source run `20260614_054446` is complete.
+Seeds `42, 43, 44` each cover folds `0, 5, 10, 15, 20, 25, 30, 35`; coverage
+spans the full walk-forward history and passes.
+
+The audit shows material initialization sensitivity, but the source full run
+and the new seed-42 scope also differ on their shared folds. That same-seed
+difference must be classified before all dispersion is attributed to random
+initialization. Notebook `05` now writes `seed_reproducibility_audit.csv`,
+which compares manifest hashes, aligned prediction rows, score correlation,
+and fold Rank IC deltas. Run `05` only; no new training is required for this
+diagnostic.
 
 ## What Is Frozen
 
