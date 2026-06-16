@@ -197,6 +197,7 @@ def _missing_required_files(
         "classification_skill_by_fold.csv",
         "seed_audit_coverage.csv",
         "seed_reproducibility_audit.csv",
+        "seed_reproducibility_manifest_diff.csv",
         "validation_charter_review.csv",
         "validation_charter_proposal.csv",
         "validation_charter_status.json",
@@ -1060,6 +1061,15 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     )
     seed_audit_coverage = _read_csv(report_path / "seed_audit_coverage.csv")
     seed_reproducibility_audit = _read_csv(report_path / "seed_reproducibility_audit.csv")
+    seed_reproducibility_manifest_diff = _read_csv(report_path / "seed_reproducibility_manifest_diff.csv")
+    seed_manifest_same_seed = (
+        seed_reproducibility_manifest_diff.loc[
+            seed_reproducibility_manifest_diff["comparison_role"].astype(str).eq("same_seed_reproduction")
+        ]
+        if not seed_reproducibility_manifest_diff.empty
+        and "comparison_role" in seed_reproducibility_manifest_diff.columns
+        else pd.DataFrame(columns=seed_reproducibility_manifest_diff.columns)
+    )
     experiment_memory_registry = _read_csv(report_path / "experiment_memory_registry.csv")
     validation_charter = _read_csv(report_path / "validation_charter_review.csv")
     validation_charter_proposal = _read_csv(report_path / "validation_charter_proposal.csv")
@@ -1302,6 +1312,17 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             ),
         },
         "seed_reproducibility_audit": seed_reproducibility,
+        "seed_reproducibility_manifest_diff": {
+            "available": not seed_reproducibility_manifest_diff.empty,
+            "rows": _records(seed_reproducibility_manifest_diff),
+            "same_seed_interpretable": bool(
+                not seed_reproducibility_manifest_diff.empty
+                and not seed_manifest_same_seed.empty
+                and "comparison_role" in seed_reproducibility_manifest_diff.columns
+                and "same_seed_reproducibility_interpretable" in seed_reproducibility_manifest_diff.columns
+                and seed_manifest_same_seed["same_seed_reproducibility_interpretable"].map(_to_bool).all()
+            ),
+        },
         "experiment_memory_registry": memory_registry,
         "validation_charter_review": {
             "rows": _records(validation_charter),
@@ -1463,6 +1484,7 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
     )
     recency = review.get("recency_ensemble_research", {}) or {}
     seed_repro = review.get("seed_reproducibility_audit", {}) or {}
+    seed_diff = review.get("seed_reproducibility_manifest_diff", {}) or {}
     memory_registry = review.get("experiment_memory_registry", {}) or {}
     lines = [
         f"# Phase 1 Auto Review - {review['run_id']}",
@@ -1584,6 +1606,8 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"`{seed_repro.get('same_seed_status', 'not_available')}`",
         f"- Same-seed reproducibility accepted: "
         f"`{seed_repro.get('same_seed_reproducible', False)}`",
+        f"- Same-seed input comparison interpretable: "
+        f"`{seed_diff.get('same_seed_interpretable', False)}`",
         f"- Rejected experiment-memory entries: "
         f"`{memory_registry.get('rejected_count', 0)}` "
         f"(auto-retest blocked: `{memory_registry.get('auto_retest_blocked_count', 0)}`)",

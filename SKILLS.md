@@ -37,7 +37,8 @@ The current safe control profile is configured in `config.yaml`:
   inconclusive/non-promotable; do not rerun this family automatically.
 - Bundle 74 completed the isolated seed-audit extension on source run
   `20260614_054446` without retraining the source full-CV scope. Treat
-  `seed_audit_coverage.csv` and `seed_reproducibility_audit.csv` as mandatory
+  `seed_audit_coverage.csv`, `seed_reproducibility_audit.csv`, and
+  `seed_reproducibility_manifest_diff.csv` as mandatory
   current evidence before selecting another feature or training hypothesis.
   Independent-seed dispersion is not interpretable until the same-seed audit is
   classified as reproduced or as acceptable numeric drift.
@@ -269,6 +270,7 @@ Required diagnostic artifacts include:
 - `classification_skill_by_fold.csv`
 - `seed_audit_coverage.csv`
 - `seed_reproducibility_audit.csv`
+- `seed_reproducibility_manifest_diff.csv`
 - `validation_charter_review.csv`
 - `validation_charter_proposal.csv`
 - `validation_charter_status.json`
@@ -346,6 +348,7 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
    - Negative Brier or log-loss skill versus climatology means the score may still rank observations, but it must not be described or deployed as a calibrated probability.
 8. Seed robustness: `seed_audit_coverage.csv` must prove that every configured seed fold exists, completed, and spans the available walk-forward history. Never silently ignore unavailable fold ids.
    - Before interpreting multi-seed dispersion, compare the source full run with the audit run that uses the same base seed in `seed_reproducibility_audit.csv`.
+   - Use `seed_reproducibility_manifest_diff.csv` to separate global frame-hash drift from the overlapping fold rows actually compared by the same-seed audit.
    - A same-seed mismatch with compatible frame, feature, and training-config hashes is a reproducibility/runtime issue, not evidence of initialization sensitivity.
    - Independent-seed rows may measure robustness only after the same-seed control is classified.
    - `experiment_memory_registry.csv` must expose rejected profiles and whether automatic retest is blocked; never rely on memory hidden only inside `config.yaml`.

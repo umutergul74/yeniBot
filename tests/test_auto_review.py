@@ -329,6 +329,25 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "profile": control,
+                "audit_fold_scope": "seed_042",
+                "audit_seed": 42,
+                "comparison_role": "same_seed_reproduction",
+                "frame_fingerprint_match": True,
+                "overlap_input_fingerprint_match": True,
+                "feature_columns_hash_match": True,
+                "training_config_hash_match": True,
+                "manifest_compatible": True,
+                "global_frame_mismatch_but_overlap_inputs_match": False,
+                "same_seed_reproducibility_interpretable": True,
+                "likely_cause": "minor_numeric_runtime_drift",
+                "recommended_action": "record_runtime_versions",
+            }
+        ]
+    ).to_csv(path / "seed_reproducibility_manifest_diff.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "profile": "failed_profile",
                 "memory_status": "rejected",
                 "reason": "fixture rejected experiment",
@@ -567,6 +586,7 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
         review["seed_reproducibility_audit"]["same_seed_status"]
         == "same_seed_ranking_reproduced_with_numeric_drift"
     )
+    assert review["seed_reproducibility_manifest_diff"]["same_seed_interpretable"] is True
     assert review["experiment_memory_registry"]["rejected_count"] == 1
     assert review["experiment_memory_registry"]["auto_retest_blocked_count"] == 1
     assert review["validation_charter_review"]["formal_revision_recommended"] is True

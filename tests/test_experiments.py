@@ -79,6 +79,7 @@ from yenibot.experiments import (
     write_experiment_diagnostics,
 )
 from yenibot.features import build_feature_matrix, filter_feature_columns, resolve_feature_profile
+from yenibot.experiment.seed_reproducibility import _write_seed_reproducibility_files
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -4689,6 +4690,7 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert "seeded/seed_stability.csv" in names
     assert "seeded/seed_ensemble.csv" in names
     assert "seeded/seed_reproducibility_audit.csv" in names
+    assert "seeded/seed_reproducibility_manifest_diff.csv" in names
     assert "seeded/experiment_memory_registry.csv" in names
 
 
@@ -4738,6 +4740,35 @@ def test_seed_audit_coverage_reports_missing_and_invalid_folds() -> None:
     assert coverage.loc[0, "observed_fold_count"] == 2
     assert bool(coverage.loc[0, "coverage_passed"]) is False
     assert coverage.loc[0, "status"] == "invalid_configured_fold_ids"
+
+
+def test_seed_reproducibility_writer_requires_same_seed_row(tmp_path) -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "profile": "control",
+                "source_fold_scope": "full",
+                "audit_fold_scope": "seed_audit_seed_043",
+                "audit_seed": 43,
+                "expected_source_seed": 42,
+                "comparison_role": "independent_seed",
+                "manifest_available": True,
+                "frame_fingerprint_match": True,
+                "overlap_input_fingerprint_match": True,
+                "feature_columns_hash_match": True,
+                "training_config_hash_match": True,
+                "manifest_compatible": True,
+                "reproducibility_status": "independent_seed_reference",
+            }
+        ]
+    )
+
+    _write_seed_reproducibility_files(tmp_path, frame)
+
+    audit_payload = json.loads((tmp_path / "seed_reproducibility_audit.json").read_text())
+    manifest_diff = pd.read_csv(tmp_path / "seed_reproducibility_manifest_diff.csv")
+    assert audit_payload["same_seed_reproduced"] is False
+    assert bool(manifest_diff.loc[0, "same_seed_reproducibility_interpretable"]) is False
 
 
 def test_disabled_seed_audit_is_reported_as_not_evaluated() -> None:
