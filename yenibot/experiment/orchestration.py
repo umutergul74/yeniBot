@@ -33,7 +33,9 @@ from yenibot.experiment.common import (
 from yenibot.experiment.configuration import (
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
+    _attach_resolved_seed_audit_folds,
     _diagnostics_signature,
+    _diagnostic_seed_audit_settings,
     _diagnostic_config_for_run,
     _experiment_signature,
     _load_training_execution_summary,
@@ -101,14 +103,8 @@ from yenibot.experiment.evidence import (
 from yenibot.experiment.dashboard import attach_active_charter_status, write_model_performance_dashboard
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
-from yenibot.experiment.oos_preflight import (
-    future_oos_preflight,
-    future_oos_preflight_markdown,
-)
-from yenibot.experiment.folds import (
-    _fold_stability_forensics_frame,
-    _fold_stability_summary_frame,
-)
+from yenibot.experiment.oos_preflight import future_oos_preflight, future_oos_preflight_markdown
+from yenibot.experiment.folds import _fold_stability_forensics_frame, _fold_stability_summary_frame
 from yenibot.experiment.holdout import (
     _aggregate_holdout_predictions,
     _attach_holdout_cv_threshold_metrics,
@@ -463,6 +459,11 @@ def run_experiment_matrix(
     settings = _preflight_experiment_profiles(settings, frame, config)
     settings = _apply_experiment_policy_guard(settings, config)
     available_fold_ids = _preflight_fold_plans(frame, settings, config)
+    settings = _attach_resolved_seed_audit_folds(
+        settings,
+        available_fold_ids,
+        fallback_fold_ids=[int(fold_id) for fold_id in settings.get("triage_fold_ids", [])],
+    )
     signature = _experiment_signature(config, settings, frame)
     signature_hash = _hash_payload(signature)
     diagnostics_signature = _diagnostics_signature(config, settings)
@@ -567,8 +568,7 @@ def run_experiment_matrix(
     if bool(seed_audit_cfg.get("enabled", False)):
         audit_profiles = [str(profile) for profile in seed_audit_cfg.get("profiles", []) or [settings["control_profile"]]]
         audit_seeds = [int(seed) for seed in seed_audit_cfg.get("seeds", []) or []]
-        audit_fold_ids = seed_audit_cfg.get("fold_ids", triage_fold_ids)
-        audit_fold_ids = [int(fold_id) for fold_id in audit_fold_ids] if audit_fold_ids else None
+        audit_fold_ids = [int(fold_id) for fold_id in seed_audit_cfg.get("resolved_fold_ids", [])]
         for profile in audit_profiles:
             for seed in audit_seeds:
                 seed_cfg = copy.deepcopy(config)
@@ -929,9 +929,7 @@ def write_experiment_diagnostics(
     settings = _resolve_holdout_settings(settings, config)
     diagnostic_config = _diagnostic_config_for_run(config, settings)
     settings = _apply_experiment_policy_guard(settings, diagnostic_config)
-    settings["seed_audit"] = copy.deepcopy(
-        _cfg(diagnostic_config, ["experiments", "seed_audit"], default={}) or {}
-    )
+    settings = _diagnostic_seed_audit_settings(settings, diagnostic_config)
     scope_dirs = _profile_dirs(run_dir)
     if not scope_dirs:
         root = experiment_root(checkpoint_dir)

@@ -56,6 +56,9 @@ __all__ = [
     '_apply_experiment_policy_guard',
     'experiment_settings',
     '_available_walk_forward_fold_ids',
+    '_resolve_seed_audit_fold_ids',
+    '_attach_resolved_seed_audit_folds',
+    '_diagnostic_seed_audit_settings',
     '_validate_requested_fold_ids',
     '_preflight_fold_plans',
     '_profile_requires_intrahour_features',
@@ -376,6 +379,117 @@ def _available_walk_forward_fold_ids(n_rows: int, config: dict[str, Any]) -> lis
     )
     return [int(fold.fold) for fold in cv.split(int(n_rows))]
 
+def _dedupe_ints(values: list[Any] | tuple[Any, ...]) -> list[int]:
+    return list(dict.fromkeys(int(value) for value in values))
+
+def _evenly_spaced_fold_ids(available_fold_ids: list[int], fold_count: int) -> list[int]:
+    available = sorted(dict.fromkeys(int(fold_id) for fold_id in available_fold_ids))
+    if not available:
+        return []
+    count = max(1, int(fold_count))
+    if len(available) == 1 or count >= len(available):
+        return available
+    if count == 1:
+        return [available[-1]]
+
+    denominator = count - 1
+    last_index = len(available) - 1
+    selected_indices: list[int] = []
+    for position in range(count):
+        index = int(round(position * last_index / denominator))
+        if index not in selected_indices:
+            selected_indices.append(index)
+
+    if len(selected_indices) < count:
+        selected_set = set(selected_indices)
+        for index in range(len(available)):
+            if index not in selected_set:
+                selected_indices.append(index)
+                selected_set.add(index)
+            if len(selected_indices) >= count:
+                break
+
+    return [available[index] for index in sorted(selected_indices[:count])]
+
+def _resolve_seed_audit_fold_ids(
+    seed_cfg: dict[str, Any],
+    available_fold_ids: list[int],
+    *,
+    fallback_fold_ids: list[int] | None = None,
+) -> list[int]:
+    """Resolve seed-audit folds against the current walk-forward universe.
+
+    ``fold_ids: auto`` deliberately re-evaluates the audit folds every run so
+    the seed audit keeps covering the first and latest available folds as data
+    grows. This prevents stale hardcoded fold ids from producing an incomplete
+    temporal-coverage audit after new bars are added.
+    """
+
+    available = sorted(dict.fromkeys(int(fold_id) for fold_id in available_fold_ids))
+    fallback = (
+        sorted(dict.fromkeys(int(fold_id) for fold_id in fallback_fold_ids))
+        if fallback_fold_ids
+        else []
+    )
+    raw = seed_cfg.get("fold_ids", None)
+    auto_values = {"auto", "balanced", "temporal_coverage"}
+    if isinstance(raw, str):
+        raw_text = raw.strip().lower()
+        if raw_text in auto_values:
+            fold_count = int(seed_cfg.get("fold_count", len(fallback) or 8))
+            if bool(seed_cfg.get("include_boundary_folds", True)) and len(available) >= 2:
+                fold_count = max(2, fold_count)
+            return _evenly_spaced_fold_ids(available, fold_count)
+        requested = [part.strip() for part in raw.split(",") if part.strip()]
+        return _dedupe_ints(requested)
+
+    if raw is None:
+        if fallback:
+            return fallback
+        return available
+
+    requested = list(raw)
+    if not requested:
+        if fallback:
+            return fallback
+        return available
+    return _dedupe_ints(requested)
+
+def _attach_resolved_seed_audit_folds(
+    settings: dict[str, Any],
+    available_fold_ids: list[int],
+    *,
+    fallback_fold_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(settings)
+    seed_cfg = updated.get("seed_audit", {}) or {}
+    if not bool(seed_cfg.get("enabled", False)):
+        return updated
+    resolved = _resolve_seed_audit_fold_ids(
+        seed_cfg,
+        available_fold_ids,
+        fallback_fold_ids=fallback_fold_ids,
+    )
+    updated["seed_audit"] = copy.deepcopy(seed_cfg)
+    updated["seed_audit"]["resolved_fold_ids"] = resolved
+    return updated
+
+def _diagnostic_seed_audit_settings(
+    settings: dict[str, Any],
+    diagnostic_config: dict[str, Any],
+) -> dict[str, Any]:
+    updated = copy.deepcopy(settings)
+    run_seed_cfg = settings.get("seed_audit", {}) or {}
+    seed_cfg = copy.deepcopy(
+        _cfg(diagnostic_config, ["experiments", "seed_audit"], default={}) or {}
+    )
+    if run_seed_cfg.get("resolved_fold_ids"):
+        seed_cfg["resolved_fold_ids"] = list(
+            dict.fromkeys(int(fold_id) for fold_id in run_seed_cfg.get("resolved_fold_ids", []))
+        )
+    updated["seed_audit"] = seed_cfg
+    return updated
+
 def _validate_requested_fold_ids(
     *,
     plan_name: str,
@@ -411,7 +525,11 @@ def _preflight_fold_plans(
     )
     seed_cfg = settings.get("seed_audit", {}) or {}
     if bool(seed_cfg.get("enabled", False)):
-        seed_fold_ids = [int(fold_id) for fold_id in seed_cfg.get("fold_ids", [])]
+        seed_fold_ids = _resolve_seed_audit_fold_ids(
+            seed_cfg,
+            available_fold_ids,
+            fallback_fold_ids=triage_fold_ids or None,
+        )
         _validate_requested_fold_ids(
             plan_name="experiments.seed_audit.fold_ids",
             requested_fold_ids=seed_fold_ids or None,

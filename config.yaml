@@ -2299,7 +2299,9 @@ experiments:
     profiles:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     seeds: [42, 43, 44]
-    fold_ids: [0, 5, 10, 15, 20, 25, 30, 35]
+    fold_ids: auto
+    fold_count: 8
+    include_boundary_folds: true
     min_temporal_span_fraction: 0.90
   promotion_gates:
     triage:

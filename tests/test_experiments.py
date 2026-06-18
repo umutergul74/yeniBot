@@ -60,6 +60,7 @@ from yenibot.experiments import (
     _rank_ic_uncertainty_frames,
     _score_separation_forensics_frame,
     _seed_audit_coverage_frame,
+    _resolve_seed_audit_fold_ids,
     _reconcile_seed_extension_summary,
     _seed_reproducibility_audit_frame,
     _training_signature,
@@ -2728,7 +2729,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
-    assert config["experiments"]["seed_audit"]["fold_ids"] == [0, 5, 10, 15, 20, 25, 30, 35]
+    assert config["experiments"]["seed_audit"]["fold_ids"] == "auto"
+    assert config["experiments"]["seed_audit"]["fold_count"] == 8
+    assert config["experiments"]["seed_audit"]["include_boundary_folds"] is True
     assert config["experiments"]["seed_audit"]["min_temporal_span_fraction"] == 0.90
     notes = config["experiments"]["experiment_memory"]["reference_notes"]
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
@@ -4706,6 +4709,62 @@ def test_fold_plan_validation_rejects_unavailable_ids() -> None:
             requested_fold_ids=[0, 5, 9],
             available_fold_ids=[0, 1, 2, 3, 4, 5],
         )
+
+
+def test_seed_audit_auto_fold_ids_cover_current_boundaries() -> None:
+    available = list(range(37))
+    resolved = _resolve_seed_audit_fold_ids(
+        {
+            "fold_ids": "auto",
+            "fold_count": 8,
+            "include_boundary_folds": True,
+        },
+        available,
+    )
+
+    assert len(resolved) == 8
+    assert resolved[0] == 0
+    assert resolved[-1] == 36
+    assert resolved == sorted(set(resolved))
+
+
+def test_seed_audit_coverage_auto_fold_ids_pass_when_boundaries_observed() -> None:
+    available = list(range(37))
+    resolved = _resolve_seed_audit_fold_ids(
+        {"fold_ids": "auto", "fold_count": 8, "include_boundary_folds": True},
+        available,
+    )
+    entries = [
+        {
+            "profile": "control",
+            "fold_scope": "full",
+            "predictions": pd.DataFrame({"fold": available}),
+        },
+        {
+            "profile": "control",
+            "fold_scope": "seed_audit_seed_042",
+            "predictions": pd.DataFrame({"fold": resolved}),
+        },
+    ]
+    settings = {
+        "control_profile": "control",
+        "seed_audit": {
+            "enabled": True,
+            "profiles": ["control"],
+            "seeds": [42],
+            "fold_ids": "auto",
+            "fold_count": 8,
+            "include_boundary_folds": True,
+            "min_temporal_span_fraction": 0.9,
+        },
+    }
+
+    coverage = _seed_audit_coverage_frame(entries, settings, available_fold_ids=available)
+
+    assert bool(coverage.loc[0, "coverage_passed"]) is True
+    assert coverage.loc[0, "status"] == "passed"
+    assert coverage.loc[0, "configured_fold_ids"].split(",")[0] == "0"
+    assert coverage.loc[0, "configured_fold_ids"].split(",")[-1] == "36"
 
 
 def test_seed_audit_coverage_reports_missing_and_invalid_folds() -> None:

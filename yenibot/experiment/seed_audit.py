@@ -12,6 +12,7 @@ import pandas as pd
 from yenibot.experiment.common import _set_cfg, _write_json
 from yenibot.experiment.configuration import (
     _preflight_fold_plans,
+    _resolve_seed_audit_fold_ids,
     experiment_root,
     experiment_settings,
 )
@@ -72,7 +73,13 @@ def run_seed_audit_extension(
             )
 
     available_fold_ids = _preflight_fold_plans(frame, settings, config)
-    fold_ids = [int(fold_id) for fold_id in seed_cfg.get("fold_ids", [])]
+    fold_ids = _resolve_seed_audit_fold_ids(
+        seed_cfg,
+        available_fold_ids,
+        fallback_fold_ids=[int(fold_id) for fold_id in settings.get("triage_fold_ids", [])],
+    )
+    settings["seed_audit"] = copy.deepcopy(seed_cfg)
+    settings["seed_audit"]["resolved_fold_ids"] = fold_ids
     seeds = [int(seed) for seed in seed_cfg.get("seeds", [])]
     if not seeds:
         raise ValueError("Seed-audit extension requires at least one configured seed")

@@ -18,6 +18,7 @@ from yenibot.experiment.common import (
     _slug,
     _write_json,
 )
+from yenibot.experiment.configuration import _resolve_seed_audit_fold_ids
 
 from yenibot.experiment.training import (
     summarize_profile_predictions,
@@ -272,9 +273,10 @@ def _seed_audit_coverage_frame(
                     for value in pd.to_numeric(predictions["fold"], errors="coerce").dropna().unique()
                 )
         available = sorted(observed_universe)
-    configured = list(
-        dict.fromkeys(int(fold_id) for fold_id in seed_cfg.get("fold_ids", []) or available)
-    )
+    if seed_cfg.get("resolved_fold_ids"):
+        configured = list(dict.fromkeys(int(fold_id) for fold_id in seed_cfg.get("resolved_fold_ids", [])))
+    else:
+        configured = _resolve_seed_audit_fold_ids(seed_cfg, available)
     available_set = set(available)
     valid = [fold_id for fold_id in configured if fold_id in available_set]
     invalid = [fold_id for fold_id in configured if fold_id not in available_set]
