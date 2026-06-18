@@ -349,6 +349,7 @@ When mean IC and positive-fold rate are strong but Phase 2 still fails, focus in
 8. Seed robustness: `seed_audit_coverage.csv` must prove that every configured seed fold exists, completed, and spans the available walk-forward history. Never silently ignore unavailable fold ids.
    - Before interpreting multi-seed dispersion, compare the source full run with the audit run that uses the same base seed in `seed_reproducibility_audit.csv`.
    - Use `seed_reproducibility_manifest_diff.csv` to separate global frame-hash drift from the overlapping fold rows actually compared by the same-seed audit.
+   - If global frame hashes differ but `overlap_input_status == keys_labels_returns_match`, treat the comparison as input-compatible; any same-seed prediction drift is a runtime/reproducibility issue, not a data-mismatch issue.
    - A same-seed mismatch with compatible frame, feature, and training-config hashes is a reproducibility/runtime issue, not evidence of initialization sensitivity.
    - Independent-seed rows may measure robustness only after the same-seed control is classified.
    - `experiment_memory_registry.csv` must expose rejected profiles and whether automatic retest is blocked; never rely on memory hidden only inside `config.yaml`.

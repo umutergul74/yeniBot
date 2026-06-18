@@ -100,22 +100,46 @@ def _input_fingerprint(
     return_column: str | None,
     suffix: str,
 ) -> str:
-    columns = [column for column in keys if column in frame.columns]
+    selected = pd.DataFrame(index=frame.index)
+    for column in keys:
+        if column in frame.columns:
+            selected[column] = frame[column]
     for base in ("label", return_column):
         if not base:
             continue
         column = f"{base}_{suffix}"
-        if column in frame.columns and column not in columns:
-            columns.append(column)
-    if not columns:
+        if column in frame.columns:
+            selected[str(base)] = frame[column]
+    if selected.empty:
         return ""
-    selected = frame[columns].copy()
     sort_columns = [column for column in keys if column in selected.columns]
     if sort_columns:
         selected = selected.sort_values(sort_columns).reset_index(drop=True)
     if "timestamp" in selected.columns:
         selected["timestamp"] = pd.to_datetime(selected["timestamp"], utc=True).astype(str)
     return _hash_payload(selected.to_dict(orient="list"))
+
+
+def _overlap_input_status(
+    *,
+    aligned_rows: int,
+    source_only_rows: int,
+    audit_only_rows: int,
+    label_match_fraction: float,
+    return_match_fraction: float,
+    fingerprint_match: bool,
+) -> str:
+    if aligned_rows <= 0:
+        return "no_aligned_prediction_rows"
+    if source_only_rows or audit_only_rows:
+        return "prediction_key_set_mismatch"
+    if not np.isfinite(label_match_fraction) or label_match_fraction < 1.0:
+        return "label_mismatch_on_aligned_rows"
+    if np.isfinite(return_match_fraction) and return_match_fraction < 1.0:
+        return "return_mismatch_on_aligned_rows"
+    if fingerprint_match:
+        return "keys_labels_returns_match"
+    return "fingerprint_mismatch_after_value_checks"
 
 
 def _comparison_status(
@@ -188,9 +212,12 @@ def _seed_reproducibility_audit_frame(
         "manifest_available",
         "frame_fingerprint_match",
         "overlap_input_fingerprint_match",
+        "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
         "manifest_compatible",
+        "source_overlap_input_fingerprint",
+        "audit_overlap_input_fingerprint",
         "source_frame_fingerprint",
         "audit_frame_fingerprint",
         "source_data_start",
@@ -267,6 +294,8 @@ def _seed_reproducibility_audit_frame(
         else:
             merged = pd.DataFrame()
         aligned = merged.loc[merged.get("_merge", pd.Series(dtype=str)).eq("both")].copy()
+        source_only_rows = int(merged["_merge"].eq("left_only").sum()) if not merged.empty else 0
+        audit_only_rows = int(merged["_merge"].eq("right_only").sum()) if not merged.empty else 0
         source_input_fingerprint = _input_fingerprint(
             aligned,
             keys=keys,
@@ -282,6 +311,27 @@ def _seed_reproducibility_audit_frame(
         overlap_input_match = bool(
             source_input_fingerprint
             and source_input_fingerprint == audit_input_fingerprint
+        )
+        label_match_fraction = _match_fraction(
+            aligned.get("label_source", pd.Series(dtype=float)),
+            aligned.get("label_audit", pd.Series(dtype=float)),
+        )
+        return_match_fraction = (
+            _match_fraction(
+                aligned.get(f"{return_column}_source", pd.Series(dtype=float)),
+                aligned.get(f"{return_column}_audit", pd.Series(dtype=float)),
+                numeric=True,
+            )
+            if return_column
+            else np.nan
+        )
+        overlap_status = _overlap_input_status(
+            aligned_rows=len(aligned),
+            source_only_rows=source_only_rows,
+            audit_only_rows=audit_only_rows,
+            label_match_fraction=label_match_fraction,
+            return_match_fraction=return_match_fraction,
+            fingerprint_match=overlap_input_match,
         )
         source_scores = pd.to_numeric(aligned.get("prob_long_source"), errors="coerce")
         audit_scores = pd.to_numeric(aligned.get("prob_long_audit"), errors="coerce")
@@ -352,6 +402,7 @@ def _seed_reproducibility_audit_frame(
                 "manifest_available": bool(source_manifest and audit_manifest),
                 "frame_fingerprint_match": frame_match,
                 "overlap_input_fingerprint_match": overlap_input_match,
+                "overlap_input_status": overlap_status,
                 "feature_columns_hash_match": feature_match,
                 "training_config_hash_match": config_match,
                 "manifest_compatible": bool(
@@ -359,6 +410,8 @@ def _seed_reproducibility_audit_frame(
                     and (frame_match or overlap_input_match)
                     and (config_match or not same_seed)
                 ),
+                "source_overlap_input_fingerprint": source_input_fingerprint,
+                "audit_overlap_input_fingerprint": audit_input_fingerprint,
                 "source_frame_fingerprint": str(source_manifest.get("frame_fingerprint", "")),
                 "audit_frame_fingerprint": str(audit_manifest.get("frame_fingerprint", "")),
                 "source_data_start": str(source_manifest.get("data_start", "")),
@@ -370,19 +423,10 @@ def _seed_reproducibility_audit_frame(
                 "overlap_fold_count": len(overlap_folds),
                 "overlap_fold_ids": ",".join(str(value) for value in overlap_folds),
                 "aligned_prediction_rows": len(aligned),
-                "source_only_rows": int(merged["_merge"].eq("left_only").sum()) if not merged.empty else 0,
-                "audit_only_rows": int(merged["_merge"].eq("right_only").sum()) if not merged.empty else 0,
-                "label_match_fraction": _match_fraction(
-                    aligned.get("label_source", pd.Series(dtype=float)),
-                    aligned.get("label_audit", pd.Series(dtype=float)),
-                ),
-                "return_match_fraction": _match_fraction(
-                    aligned.get(f"{return_column}_source", pd.Series(dtype=float)),
-                    aligned.get(f"{return_column}_audit", pd.Series(dtype=float)),
-                    numeric=True,
-                )
-                if return_column
-                else np.nan,
+                "source_only_rows": source_only_rows,
+                "audit_only_rows": audit_only_rows,
+                "label_match_fraction": label_match_fraction,
+                "return_match_fraction": return_match_fraction,
                 "probability_pearson": probability_pearson,
                 "probability_spearman": probability_spearman,
                 "probability_mae": float(differences.mean()) if len(differences) else np.nan,
@@ -417,6 +461,7 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
         "comparison_role",
         "frame_fingerprint_match",
         "overlap_input_fingerprint_match",
+        "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
         "manifest_compatible",
@@ -426,8 +471,22 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
         "source_data_end",
         "audit_data_start",
         "audit_data_end",
+        "overlap_fold_count",
+        "overlap_fold_ids",
+        "aligned_prediction_rows",
+        "source_only_rows",
+        "audit_only_rows",
+        "label_match_fraction",
+        "return_match_fraction",
+        "probability_spearman",
+        "probability_allclose_fraction",
+        "mean_rank_ic_delta",
+        "fold_rank_ic_sign_agreement",
+        "reproducibility_status",
         "source_frame_fingerprint",
         "audit_frame_fingerprint",
+        "source_overlap_input_fingerprint",
+        "audit_overlap_input_fingerprint",
         "source_signature_hash",
         "audit_signature_hash",
         "likely_cause",
@@ -459,6 +518,7 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
                 "comparison_role": row.get("comparison_role", ""),
                 "frame_fingerprint_match": row.get("frame_fingerprint_match", False),
                 "overlap_input_fingerprint_match": row.get("overlap_input_fingerprint_match", False),
+                "overlap_input_status": row.get("overlap_input_status", ""),
                 "feature_columns_hash_match": row.get("feature_columns_hash_match", False),
                 "training_config_hash_match": row.get("training_config_hash_match", False),
                 "manifest_compatible": row.get("manifest_compatible", False),
@@ -468,8 +528,22 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
                 "source_data_end": row.get("source_data_end", ""),
                 "audit_data_start": row.get("audit_data_start", ""),
                 "audit_data_end": row.get("audit_data_end", ""),
+                "overlap_fold_count": row.get("overlap_fold_count", ""),
+                "overlap_fold_ids": row.get("overlap_fold_ids", ""),
+                "aligned_prediction_rows": row.get("aligned_prediction_rows", ""),
+                "source_only_rows": row.get("source_only_rows", ""),
+                "audit_only_rows": row.get("audit_only_rows", ""),
+                "label_match_fraction": row.get("label_match_fraction", ""),
+                "return_match_fraction": row.get("return_match_fraction", ""),
+                "probability_spearman": row.get("probability_spearman", ""),
+                "probability_allclose_fraction": row.get("probability_allclose_fraction", ""),
+                "mean_rank_ic_delta": row.get("mean_rank_ic_delta", ""),
+                "fold_rank_ic_sign_agreement": row.get("fold_rank_ic_sign_agreement", ""),
+                "reproducibility_status": row.get("reproducibility_status", ""),
                 "source_frame_fingerprint": row.get("source_frame_fingerprint", ""),
                 "audit_frame_fingerprint": row.get("audit_frame_fingerprint", ""),
+                "source_overlap_input_fingerprint": row.get("source_overlap_input_fingerprint", ""),
+                "audit_overlap_input_fingerprint": row.get("audit_overlap_input_fingerprint", ""),
                 "source_signature_hash": row.get("source_signature_hash", ""),
                 "audit_signature_hash": row.get("audit_signature_hash", ""),
                 "likely_cause": row.get("likely_cause", ""),
@@ -548,10 +622,17 @@ def _seed_reproducibility_manifest_diff_markdown(frame: pd.DataFrame) -> str:
         "comparison_role",
         "frame_fingerprint_match",
         "overlap_input_fingerprint_match",
+        "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
         "same_seed_reproducibility_interpretable",
         "global_frame_mismatch_but_overlap_inputs_match",
+        "aligned_prediction_rows",
+        "label_match_fraction",
+        "return_match_fraction",
+        "probability_spearman",
+        "mean_rank_ic_delta",
+        "reproducibility_status",
         "likely_cause",
     ]
     visible = frame[[column for column in visible_columns if column in frame.columns]]

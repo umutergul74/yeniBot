@@ -1315,6 +1315,17 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "seed_reproducibility_manifest_diff": {
             "available": not seed_reproducibility_manifest_diff.empty,
             "rows": _records(seed_reproducibility_manifest_diff),
+            "same_seed_rows": _records(seed_manifest_same_seed),
+            "same_seed_overlap_input_statuses": (
+                sorted(set(seed_manifest_same_seed["overlap_input_status"].astype(str)))
+                if not seed_manifest_same_seed.empty and "overlap_input_status" in seed_manifest_same_seed.columns
+                else []
+            ),
+            "same_seed_global_frame_mismatch_overlap_match": bool(
+                not seed_manifest_same_seed.empty
+                and "global_frame_mismatch_but_overlap_inputs_match" in seed_manifest_same_seed.columns
+                and seed_manifest_same_seed["global_frame_mismatch_but_overlap_inputs_match"].map(_to_bool).any()
+            ),
             "same_seed_interpretable": bool(
                 not seed_reproducibility_manifest_diff.empty
                 and not seed_manifest_same_seed.empty
@@ -1608,6 +1619,10 @@ def auto_review_markdown(review: dict[str, Any]) -> str:
         f"`{seed_repro.get('same_seed_reproducible', False)}`",
         f"- Same-seed input comparison interpretable: "
         f"`{seed_diff.get('same_seed_interpretable', False)}`",
+        f"- Same-seed overlap input statuses: "
+        f"`{seed_diff.get('same_seed_overlap_input_statuses', [])}`",
+        f"- Same-seed global frame drift with matching overlap inputs: "
+        f"`{seed_diff.get('same_seed_global_frame_mismatch_overlap_match', False)}`",
         f"- Rejected experiment-memory entries: "
         f"`{memory_registry.get('rejected_count', 0)}` "
         f"(auto-retest blocked: `{memory_registry.get('auto_retest_blocked_count', 0)}`)",

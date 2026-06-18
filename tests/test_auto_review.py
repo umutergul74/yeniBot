@@ -335,11 +335,22 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
                 "comparison_role": "same_seed_reproduction",
                 "frame_fingerprint_match": True,
                 "overlap_input_fingerprint_match": True,
+                "overlap_input_status": "keys_labels_returns_match",
                 "feature_columns_hash_match": True,
                 "training_config_hash_match": True,
                 "manifest_compatible": True,
                 "global_frame_mismatch_but_overlap_inputs_match": False,
                 "same_seed_reproducibility_interpretable": True,
+                "aligned_prediction_rows": 100,
+                "source_only_rows": 0,
+                "audit_only_rows": 0,
+                "label_match_fraction": 1.0,
+                "return_match_fraction": 1.0,
+                "probability_spearman": 0.9999,
+                "probability_allclose_fraction": 0.99,
+                "mean_rank_ic_delta": 0.0001,
+                "fold_rank_ic_sign_agreement": 1.0,
+                "reproducibility_status": "same_seed_ranking_reproduced_with_numeric_drift",
                 "likely_cause": "minor_numeric_runtime_drift",
                 "recommended_action": "record_runtime_versions",
             }
@@ -587,6 +598,13 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
         == "same_seed_ranking_reproduced_with_numeric_drift"
     )
     assert review["seed_reproducibility_manifest_diff"]["same_seed_interpretable"] is True
+    assert review["seed_reproducibility_manifest_diff"]["same_seed_overlap_input_statuses"] == [
+        "keys_labels_returns_match"
+    ]
+    assert (
+        review["seed_reproducibility_manifest_diff"]["same_seed_global_frame_mismatch_overlap_match"]
+        is False
+    )
     assert review["experiment_memory_registry"]["rejected_count"] == 1
     assert review["experiment_memory_registry"]["auto_retest_blocked_count"] == 1
     assert review["validation_charter_review"]["formal_revision_recommended"] is True

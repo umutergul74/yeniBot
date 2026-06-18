@@ -79,7 +79,10 @@ from yenibot.experiments import (
     write_experiment_diagnostics,
 )
 from yenibot.features import build_feature_matrix, filter_feature_columns, resolve_feature_profile
-from yenibot.experiment.seed_reproducibility import _write_seed_reproducibility_files
+from yenibot.experiment.seed_reproducibility import (
+    _seed_reproducibility_manifest_diff_frame,
+    _write_seed_reproducibility_files,
+)
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -4850,6 +4853,71 @@ def test_seed_reproducibility_audit_distinguishes_same_and_independent_seeds(
     assert float(same_seed["probability_allclose_fraction"]) == pytest.approx(1.0)
     assert independent["reproducibility_status"] == "independent_seed_reference"
     assert independent["comparison_role"] == "independent_seed"
+
+
+def test_seed_reproducibility_allows_global_frame_drift_when_overlap_inputs_match(
+    tmp_path,
+) -> None:
+    profile = "control"
+    timestamps = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+    predictions = pd.DataFrame(
+        {
+            "fold": [0, 0, 0, 1, 1, 1],
+            "split": ["test"] * 6,
+            "timestamp": timestamps,
+            "source_row_position": [10, 11, 12, 20, 21, 22],
+            "label": [0, 1, 0, 1, 0, 1],
+            "fwd_return_10h": [-0.01, 0.02, -0.03, 0.04, -0.02, 0.03],
+            "prob_long": [0.1, 0.8, 0.2, 0.9, 0.3, 0.7],
+        }
+    )
+    entries = []
+    for scope, frame_hash, data_end in (
+        ("full", "source-frame", "2024-02-01T00:00:00+00:00"),
+        ("seed_audit_seed_042", "audit-frame-extended", "2024-03-01T00:00:00+00:00"),
+    ):
+        scope_dir = tmp_path / profile / scope
+        scope_dir.mkdir(parents=True)
+        manifest = {
+            "profile": profile,
+            "fold_scope": scope,
+            "frame_fingerprint": frame_hash,
+            "feature_columns_hash": "same-features",
+            "training_config_hash": "same-training-config",
+            "data_start": "2024-01-01T00:00:00+00:00",
+            "data_end": data_end,
+        }
+        (scope_dir / "training_manifest.json").write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+        entries.append(
+            {
+                "scope_dir": scope_dir,
+                "profile": profile,
+                "fold_scope": scope,
+                "predictions": predictions.copy(),
+            }
+        )
+
+    audit = _seed_reproducibility_audit_frame(
+        entries,
+        {"control_profile": profile},
+        {"project": {"random_seed": 42}},
+    )
+    manifest_diff = _seed_reproducibility_manifest_diff_frame(audit)
+
+    row = audit.iloc[0]
+    diff_row = manifest_diff.iloc[0]
+    assert bool(row["frame_fingerprint_match"]) is False
+    assert bool(row["overlap_input_fingerprint_match"]) is True
+    assert row["overlap_input_status"] == "keys_labels_returns_match"
+    assert bool(row["manifest_compatible"]) is True
+    assert row["reproducibility_status"] == "same_seed_reproduced"
+    assert bool(diff_row["global_frame_mismatch_but_overlap_inputs_match"]) is True
+    assert bool(diff_row["same_seed_reproducibility_interpretable"]) is True
+    assert float(diff_row["label_match_fraction"]) == pytest.approx(1.0)
+    assert float(diff_row["return_match_fraction"]) == pytest.approx(1.0)
 
 
 def test_seed_extension_summary_is_reconciled_from_persisted_coverage() -> None:
