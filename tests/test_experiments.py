@@ -2722,8 +2722,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "pre_holdout_recent",
     ]
     assert config["experiments"]["seed_audit"]["enabled"] is True
-    assert config["experiments"]["seed_audit"]["mode"] == "extend_existing_run"
-    assert config["experiments"]["seed_audit"]["source_run_id"] == "20260614_054446"
+    assert config["experiments"]["seed_audit"]["mode"] == "in_run"
+    assert config["experiments"]["seed_audit"]["source_run_id"] is None
     assert config["experiments"]["seed_audit"]["profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
@@ -4988,7 +4988,7 @@ def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
                 "candidates": [],
             },
             "future_oos_validation": {"enabled": False},
-            "next_research_cycle": {"status": "seed_audit_complete_reproducibility_review"},
+            "next_research_cycle": {"status": "current_code_reproducibility_retrain"},
             "research_focus": {"status": "mechanism_cycle_completed_no_promotion"},
         }
     }
@@ -5016,7 +5016,7 @@ def test_diagnostics_policy_overrides_retired_run_lifecycle_state() -> None:
     assert experiments["frozen_candidates"]["candidates"] == []
     assert experiments["future_oos_validation"]["enabled"] is False
     assert experiments["next_research_cycle"]["status"] == (
-        "seed_audit_complete_reproducibility_review"
+        "current_code_reproducibility_retrain"
     )
     assert experiments["research_focus"]["status"] == (
         "mechanism_cycle_completed_no_promotion"
