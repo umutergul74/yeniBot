@@ -148,6 +148,9 @@ def _comparison_status(
     frame_match: bool,
     feature_match: bool,
     config_match: bool,
+    code_available: bool,
+    code_match: bool,
+    runtime_available: bool,
     overlap_input_match: bool,
     aligned_rows: int,
     score_spearman: float,
@@ -178,6 +181,12 @@ def _comparison_status(
             "same_seed_but_training_configuration_differs",
             "Compare the training config payloads before attributing the difference to runtime nondeterminism.",
         )
+    if code_available and not code_match:
+        return (
+            "invalid_same_seed_training_code_mismatch",
+            "same_seed_but_training_code_differs",
+            "Do not interpret this as seed sensitivity. Recreate the source full scope and same-seed audit with the same training-code signature.",
+        )
     if score_allclose >= 0.999 and abs(mean_rank_ic_delta) <= 1e-6:
         return (
             "same_seed_reproduced",
@@ -189,6 +198,18 @@ def _comparison_status(
             "same_seed_ranking_reproduced_with_numeric_drift",
             "minor_numeric_runtime_drift",
             "Record runtime versions, but ranking behavior is functionally reproduced.",
+        )
+    if not code_available:
+        return (
+            "same_seed_not_reproduced_code_signature_missing",
+            "unrecorded_training_code_drift_possible",
+            "The overlapping inputs align, but the historical manifests do not include a training-code signature. Retrain the full control and same-seed audit under the current code before interpreting seed or runtime drift.",
+        )
+    if not runtime_available:
+        return (
+            "same_seed_not_reproduced_runtime_signature_missing",
+            "runtime_versions_unrecorded",
+            "The training code matches but runtime metadata is missing. Regenerate the same-seed audit with runtime signatures before attributing the drift.",
         )
     return (
         "same_seed_not_reproduced_environment_audit_required",
@@ -215,6 +236,10 @@ def _seed_reproducibility_audit_frame(
         "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
+        "training_code_hash_match",
+        "training_code_signature_available",
+        "runtime_signature_match",
+        "runtime_signature_available",
         "manifest_compatible",
         "source_overlap_input_fingerprint",
         "audit_overlap_input_fingerprint",
@@ -226,6 +251,10 @@ def _seed_reproducibility_audit_frame(
         "audit_data_end",
         "source_signature_hash",
         "audit_signature_hash",
+        "source_training_code_hash",
+        "audit_training_code_hash",
+        "source_runtime_hash",
+        "audit_runtime_hash",
         "overlap_fold_count",
         "overlap_fold_ids",
         "aligned_prediction_rows",
@@ -377,12 +406,39 @@ def _seed_reproducibility_audit_frame(
             and audit_manifest
             and source_manifest.get("training_config_hash") == audit_manifest.get("training_config_hash")
         )
+        source_code_hash = str(
+            (source_manifest.get("training_code_signature") or {}).get("code_hash", "")
+            if isinstance(source_manifest.get("training_code_signature"), dict)
+            else ""
+        )
+        audit_code_hash = str(
+            (audit_manifest.get("training_code_signature") or {}).get("code_hash", "")
+            if isinstance(audit_manifest.get("training_code_signature"), dict)
+            else ""
+        )
+        code_available = bool(source_code_hash and audit_code_hash)
+        code_match = bool(code_available and source_code_hash == audit_code_hash)
+        source_runtime_hash = str(
+            (source_manifest.get("runtime_signature") or {}).get("runtime_hash", "")
+            if isinstance(source_manifest.get("runtime_signature"), dict)
+            else ""
+        )
+        audit_runtime_hash = str(
+            (audit_manifest.get("runtime_signature") or {}).get("runtime_hash", "")
+            if isinstance(audit_manifest.get("runtime_signature"), dict)
+            else ""
+        )
+        runtime_available = bool(source_runtime_hash and audit_runtime_hash)
+        runtime_match = bool(runtime_available and source_runtime_hash == audit_runtime_hash)
         same_seed = audit_seed == expected_seed
         status, cause, action = _comparison_status(
             same_seed=same_seed,
             frame_match=frame_match,
             feature_match=feature_match,
             config_match=config_match,
+            code_available=code_available,
+            code_match=code_match,
+            runtime_available=runtime_available,
             overlap_input_match=overlap_input_match,
             aligned_rows=len(aligned),
             score_spearman=probability_spearman if np.isfinite(probability_spearman) else -1.0,
@@ -405,10 +461,15 @@ def _seed_reproducibility_audit_frame(
                 "overlap_input_status": overlap_status,
                 "feature_columns_hash_match": feature_match,
                 "training_config_hash_match": config_match,
+                "training_code_hash_match": code_match,
+                "training_code_signature_available": code_available,
+                "runtime_signature_match": runtime_match,
+                "runtime_signature_available": runtime_available,
                 "manifest_compatible": bool(
                     feature_match
                     and (frame_match or overlap_input_match)
                     and (config_match or not same_seed)
+                    and (code_match or not same_seed or not code_available)
                 ),
                 "source_overlap_input_fingerprint": source_input_fingerprint,
                 "audit_overlap_input_fingerprint": audit_input_fingerprint,
@@ -420,6 +481,10 @@ def _seed_reproducibility_audit_frame(
                 "audit_data_end": str(audit_manifest.get("data_end", "")),
                 "source_signature_hash": str(source_manifest.get("signature_hash", "")),
                 "audit_signature_hash": str(audit_manifest.get("signature_hash", "")),
+                "source_training_code_hash": source_code_hash,
+                "audit_training_code_hash": audit_code_hash,
+                "source_runtime_hash": source_runtime_hash,
+                "audit_runtime_hash": audit_runtime_hash,
                 "overlap_fold_count": len(overlap_folds),
                 "overlap_fold_ids": ",".join(str(value) for value in overlap_folds),
                 "aligned_prediction_rows": len(aligned),
@@ -464,6 +529,10 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
         "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
+        "training_code_hash_match",
+        "training_code_signature_available",
+        "runtime_signature_match",
+        "runtime_signature_available",
         "manifest_compatible",
         "global_frame_mismatch_but_overlap_inputs_match",
         "same_seed_reproducibility_interpretable",
@@ -489,6 +558,10 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
         "audit_overlap_input_fingerprint",
         "source_signature_hash",
         "audit_signature_hash",
+        "source_training_code_hash",
+        "audit_training_code_hash",
+        "source_runtime_hash",
+        "audit_runtime_hash",
         "likely_cause",
         "recommended_action",
     ]
@@ -521,6 +594,10 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
                 "overlap_input_status": row.get("overlap_input_status", ""),
                 "feature_columns_hash_match": row.get("feature_columns_hash_match", False),
                 "training_config_hash_match": row.get("training_config_hash_match", False),
+                "training_code_hash_match": row.get("training_code_hash_match", False),
+                "training_code_signature_available": row.get("training_code_signature_available", False),
+                "runtime_signature_match": row.get("runtime_signature_match", False),
+                "runtime_signature_available": row.get("runtime_signature_available", False),
                 "manifest_compatible": row.get("manifest_compatible", False),
                 "global_frame_mismatch_but_overlap_inputs_match": global_mismatch_overlap_match,
                 "same_seed_reproducibility_interpretable": interpretable,
@@ -546,8 +623,74 @@ def _seed_reproducibility_manifest_diff_frame(audit: pd.DataFrame) -> pd.DataFra
                 "audit_overlap_input_fingerprint": row.get("audit_overlap_input_fingerprint", ""),
                 "source_signature_hash": row.get("source_signature_hash", ""),
                 "audit_signature_hash": row.get("audit_signature_hash", ""),
+                "source_training_code_hash": row.get("source_training_code_hash", ""),
+                "audit_training_code_hash": row.get("audit_training_code_hash", ""),
+                "source_runtime_hash": row.get("source_runtime_hash", ""),
+                "audit_runtime_hash": row.get("audit_runtime_hash", ""),
                 "likely_cause": row.get("likely_cause", ""),
                 "recommended_action": row.get("recommended_action", ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _seed_reproducibility_environment_frame(audit: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "profile",
+        "audit_seed",
+        "same_seed_status",
+        "same_seed_reproduced",
+        "input_compatible",
+        "training_code_signature_available",
+        "training_code_hash_match",
+        "runtime_signature_available",
+        "runtime_signature_match",
+        "probability_spearman",
+        "probability_allclose_fraction",
+        "mean_rank_ic_delta",
+        "likely_cause",
+        "recommended_action",
+        "next_step",
+    ]
+    if audit.empty or "comparison_role" not in audit.columns:
+        return pd.DataFrame(columns=columns)
+    pass_statuses = {
+        "same_seed_reproduced",
+        "same_seed_ranking_reproduced_with_numeric_drift",
+    }
+    rows = []
+    same_seed_rows = audit.loc[audit["comparison_role"].astype(str).eq("same_seed_reproduction")]
+    for _, row in same_seed_rows.iterrows():
+        status = str(row.get("reproducibility_status", ""))
+        if status in pass_statuses:
+            next_step = "seed_reproducibility_passed_continue_research_policy"
+        elif status == "same_seed_not_reproduced_code_signature_missing":
+            next_step = "retrain_full_control_and_same_seed_audit_with_current_code_signature"
+        elif status == "invalid_same_seed_training_code_mismatch":
+            next_step = "do_not_compare_across_training_code_hashes"
+        elif status == "same_seed_not_reproduced_runtime_signature_missing":
+            next_step = "regenerate_same_seed_audit_with_runtime_signature"
+        elif status == "same_seed_not_reproduced_environment_audit_required":
+            next_step = "freeze_runtime_versions_then_rerun_same_seed_audit_only"
+        else:
+            next_step = "repair_seed_reproducibility_inputs_before_interpretation"
+        rows.append(
+            {
+                "profile": row.get("profile", ""),
+                "audit_seed": row.get("audit_seed", ""),
+                "same_seed_status": status,
+                "same_seed_reproduced": status in pass_statuses,
+                "input_compatible": bool(row.get("manifest_compatible", False)),
+                "training_code_signature_available": bool(row.get("training_code_signature_available", False)),
+                "training_code_hash_match": bool(row.get("training_code_hash_match", False)),
+                "runtime_signature_available": bool(row.get("runtime_signature_available", False)),
+                "runtime_signature_match": bool(row.get("runtime_signature_match", False)),
+                "probability_spearman": row.get("probability_spearman", ""),
+                "probability_allclose_fraction": row.get("probability_allclose_fraction", ""),
+                "mean_rank_ic_delta": row.get("mean_rank_ic_delta", ""),
+                "likely_cause": row.get("likely_cause", ""),
+                "recommended_action": row.get("recommended_action", ""),
+                "next_step": next_step,
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -625,6 +768,9 @@ def _seed_reproducibility_manifest_diff_markdown(frame: pd.DataFrame) -> str:
         "overlap_input_status",
         "feature_columns_hash_match",
         "training_config_hash_match",
+        "training_code_hash_match",
+        "training_code_signature_available",
+        "runtime_signature_available",
         "same_seed_reproducibility_interpretable",
         "global_frame_mismatch_but_overlap_inputs_match",
         "aligned_prediction_rows",
@@ -643,9 +789,41 @@ def _seed_reproducibility_manifest_diff_markdown(frame: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _seed_reproducibility_environment_markdown(frame: pd.DataFrame) -> str:
+    lines = [
+        "# Seed Reproducibility Environment Audit",
+        "",
+        "This report is the short operational diagnosis for same-seed retrain drift.",
+        "",
+    ]
+    if frame.empty:
+        lines.append("No same-seed reproducibility row was available.")
+        return "\n".join(lines)
+    visible_columns = [
+        "profile",
+        "audit_seed",
+        "same_seed_status",
+        "input_compatible",
+        "training_code_signature_available",
+        "training_code_hash_match",
+        "runtime_signature_available",
+        "runtime_signature_match",
+        "probability_spearman",
+        "mean_rank_ic_delta",
+        "next_step",
+    ]
+    visible = frame[[column for column in visible_columns if column in frame.columns]]
+    lines.append("| " + " | ".join(visible.columns) + " |")
+    lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
+    for _, row in visible.iterrows():
+        lines.append("| " + " | ".join(str(row[column]) for column in visible.columns) + " |")
+    return "\n".join(lines)
+
+
 def _write_seed_reproducibility_files(path: Path, frame: pd.DataFrame) -> None:
     path.mkdir(parents=True, exist_ok=True)
     manifest_diff = _seed_reproducibility_manifest_diff_frame(frame)
+    environment = _seed_reproducibility_environment_frame(frame)
     same_seed_rows = (
         frame.loc[frame["comparison_role"].eq("same_seed_reproduction")]
         if not frame.empty and "comparison_role" in frame.columns
@@ -653,12 +831,17 @@ def _write_seed_reproducibility_files(path: Path, frame: pd.DataFrame) -> None:
     )
     frame.to_csv(path / "seed_reproducibility_audit.csv", index=False)
     manifest_diff.to_csv(path / "seed_reproducibility_manifest_diff.csv", index=False)
+    environment.to_csv(path / "seed_reproducibility_environment_audit.csv", index=False)
     (path / "seed_reproducibility_audit.md").write_text(
         _seed_reproducibility_markdown(frame),
         encoding="utf-8",
     )
     (path / "seed_reproducibility_manifest_diff.md").write_text(
         _seed_reproducibility_manifest_diff_markdown(manifest_diff),
+        encoding="utf-8",
+    )
+    (path / "seed_reproducibility_environment_audit.md").write_text(
+        _seed_reproducibility_environment_markdown(environment),
         encoding="utf-8",
     )
     _write_json(
@@ -679,4 +862,8 @@ def _write_seed_reproducibility_files(path: Path, frame: pd.DataFrame) -> None:
     _write_json(
         path / "seed_reproducibility_manifest_diff.json",
         {"rows": _json_ready(manifest_diff.to_dict(orient="records"))},
+    )
+    _write_json(
+        path / "seed_reproducibility_environment_audit.json",
+        {"rows": _json_ready(environment.to_dict(orient="records"))},
     )

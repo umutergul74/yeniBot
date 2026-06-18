@@ -198,6 +198,7 @@ def _missing_required_files(
         "seed_audit_coverage.csv",
         "seed_reproducibility_audit.csv",
         "seed_reproducibility_manifest_diff.csv",
+        "seed_reproducibility_environment_audit.csv",
         "validation_charter_review.csv",
         "validation_charter_proposal.csv",
         "validation_charter_status.json",
@@ -470,6 +471,35 @@ def _seed_reproducibility_summary(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _seed_reproducibility_environment_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {"available": False, "rows": [], "next_steps": []}
+    next_steps = (
+        sorted(set(frame["next_step"].astype(str)))
+        if "next_step" in frame.columns
+        else []
+    )
+    same_seed_statuses = (
+        sorted(set(frame["same_seed_status"].astype(str)))
+        if "same_seed_status" in frame.columns
+        else []
+    )
+    return {
+        "available": True,
+        "rows": _records(frame),
+        "next_steps": next_steps,
+        "same_seed_statuses": same_seed_statuses,
+        "training_code_signature_available": bool(
+            "training_code_signature_available" in frame.columns
+            and frame["training_code_signature_available"].map(_to_bool).all()
+        ),
+        "runtime_signature_available": bool(
+            "runtime_signature_available" in frame.columns
+            and frame["runtime_signature_available"].map(_to_bool).all()
+        ),
+    }
+
+
 def _experiment_memory_registry_summary(frame: pd.DataFrame) -> dict[str, Any]:
     if frame.empty:
         return {"available": False, "rejected_count": 0, "allow_retest_count": 0, "rows": []}
@@ -512,6 +542,19 @@ def _next_action(
         return "rerun_training_with_holdout_split", reasons
     seed_repro = seed_reproducibility or {}
     if seed_repro.get("available") and seed_repro.get("environment_audit_required"):
+        status = str(seed_repro.get("same_seed_status", ""))
+        if "code_signature_missing" in status:
+            reasons.append("seed_reproducibility_training_code_signature_missing")
+            return "retrain_control_and_same_seed_audit_with_current_code_signature", reasons
+        if "training_code_mismatch" in status:
+            reasons.append("seed_reproducibility_training_code_mismatch")
+            return "repair_training_code_signature_mismatch", reasons
+        if "runtime_signature_missing" in status:
+            reasons.append("seed_reproducibility_runtime_signature_missing")
+            return "rerun_same_seed_audit_with_runtime_signature", reasons
+        if "environment_audit_required" in status:
+            reasons.append("seed_reproducibility_same_seed_not_reproduced")
+            return "freeze_runtime_and_rerun_same_seed_audit_only", reasons
         reasons.append("seed_reproducibility_same_seed_not_classified")
         return "run_05_seed_reproducibility_review_before_new_candidate", reasons
     window_data_ready = bool(policy.get("future_oos_ready", False))
@@ -576,6 +619,16 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     future_evaluated = bool(future_oos.get("evaluation_completed", False))
     future_passed = future_oos.get("primary_candidate_passed") is True
+    seed_status = str(seed_reproducibility.get("same_seed_status", ""))
+    seed_blocker = "seed_reproducibility_unclassified"
+    if "code_signature_missing" in seed_status:
+        seed_blocker = "seed_reproducibility_training_code_signature_missing"
+    elif "training_code_mismatch" in seed_status:
+        seed_blocker = "seed_reproducibility_training_code_mismatch"
+    elif "runtime_signature_missing" in seed_status:
+        seed_blocker = "seed_reproducibility_runtime_signature_missing"
+    elif "environment_audit_required" in seed_status:
+        seed_blocker = "seed_reproducibility_same_seed_not_reproduced"
     official_long_f1, official_long_f1_source, official_long_f1_details = _official_long_f1(control)
     active_charter = str(charter.get("active_version") or "v3_legacy")
     advisories: list[str] = []
@@ -753,7 +806,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
             "passed": bool(seed_reproducibility.get("same_seed_reproducible", False)),
             "value": seed_reproducibility.get("same_seed_status", ""),
             "target": "same_seed_reproduced or same_seed_ranking_reproduced_with_numeric_drift",
-            "blocker": "seed_reproducibility_unclassified",
+            "blocker": seed_blocker,
         },
         {
             "check": "future_unseen_oos_ready",
@@ -1062,6 +1115,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     seed_audit_coverage = _read_csv(report_path / "seed_audit_coverage.csv")
     seed_reproducibility_audit = _read_csv(report_path / "seed_reproducibility_audit.csv")
     seed_reproducibility_manifest_diff = _read_csv(report_path / "seed_reproducibility_manifest_diff.csv")
+    seed_reproducibility_environment = _read_csv(report_path / "seed_reproducibility_environment_audit.csv")
     seed_manifest_same_seed = (
         seed_reproducibility_manifest_diff.loc[
             seed_reproducibility_manifest_diff["comparison_role"].astype(str).eq("same_seed_reproduction")
@@ -1183,6 +1237,9 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         and seed_audit_coverage["coverage_passed"].map(_to_bool).all()
     )
     seed_reproducibility = _seed_reproducibility_summary(seed_reproducibility_audit)
+    seed_reproducibility_environment_summary = _seed_reproducibility_environment_summary(
+        seed_reproducibility_environment
+    )
     memory_registry = _experiment_memory_registry_summary(experiment_memory_registry)
     action, reasons = _next_action(
         missing_files=missing_files,
@@ -1312,6 +1369,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
             ),
         },
         "seed_reproducibility_audit": seed_reproducibility,
+        "seed_reproducibility_environment_audit": seed_reproducibility_environment_summary,
         "seed_reproducibility_manifest_diff": {
             "available": not seed_reproducibility_manifest_diff.empty,
             "rows": _records(seed_reproducibility_manifest_diff),

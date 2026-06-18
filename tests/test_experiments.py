@@ -62,6 +62,7 @@ from yenibot.experiments import (
     _seed_audit_coverage_frame,
     _reconcile_seed_extension_summary,
     _seed_reproducibility_audit_frame,
+    _training_signature,
     _threshold_oracle_gap_frame,
     _threshold_forensics_frame,
     _threshold_policy_review_frame,
@@ -4694,6 +4695,7 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert "seeded/seed_ensemble.csv" in names
     assert "seeded/seed_reproducibility_audit.csv" in names
     assert "seeded/seed_reproducibility_manifest_diff.csv" in names
+    assert "seeded/seed_reproducibility_environment_audit.csv" in names
     assert "seeded/experiment_memory_registry.csv" in names
 
 
@@ -4918,6 +4920,38 @@ def test_seed_reproducibility_allows_global_frame_drift_when_overlap_inputs_matc
     assert bool(diff_row["same_seed_reproducibility_interpretable"]) is True
     assert float(diff_row["label_match_fraction"]) == pytest.approx(1.0)
     assert float(diff_row["return_match_fraction"]) == pytest.approx(1.0)
+
+
+def test_training_signature_records_training_code_hash() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC"),
+            "feature": [0.1, 0.2, 0.3, 0.4],
+            "label": [0, 1, 0, 1],
+            "fwd_return_10h": [0.0, 0.01, -0.01, 0.02],
+        }
+    )
+
+    signature = _training_signature(
+        frame=frame,
+        config={
+            "project": {"random_seed": 42, "deterministic": True},
+            "features": {
+                "active_profile": "control",
+                "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+            },
+        },
+        profile="control",
+        feature_columns=["feature"],
+        fold_ids=[0, 1],
+        fold_scope="seed_audit_seed_042",
+    )
+
+    code_signature = signature["training_code_signature"]
+    assert signature["signature_version"] == "profile_training_v3"
+    assert code_signature["signature_version"] == "training_code_v1"
+    assert code_signature["code_hash"]
+    assert code_signature["tracked_file_count"] > 0
 
 
 def test_seed_extension_summary_is_reconciled_from_persisted_coverage() -> None:

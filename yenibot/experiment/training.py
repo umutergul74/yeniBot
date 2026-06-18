@@ -36,6 +36,7 @@ from yenibot.diagnostics import (
     threshold_summary_diagnostics,
 )
 from yenibot.features import filter_feature_columns, select_feature_columns
+from yenibot.reproducibility import runtime_signature_payload
 from yenibot.training import run_walk_forward_training
 
 from yenibot.experiment.common import (
@@ -457,6 +458,11 @@ def run_profile_experiment(
         manifest = {
             **signature,
             "signature_hash": signature_hash,
+            "runtime_signature": runtime_signature_payload(
+                seed=int(_cfg(cfg, ["project", "random_seed"], 42)),
+                deterministic=bool(_cfg(cfg, ["project", "deterministic"], False)),
+                device=device,
+            ),
             "completed": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "prediction_rows": int(len(predictions)),

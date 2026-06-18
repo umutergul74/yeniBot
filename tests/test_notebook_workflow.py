@@ -63,6 +63,7 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "optional=True" in diagnostics
     assert "Seed reproducibility audit:" in diagnostics
     assert "seed_reproducibility_manifest_diff.csv" in diagnostics
+    assert "seed_reproducibility_environment_audit.csv" in diagnostics
     assert "Experiment memory registry:" in diagnostics
     assert "Same-window policy selection allowed:" in diagnostics
     assert "future_oos_failure_summary.json" in diagnostics

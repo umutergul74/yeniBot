@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 from yenibot.features import filter_feature_columns, resolve_feature_profile, select_feature_columns
 from yenibot.training import PurgedWalkForwardCV
+from yenibot.reproducibility import training_code_signature_payload
 
 from yenibot.experiment.common import (
     _cfg,
@@ -64,6 +65,7 @@ __all__ = [
     'experiment_root',
     'new_run_id',
     '_training_config_payload',
+    '_training_code_signature_payload',
     '_diagnostic_config_for_run',
     '_diagnostics_signature',
     '_experiment_signature',
@@ -618,6 +620,9 @@ def _training_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
     }
     return payload
 
+def _training_code_signature_payload(*, include_files: bool = True) -> dict[str, Any]:
+    return training_code_signature_payload(include_files=include_files)
+
 def _experiment_signature(
     config: dict[str, Any],
     settings: dict[str, Any],
@@ -638,8 +643,9 @@ def _experiment_signature(
     )
     profiles = [profile for profile in profiles if profile]
     payload = {
-        "signature_version": "training_v2",
+        "signature_version": "training_v3",
         "settings": _training_settings_payload(settings),
+        "training_code_signature": _training_code_signature_payload(include_files=False),
         "profiles": {
             profile: _training_config_payload(config, profile=profile)
             for profile in profiles
@@ -784,10 +790,11 @@ def _training_signature(
     fold_scope: str,
 ) -> dict[str, Any]:
     return {
-        "signature_version": "profile_training_v2",
+        "signature_version": "profile_training_v3",
         "profile": profile,
         "fold_scope": fold_scope,
         "fold_ids": fold_ids,
+        "training_code_signature": _training_code_signature_payload(include_files=True),
         "feature_columns": feature_columns,
         "feature_columns_hash": _hash_payload(feature_columns),
         "training_config_hash": _hash_payload(

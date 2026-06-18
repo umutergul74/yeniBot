@@ -359,6 +359,27 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "profile": control,
+                "audit_seed": 42,
+                "same_seed_status": "same_seed_ranking_reproduced_with_numeric_drift",
+                "same_seed_reproduced": True,
+                "input_compatible": True,
+                "training_code_signature_available": True,
+                "training_code_hash_match": True,
+                "runtime_signature_available": True,
+                "runtime_signature_match": True,
+                "probability_spearman": 0.9999,
+                "probability_allclose_fraction": 0.99,
+                "mean_rank_ic_delta": 0.0001,
+                "likely_cause": "minor_numeric_runtime_drift",
+                "recommended_action": "record_runtime_versions",
+                "next_step": "seed_reproducibility_passed_continue_research_policy",
+            }
+        ]
+    ).to_csv(path / "seed_reproducibility_environment_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "profile": "failed_profile",
                 "memory_status": "rejected",
                 "reason": "fixture rejected experiment",
@@ -661,6 +682,35 @@ def test_auto_review_uses_official_calibrated_threshold_when_available(tmp_path)
 
     assert review["phase2_readiness"]["long_f1_source"] == "calibrated_validation_constrained_threshold"
     assert "long_f1_below_phase1_target" not in review["phase2_readiness"]["blockers"]
+
+
+def test_auto_review_routes_missing_code_signature_seed_drift(tmp_path) -> None:
+    _write_minimal_report(tmp_path)
+    audit = pd.read_csv(tmp_path / "seed_reproducibility_audit.csv")
+    audit.loc[:, "reproducibility_status"] = "same_seed_not_reproduced_code_signature_missing"
+    audit.loc[:, "likely_cause"] = "unrecorded_training_code_drift_possible"
+    audit.loc[:, "recommended_action"] = "retrain full control and same-seed audit"
+    audit.to_csv(tmp_path / "seed_reproducibility_audit.csv", index=False)
+    environment = pd.read_csv(tmp_path / "seed_reproducibility_environment_audit.csv")
+    environment.loc[:, "same_seed_status"] = "same_seed_not_reproduced_code_signature_missing"
+    environment.loc[:, "same_seed_reproduced"] = False
+    environment.loc[:, "training_code_signature_available"] = False
+    environment.loc[:, "training_code_hash_match"] = False
+    environment.loc[:, "next_step"] = "retrain_full_control_and_same_seed_audit_with_current_code_signature"
+    environment.to_csv(tmp_path / "seed_reproducibility_environment_audit.csv", index=False)
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["next_action"]["action"] == (
+        "retrain_control_and_same_seed_audit_with_current_code_signature"
+    )
+    assert review["next_action"]["reasons"] == [
+        "seed_reproducibility_training_code_signature_missing"
+    ]
+    assert "seed_reproducibility_training_code_signature_missing" in review["phase2_readiness"]["blockers"]
+    assert review["seed_reproducibility_environment_audit"]["next_steps"] == [
+        "retrain_full_control_and_same_seed_audit_with_current_code_signature"
+    ]
 
 
 def test_auto_review_uses_explicit_active_evidence_charter_without_legacy_blockers(

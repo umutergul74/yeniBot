@@ -17,6 +17,7 @@ from yenibot.features.builder import filter_feature_columns, select_feature_colu
 from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, PairwiseReturnOrderLoss, RankICLoss
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
+from yenibot.reproducibility import runtime_signature_payload, training_code_signature_payload
 from yenibot.training.dataset import SequenceDataset
 from yenibot.training.preprocessing import CausalFoldPreprocessor
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
@@ -421,6 +422,12 @@ def train_one_fold(
                 "config_model": _cfg(config, ["model"], {}),
                 "random_seed": fold_seed,
                 "deterministic": _deterministic(config),
+                "training_code_signature": training_code_signature_payload(include_files=False),
+                "runtime_signature": runtime_signature_payload(
+                    seed=fold_seed,
+                    deterministic=_deterministic(config),
+                    device=str(torch_device),
+                ),
             },
             output_dir / f"model_fold_{fold.fold:03d}.pt",
         )
