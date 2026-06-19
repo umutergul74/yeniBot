@@ -563,7 +563,7 @@ def _next_action(
     if not frozen_candidate_available:
         reasons.append("replacement_candidate_not_preregistered")
         return (
-            "continue_walk_forward_research_until_replacement_preregistered",
+            "select_and_preregister_replacement_candidate_from_historical_cv_only",
             reasons,
         )
     if window_data_ready and not bool(future_oos.get("evaluation_completed", False)):

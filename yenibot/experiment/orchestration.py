@@ -52,6 +52,10 @@ from yenibot.experiment.configuration import (
     profile_config,
     resolve_experiment_run_id,
 )
+from yenibot.experiment.current_status import (
+    build_phase1_current_status,
+    write_phase1_current_status,
+)
 from yenibot.experiment.drift import (
     _feature_drift_forensics_frame,
     _feature_family_drift_summary_frame,
@@ -1227,7 +1231,14 @@ def write_experiment_diagnostics(
         publish_recency_research_reports(recency_research_dir, report_dir)
     )
     replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
-    next_research_protocol = research_protocol_payload(diagnostic_config)
+    next_research_protocol = research_protocol_payload(
+        diagnostic_config,
+        phase2_readiness=decision["phase2_readiness"],
+        future_oos_preflight=future_oos_preflight_status,
+        future_oos_readiness=future_oos_readiness,
+        frozen_candidate_index=frozen_candidate_index,
+        seed_reproducibility_audit=seed_reproducibility_audit,
+    )
     _write_json(
         report_dir / "next_research_protocol.json",
         next_research_protocol,
@@ -1592,6 +1603,20 @@ def write_experiment_diagnostics(
         control_profile=settings["control_profile"],
     )
     decision["model_performance_summary"] = model_performance_dashboard["summary"]
+    phase1_current_status = build_phase1_current_status(
+        run_id=run_dir.name,
+        control_profile=settings["control_profile"],
+        phase2_readiness=decision["phase2_readiness"],
+        model_performance_summary=model_performance_dashboard["summary"],
+        phase1_decision_ladder=phase1_decision_ladder,
+        next_research_protocol=next_research_protocol,
+        future_oos_preflight=future_oos_preflight_status,
+        future_oos_readiness=future_oos_readiness,
+        seed_reproducibility_audit=seed_reproducibility_audit,
+        training_execution=training_execution,
+    )
+    decision["phase1_current_status"] = phase1_current_status
+    write_phase1_current_status(report_dir, phase1_current_status)
     _write_phase1_blocker_action_plan(report_dir, phase1_blocker_action_plan)
     _write_root_cause_reports(
         report_dir,

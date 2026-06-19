@@ -219,18 +219,99 @@ def aggregate_recency_predictions(
     return out.sort_values("timestamp").reset_index(drop=True)
 
 
-def research_protocol_payload(config: dict[str, Any]) -> dict[str, Any]:
+def _same_seed_reproduced(seed_reproducibility_audit: pd.DataFrame | None) -> bool:
+    if seed_reproducibility_audit is None or seed_reproducibility_audit.empty:
+        return False
+    if "comparison_role" not in seed_reproducibility_audit.columns:
+        return False
+    same_seed = seed_reproducibility_audit.loc[
+        seed_reproducibility_audit["comparison_role"].astype(str).eq(
+            "same_seed_reproduction"
+        )
+    ]
+    if same_seed.empty or "reproducibility_status" not in same_seed.columns:
+        return False
+    acceptable = {
+        "same_seed_reproduced",
+        "same_seed_ranking_reproduced_with_numeric_drift",
+    }
+    return same_seed["reproducibility_status"].astype(str).isin(acceptable).all()
+
+
+def research_protocol_payload(
+    config: dict[str, Any],
+    *,
+    phase2_readiness: dict[str, Any] | None = None,
+    future_oos_preflight: dict[str, Any] | None = None,
+    future_oos_readiness: dict[str, Any] | None = None,
+    frozen_candidate_index: pd.DataFrame | None = None,
+    seed_reproducibility_audit: pd.DataFrame | None = None,
+) -> dict[str, Any]:
     """Expose the immutable rules for the next research cycle in reports."""
 
     cycle = (
         config.get("experiments", {}).get("next_research_cycle", {}) or {}
     )
+    readiness = phase2_readiness or {}
+    preflight = future_oos_preflight or {}
+    future_readiness = future_oos_readiness or {}
+    blockers = [str(item) for item in readiness.get("blockers", []) or []]
+    artifact_override = phase2_readiness is not None
+    frozen_available = bool(
+        frozen_candidate_index is not None
+        and not frozen_candidate_index.empty
+        and (
+            frozen_candidate_index["available"]
+            .map(lambda value: str(value).strip().lower() in {"1", "true", "yes"})
+            .any()
+            if "available" in frozen_candidate_index.columns
+            else True
+        )
+    )
+    seed_ready = _same_seed_reproduced(seed_reproducibility_audit)
+    current_status = str(cycle.get("status", "not_configured"))
+    current_action = cycle.get("next_action")
+    if artifact_override and readiness.get("ready_for_phase2"):
+        current_status = "phase2_ready_review"
+        current_action = "review_phase2_design_boundary_before_any_phase2_code"
+    elif artifact_override and (
+        any(item.startswith("seed_reproducibility_") for item in blockers) or (
+        seed_reproducibility_audit is not None
+        and not seed_reproducibility_audit.empty
+        and not seed_ready
+        )
+    ):
+        current_status = "seed_reproducibility_review_required"
+        current_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
+    elif artifact_override and (
+        "frozen_candidate_manifest_unavailable" in blockers or not frozen_available
+    ):
+        current_status = "awaiting_replacement_preregistration"
+        current_action = "select_and_preregister_replacement_candidate_from_historical_cv_only"
+    elif artifact_override and (
+        future_readiness.get("ready_for_evaluation")
+        and not future_readiness.get("evaluation_completed")
+    ):
+        current_status = "future_oos_ready_prediction_only"
+        current_action = "run_no_refit_future_oos_evaluator"
     return {
-        "status": cycle.get("status", "not_configured"),
+        "status": current_status,
         "primary_hypothesis": cycle.get("primary_hypothesis"),
-        "next_action": cycle.get("next_action"),
+        "next_action": current_action,
         "source_failed_candidate_id": cycle.get("source_failed_candidate_id"),
         "failed_oos_role": cycle.get("failed_oos_role"),
+        "current_state_source": (
+            "diagnostics_artifacts_override_config"
+            if phase2_readiness is not None
+            else "config_only"
+        ),
+        "current_blockers": blockers,
+        "seed_reproducibility_passed": seed_ready,
+        "frozen_candidate_manifest_available": frozen_available,
+        "future_oos_preflight_state": preflight.get("state"),
+        "future_oos_ready_for_evaluation": bool(
+            future_readiness.get("ready_for_evaluation", False)
+        ),
         "same_window_selection_allowed": bool(
             cycle.get("same_window_selection_allowed", False)
         ),
@@ -251,6 +332,11 @@ def research_protocol_markdown(protocol: dict[str, Any]) -> str:
             f"- Status: `{protocol.get('status')}`",
             f"- Primary hypothesis: `{protocol.get('primary_hypothesis')}`",
             f"- Next action: `{protocol.get('next_action')}`",
+            f"- Current state source: `{protocol.get('current_state_source')}`",
+            f"- Current blockers: `{', '.join(protocol.get('current_blockers') or []) or 'none'}`",
+            f"- Seed reproducibility passed: `{protocol.get('seed_reproducibility_passed')}`",
+            f"- Frozen candidate manifest available: `{protocol.get('frozen_candidate_manifest_available')}`",
+            f"- Future-OOS preflight state: `{protocol.get('future_oos_preflight_state')}`",
             f"- Failed candidate: `{protocol.get('source_failed_candidate_id')}`",
             f"- Failed OOS role: `{protocol.get('failed_oos_role')}`",
             f"- Same-window selection allowed: `{protocol.get('same_window_selection_allowed')}`",

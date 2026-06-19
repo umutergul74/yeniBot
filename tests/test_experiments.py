@@ -14,6 +14,7 @@ from yenibot.experiments import (
     _available_walk_forward_fold_ids,
     _auto_full_profiles,
     _best_profile_blend,
+    build_phase1_current_status,
     _experiment_selection_frame,
     _experiment_signature,
     _diagnostics_signature,
@@ -1944,8 +1945,80 @@ def test_root_cause_uses_readiness_check_and_preserves_new_anchor_requirement() 
     assert "future OOS ready=False" in future_row["evidence"]
     assert ladder["new_future_oos_anchor_required"] is True
     assert ladder["recommended_next_action"] == (
+        "select_and_preregister_replacement_candidate_from_historical_cv_only"
+    )
+    assert ladder["frozen_candidate_manifest_missing"] is True
+    assert ladder["seed_review_pending"] is False
+
+
+def test_decision_ladder_keeps_seed_review_action_when_seed_blocker_present() -> None:
+    ladder = _phase1_decision_ladder_payload(
+        phase1_blocker_root_cause=pd.DataFrame(),
+        threshold_oracle_gap=pd.DataFrame(),
+        bad_fold_mechanism_summary=pd.DataFrame(),
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": [
+                "frozen_candidate_manifest_unavailable",
+                "seed_reproducibility_same_seed_not_reproduced",
+            ],
+        },
+        settings={
+            "control_profile": "control",
+            "next_research_cycle": {"new_future_oos_anchor_required": True},
+        },
+    )
+
+    assert ladder["seed_review_pending"] is True
+    assert ladder["recommended_next_action"] == (
         "complete_seed_reproducibility_review_before_replacement_preregistration"
     )
+
+
+def test_current_status_prefers_artifact_state_over_stale_protocol_text() -> None:
+    seed_audit = pd.DataFrame(
+        [
+            {
+                "comparison_role": "same_seed_reproduction",
+                "reproducibility_status": "same_seed_reproduced",
+            }
+        ]
+    )
+
+    status = build_phase1_current_status(
+        run_id="run",
+        control_profile="control",
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["frozen_candidate_manifest_unavailable"],
+        },
+        model_performance_summary={
+            "historical_walk_forward_evidence_passed": True,
+            "model_evidence_passed": True,
+            "frozen_future_oos_evidence_passed": False,
+        },
+        phase1_decision_ladder={
+            "recommended_next_action": "complete_seed_reproducibility_review_before_replacement_preregistration",
+            "run_04_required_now": False,
+            "run_05_first": True,
+        },
+        next_research_protocol={
+            "next_action": "current_code_reproducibility_retrain",
+        },
+        future_oos_preflight={"state": "awaiting_replacement_preregistration"},
+        future_oos_readiness={"ready_for_evaluation": False},
+        seed_reproducibility_audit=seed_audit,
+        training_execution={"training_executed_count": 5},
+    )
+
+    assert status["current_status"] == (
+        "historical_model_evidence_passed_awaiting_replacement_preregistration"
+    )
+    assert status["next_action"] == (
+        "select_and_preregister_replacement_candidate_from_historical_cv_only"
+    )
+    assert status["seed_reproducibility_passed"] is True
+    assert status["replacement_preregistration_required"] is True
 
 
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:

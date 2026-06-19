@@ -1138,15 +1138,31 @@ def _phase1_blocker_root_cause_frame(
             f"{repeated_count} current drift rows match already rejected profile families or direct ablations.",
             "Before proposing a new profile, require historical_experiment_memory_audit to show the idea is not a repeated rejected method.",
         )
+        if "frozen_candidate_manifest_unavailable" in blockers:
+            future_action = (
+                "Select a replacement candidate from historical CV evidence only, "
+                "pre-register its frozen manifest, then start a new future-OOS anchor."
+            )
+            future_evidence = (
+                f"Phase2 blockers={sorted(blockers)}; no active frozen replacement "
+                f"manifest is available; future OOS ready={future_oos_ready}; "
+                f"readiness status={future_oos_status}."
+            )
+        else:
+            future_action = (
+                "Do not promote from the frozen holdout. Wait for future unseen OOS "
+                "before Phase 2 promotion."
+            )
+            future_evidence = (
+                f"Phase2 blockers={sorted(blockers)}; future OOS ready="
+                f"{future_oos_ready}; readiness status={future_oos_status}."
+            )
         add(
             4,
             "future_unseen_oos",
             "governance_gate_not_model_tuning",
-            (
-                f"Phase2 blockers={sorted(blockers)}; future OOS ready="
-                f"{future_oos_ready}; readiness status={future_oos_status}."
-            ),
-            "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
+            future_evidence,
+            future_action,
         )
     return pd.DataFrame(rows, columns=columns)
 
@@ -1164,16 +1180,23 @@ def _phase1_decision_ladder_payload(
     recency_decision = recency_policy_decision or {}
     replacement_fit = replacement_candidate_fit or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
+    blocker_set = set(blockers)
     next_cycle = settings.get("next_research_cycle", {}) or {}
     new_anchor_required = bool(next_cycle.get("new_future_oos_anchor_required", False))
-    only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
+    seed_review_pending = any(
+        item.startswith("seed_reproducibility_") or item.startswith("seed_audit_")
+        for item in blocker_set
+    )
+    frozen_manifest_missing = "frozen_candidate_manifest_unavailable" in blocker_set
+    only_future_oos_blocked = bool(blockers) and blocker_set.issubset(
         {
             "future_unseen_oos_not_ready",
             "future_unseen_oos_not_evaluated",
+            "future_unseen_oos_evaluation_not_ready",
             "frozen_candidate_manifest_unavailable",
         }
     )
-    future_oos_failed = "future_unseen_oos_candidate_failed" in blockers
+    future_oos_failed = "future_unseen_oos_candidate_failed" in blocker_set
     run_04_now = bool(
         not phase1_blocker_root_cause.empty
         and phase1_blocker_root_cause.get("run_04_now", pd.Series(dtype=bool)).astype(bool).any()
@@ -1227,9 +1250,13 @@ def _phase1_decision_ladder_payload(
         recommended_next_action = (
             "no_recency_policy_cleared_gates_design_new_pre_registered_hypothesis"
         )
-    elif only_future_oos_blocked and new_anchor_required:
+    elif seed_review_pending:
         recommended_next_action = (
             "complete_seed_reproducibility_review_before_replacement_preregistration"
+        )
+    elif only_future_oos_blocked and frozen_manifest_missing:
+        recommended_next_action = (
+            "select_and_preregister_replacement_candidate_from_historical_cv_only"
         )
     elif only_future_oos_blocked:
         recommended_next_action = "refresh_data_and_run_05_when_future_oos_minimum_is_available"
@@ -1264,6 +1291,7 @@ def _phase1_decision_ladder_payload(
         "score_reversal_work_required": score_reversal_blocker,
         "candidate_generation_allowed": bool(
             future_oos_failed
+            or (only_future_oos_blocked and frozen_manifest_missing and not seed_review_pending)
             or (run_04_now and "future_unseen_oos_not_ready" not in blockers)
         ),
         "recency_policy_decision_status": recency_decision.get("status"),
@@ -1273,10 +1301,18 @@ def _phase1_decision_ladder_payload(
         "replacement_candidate_manifest_pin_required": bool(
             replacement_fit.get("manifest_pin_required", False)
         ),
+        "frozen_candidate_manifest_missing": frozen_manifest_missing,
+        "seed_review_pending": seed_review_pending,
         "new_future_oos_anchor_required": bool(future_oos_failed or new_anchor_required),
         "why_no_04": (
             ""
             if run_04_now or future_oos_failed
+            else (
+                "replacement candidate must be chosen from historical CV evidence and "
+                "pre-registered before a new future-OOS anchor; current holdout cannot "
+                "be used for selection"
+            )
+            if only_future_oos_blocked and frozen_manifest_missing
             else "frozen candidate must remain unchanged until future unseen OOS evaluation"
             if only_future_oos_blocked
             else "no pre-registered feature or training hypothesis cleared the root-cause and memory audits"

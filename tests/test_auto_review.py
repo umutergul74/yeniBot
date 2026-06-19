@@ -922,7 +922,7 @@ def test_auto_review_does_not_run_evaluator_without_frozen_manifest(tmp_path) ->
     review = review_experiment_report(tmp_path)
 
     assert review["next_action"]["action"] == (
-        "continue_walk_forward_research_until_replacement_preregistered"
+        "select_and_preregister_replacement_candidate_from_historical_cv_only"
     )
     assert review["next_action"]["reasons"] == [
         "replacement_candidate_not_preregistered"
@@ -934,5 +934,5 @@ def test_auto_review_does_not_run_evaluator_without_frozen_manifest(tmp_path) ->
     assert "future_unseen_oos_not_ready" not in review["phase2_readiness"]["blockers"]
     assert "frozen_candidate_manifest_unavailable" in review["phase2_readiness"]["blockers"]
     assert review["phase2_readiness"]["next_action"] == (
-        "continue_walk_forward_research_until_replacement_preregistered"
+        "select_and_preregister_replacement_candidate_from_historical_cv_only"
     )
