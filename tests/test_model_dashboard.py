@@ -130,6 +130,42 @@ def test_active_charter_status_separates_model_evidence_from_phase2() -> None:
     assert row["phase1_status"] == "historical_evidence_passed_future_oos_pending"
 
 
+def test_frozen_manifest_missing_is_governance_blocker_not_model_failure() -> None:
+    comparison = pd.DataFrame(
+        [{"profile": CONTROL, "fold_scope": "full", "passed_phase1": False}]
+    )
+
+    enriched = attach_active_charter_status(
+        comparison,
+        phase2_readiness=_readiness(["frozen_candidate_manifest_unavailable"]),
+        control_profile=CONTROL,
+    )
+
+    row = enriched.iloc[0]
+    assert bool(row["historical_walk_forward_evidence_passed"]) is True
+    assert bool(row["frozen_future_oos_evidence_passed"]) is False
+    assert bool(row["model_evidence_passed_active_charter"]) is True
+    assert bool(row["phase2_ready"]) is False
+    assert row["phase1_status"] == "historical_evidence_passed_other_governance_blocker"
+
+
+def test_future_evaluation_not_ready_is_pending_promotion_evidence() -> None:
+    comparison = pd.DataFrame(
+        [{"profile": CONTROL, "fold_scope": "full", "passed_phase1": False}]
+    )
+
+    enriched = attach_active_charter_status(
+        comparison,
+        phase2_readiness=_readiness(["future_unseen_oos_evaluation_not_ready"]),
+        control_profile=CONTROL,
+    )
+
+    row = enriched.iloc[0]
+    assert bool(row["historical_walk_forward_evidence_passed"]) is True
+    assert bool(row["frozen_future_oos_evidence_passed"]) is False
+    assert bool(row["model_evidence_passed_active_charter"]) is True
+
+
 def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) -> None:
     predictions = _predictions()
     fold_rows = []

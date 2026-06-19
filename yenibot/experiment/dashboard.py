@@ -42,15 +42,27 @@ def _number(value: Any, default: float = np.nan) -> float:
 
 
 def _model_evidence_passed(phase2_readiness: dict[str, Any]) -> bool:
-    pending_future_only = {
+    pending_promotion_only = {
         "future_unseen_oos_not_ready",
         "future_unseen_oos_not_evaluated",
+        "future_unseen_oos_evaluation_not_ready",
+        "frozen_candidate_manifest_unavailable",
     }
     blockers = {
         str(item)
         for item in phase2_readiness.get("blockers", []) or []
     }
-    return not (blockers - pending_future_only)
+    return not (blockers - pending_promotion_only)
+
+
+def _frozen_future_oos_evidence_passed(phase2_readiness: dict[str, Any]) -> bool:
+    blockers = {
+        str(item)
+        for item in phase2_readiness.get("blockers", []) or []
+    }
+    if "frozen_candidate_manifest_unavailable" in blockers:
+        return False
+    return not any(item.startswith("future_unseen_oos_") for item in blockers)
 
 
 def _historical_walk_forward_evidence_passed(
@@ -59,6 +71,7 @@ def _historical_walk_forward_evidence_passed(
     promotion_only = {
         "future_unseen_oos_not_ready",
         "future_unseen_oos_not_evaluated",
+        "future_unseen_oos_evaluation_not_ready",
         "future_unseen_oos_candidate_failed",
         "frozen_candidate_manifest_unavailable",
     }
@@ -181,10 +194,7 @@ def attach_active_charter_status(
     )
     historical_passed = _historical_walk_forward_evidence_passed(phase2_readiness)
     model_passed = _model_evidence_passed(phase2_readiness)
-    future_oos_passed = not any(
-        str(item).startswith("future_unseen_oos_")
-        for item in phase2_readiness.get("blockers", []) or []
-    )
+    future_oos_passed = _frozen_future_oos_evidence_passed(phase2_readiness)
     frame.loc[control_mask, "historical_walk_forward_evidence_passed"] = (
         historical_passed
     )
@@ -777,6 +787,7 @@ def _dashboard_markdown(
     future_oos: dict[str, Any],
 ) -> str:
     blockers = phase2_readiness.get("blockers", []) or []
+    next_action = str(phase2_readiness.get("next_action") or "not_reported")
     lines = [
         "# yeniBot Phase 1 Model Performance Dashboard",
         "",
@@ -786,8 +797,10 @@ def _dashboard_markdown(
             f"`{'PASS' if _historical_walk_forward_evidence_passed(phase2_readiness) else 'REVIEW'}`"
         ),
         f"- Model evidence gates: `{'PASS' if _model_evidence_passed(phase2_readiness) else 'REVIEW'}`",
+        f"- Frozen future-OOS evidence: `{'PASS' if _frozen_future_oos_evidence_passed(phase2_readiness) else 'PENDING/FAILED'}`",
         f"- Phase 2 readiness: `{'READY' if phase2_readiness.get('ready_for_phase2') else 'BLOCKED'}`",
         f"- Active blockers: `{', '.join(blockers) if blockers else 'none'}`",
+        f"- Next action: `{next_action}`",
         f"- Future unseen OOS: `{future_oos.get('new_labeled_rows', 0)} / {future_oos.get('min_rows', 0)}` labeled rows",
         "",
         "![Model scorecard](model_scorecard.png)",
@@ -941,13 +954,13 @@ def write_model_performance_dashboard(
         "historical_walk_forward_evidence_passed": (
             _historical_walk_forward_evidence_passed(phase2_readiness)
         ),
-        "frozen_future_oos_evidence_passed": not any(
-            str(item).startswith("future_unseen_oos_")
-            for item in phase2_readiness.get("blockers", []) or []
+        "frozen_future_oos_evidence_passed": _frozen_future_oos_evidence_passed(
+            phase2_readiness
         ),
         "model_evidence_passed": _model_evidence_passed(phase2_readiness),
         "phase2_ready": bool(phase2_readiness.get("ready_for_phase2", False)),
         "blockers": phase2_readiness.get("blockers", []) or [],
+        "next_action": phase2_readiness.get("next_action"),
         "future_oos": future_oos_readiness,
         "artifacts": [
             "model_performance_dashboard.md",
