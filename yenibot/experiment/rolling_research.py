@@ -275,10 +275,11 @@ def research_protocol_payload(
         current_status = "phase2_ready_review"
         current_action = "review_phase2_design_boundary_before_any_phase2_code"
     elif artifact_override and (
-        any(item.startswith("seed_reproducibility_") for item in blockers) or (
-        seed_reproducibility_audit is not None
-        and not seed_reproducibility_audit.empty
-        and not seed_ready
+        any(item.startswith("seed_reproducibility_") for item in blockers)
+        or (
+            seed_reproducibility_audit is not None
+            and not seed_reproducibility_audit.empty
+            and not seed_ready
         )
     ):
         current_status = "seed_reproducibility_review_required"

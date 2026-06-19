@@ -1233,7 +1233,7 @@ def write_experiment_diagnostics(
     replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
     next_research_protocol = research_protocol_payload(
         diagnostic_config,
-        phase2_readiness=decision["phase2_readiness"],
+        phase2_readiness=decision.get("phase2_readiness", {}),
         future_oos_preflight=future_oos_preflight_status,
         future_oos_readiness=future_oos_readiness,
         frozen_candidate_index=frozen_candidate_index,
@@ -1603,6 +1603,20 @@ def write_experiment_diagnostics(
         control_profile=settings["control_profile"],
     )
     decision["model_performance_summary"] = model_performance_dashboard["summary"]
+    next_research_protocol = research_protocol_payload(
+        diagnostic_config,
+        phase2_readiness=decision["phase2_readiness"],
+        future_oos_preflight=future_oos_preflight_status,
+        future_oos_readiness=future_oos_readiness,
+        frozen_candidate_index=frozen_candidate_index,
+        seed_reproducibility_audit=seed_reproducibility_audit,
+    )
+    _write_json(report_dir / "next_research_protocol.json", next_research_protocol)
+    (report_dir / "next_research_protocol.md").write_text(
+        research_protocol_markdown(next_research_protocol),
+        encoding="utf-8",
+    )
+    decision["next_research_protocol"] = next_research_protocol
     phase1_current_status = build_phase1_current_status(
         run_id=run_dir.name,
         control_profile=settings["control_profile"],
