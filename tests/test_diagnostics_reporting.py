@@ -168,12 +168,22 @@ def test_calibration_threshold_and_leakage_diagnostics() -> None:
 
     calibrated, report, calibrated_table = calibrate_test_probabilities_from_val(predictions, config)
     calibrated_splits = calibrate_split_probabilities_from_val(predictions)
+    logit_calibrated_splits = calibrate_split_probabilities_from_val(
+        predictions,
+        method="logit_platt",
+    )
+    beta_calibrated_splits = calibrate_split_probabilities_from_val(
+        predictions,
+        method="beta",
+    )
     thresholds = threshold_diagnostics(predictions)
     calibrated_thresholds = threshold_diagnostics(calibrated_splits, score_column="prob_long_calibrated")
     leakage = mtf_leakage_diagnostics(predictions[predictions["split"] == "test"])
 
     assert "prob_long_calibrated" in calibrated.columns
     assert set(calibrated_splits["split"]) == {"val", "test"}
+    assert set(logit_calibrated_splits["calibration_method"]) == {"logit_platt"}
+    assert set(beta_calibrated_splits["calibration_method"]) == {"beta"}
     assert "mean_rank_ic" in report
     assert len(calibrated_table) == 4
     assert {

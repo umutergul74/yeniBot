@@ -54,8 +54,11 @@ def calibrate_split_probabilities_from_val(
     split for that fold; test rows are transformed forward from that fit.
     """
 
-    if method not in {"isotonic", "platt"}:
-        raise ValueError("method must be one of: isotonic, platt")
+    valid_methods = {"isotonic", "platt", "logit_platt", "beta"}
+    if method not in valid_methods:
+        raise ValueError(
+            "method must be one of: " + ", ".join(sorted(valid_methods))
+        )
     if "split" not in predictions.columns:
         raise ValueError("predictions must contain val/test split labels")
 
@@ -95,14 +98,41 @@ def _fit_transform_calibrator(
     if len(np.unique(train_labels)) < 2 or len(np.unique(train_probs)) < 2:
         return np.full_like(test_probs, float(train_labels.mean()), dtype=float)
 
+    train_probs = _clip_probabilities(train_probs)
+    test_probs = _clip_probabilities(test_probs)
+
     if method == "isotonic":
         calibrator = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         calibrator.fit(train_probs, train_labels)
         return calibrator.transform(test_probs).clip(0.0, 1.0)
 
-    calibrator = LogisticRegression(solver="lbfgs")
-    calibrator.fit(train_probs.reshape(-1, 1), train_labels)
-    return calibrator.predict_proba(test_probs.reshape(-1, 1))[:, 1].clip(0.0, 1.0)
+    if method == "beta":
+        train_features = _beta_features(train_probs)
+        test_features = _beta_features(test_probs)
+    elif method == "logit_platt":
+        train_features = _logit(train_probs).reshape(-1, 1)
+        test_features = _logit(test_probs).reshape(-1, 1)
+    else:
+        train_features = train_probs.reshape(-1, 1)
+        test_features = test_probs.reshape(-1, 1)
+
+    calibrator = LogisticRegression(solver="lbfgs", max_iter=1000)
+    calibrator.fit(train_features, train_labels)
+    return calibrator.predict_proba(test_features)[:, 1].clip(0.0, 1.0)
+
+
+def _clip_probabilities(values: np.ndarray) -> np.ndarray:
+    return np.asarray(values, dtype=float).clip(1e-6, 1.0 - 1e-6)
+
+
+def _logit(values: np.ndarray) -> np.ndarray:
+    clipped = _clip_probabilities(values)
+    return np.log(clipped / (1.0 - clipped))
+
+
+def _beta_features(values: np.ndarray) -> np.ndarray:
+    clipped = _clip_probabilities(values)
+    return np.column_stack([np.log(clipped), np.log1p(-clipped)])
 
 
 def _config_get(config: object, path: list[str], default: object) -> object:

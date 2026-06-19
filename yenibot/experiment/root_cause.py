@@ -1085,6 +1085,17 @@ def _phase1_blocker_root_cause_frame(
         f"{_fmt_metric(control_oracle.get('selected_pred_rate_guardrail_fail_rate'))}."
     )
     if evidence_charter_active and not model_blockers:
+        if "frozen_candidate_manifest_unavailable" in blockers:
+            future_action = (
+                "Do not promote from the failed/seen holdout. Select and "
+                "pre-register a replacement candidate from historical CV "
+                "evidence only, then start a new future-OOS anchor."
+            )
+        else:
+            future_action = (
+                "Do not promote from the frozen holdout. Wait for future unseen "
+                "OOS before Phase 2 promotion."
+            )
         add(
             1,
             "future_unseen_oos",
@@ -1093,7 +1104,7 @@ def _phase1_blocker_root_cause_frame(
                 f"Phase2 blockers={sorted(blockers)}; future OOS ready="
                 f"{future_oos_ready}; readiness status={future_oos_status}."
             ),
-            "Do not promote from the frozen holdout. Wait for future unseen OOS before Phase 2 promotion.",
+            future_action,
         )
         add(
             2,

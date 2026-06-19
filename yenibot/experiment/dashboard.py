@@ -472,7 +472,7 @@ def _scorecard_frame(
             ]
         )
 
-    for method in ("raw", "platt", "isotonic"):
+    for method in ("raw", "platt", "logit_platt", "beta", "isotonic"):
         if calibration.empty or "method" not in calibration.columns:
             continue
         part = calibration.loc[calibration["method"].astype(str).eq(method)]
@@ -578,7 +578,7 @@ def _save_scorecard_figure(
         col = idx % 3
         row = idx // 3
         x = 0.02 + col * 0.325
-        y = 0.69 - row * 0.20
+        y = 0.64 - row * 0.20
         box = FancyBboxPatch(
             (x, y),
             0.29,
@@ -610,16 +610,27 @@ def _save_scorecard_figure(
         )
 
     ax.text(0.02, 0.33, "Promotion gate", fontsize=13, weight="bold", color=INK)
+    replacement_missing = "frozen_candidate_manifest_unavailable" in {
+        str(item) for item in blockers
+    }
     rows = _number(future_oos.get("new_labeled_rows"), 0)
     minimum = _number(future_oos.get("min_rows"), 1)
-    progress = min(max(rows / minimum, 0.0), 1.0) if minimum > 0 else 0.0
+    progress = (
+        0.0
+        if replacement_missing
+        else min(max(rows / minimum, 0.0), 1.0) if minimum > 0 else 0.0
+    )
     ax.add_patch(FancyBboxPatch((0.02, 0.26), 0.96, 0.045, boxstyle="round,pad=0", facecolor=LIGHT, edgecolor=GRID))
     ax.add_patch(FancyBboxPatch((0.02, 0.26), 0.96 * progress, 0.045, boxstyle="round,pad=0", facecolor=BLUE, edgecolor=BLUE))
     ax.text(
         0.02,
         0.21,
-        f"Future unseen OOS: {int(rows)} / {int(minimum)} labeled rows "
-        f"({int(_number(future_oos.get('min_rows_remaining'), 0))} remaining)",
+        (
+            "Future unseen OOS: N/A - replacement candidate not preregistered"
+            if replacement_missing
+            else f"Future unseen OOS: {int(rows)} / {int(minimum)} labeled rows "
+            f"({int(_number(future_oos.get('min_rows_remaining'), 0))} remaining)"
+        ),
         fontsize=11,
         color=INK,
     )
@@ -788,6 +799,14 @@ def _dashboard_markdown(
 ) -> str:
     blockers = phase2_readiness.get("blockers", []) or []
     next_action = str(phase2_readiness.get("next_action") or "not_reported")
+    replacement_missing = "frozen_candidate_manifest_unavailable" in {
+        str(item) for item in blockers
+    }
+    future_oos_text = (
+        "N/A - replacement candidate not preregistered"
+        if replacement_missing
+        else f"{future_oos.get('new_labeled_rows', 0)} / {future_oos.get('min_rows', 0)} labeled rows"
+    )
     lines = [
         "# yeniBot Phase 1 Model Performance Dashboard",
         "",
@@ -801,7 +820,7 @@ def _dashboard_markdown(
         f"- Phase 2 readiness: `{'READY' if phase2_readiness.get('ready_for_phase2') else 'BLOCKED'}`",
         f"- Active blockers: `{', '.join(blockers) if blockers else 'none'}`",
         f"- Next action: `{next_action}`",
-        f"- Future unseen OOS: `{future_oos.get('new_labeled_rows', 0)} / {future_oos.get('min_rows', 0)}` labeled rows",
+        f"- Future unseen OOS: `{future_oos_text}`",
         "",
         "![Model scorecard](model_scorecard.png)",
         "",
@@ -838,7 +857,15 @@ def _dashboard_markdown(
         "platt_positive_brier_skill_fold_fraction",
         "platt_macro_ece",
     ]
-    visible = scorecard.loc[scorecard["metric"].isin(visible_metrics), ["category", "metric", "scope", "value", "target", "status", "role"]]
+    if scorecard.empty or "metric" not in scorecard.columns:
+        visible = pd.DataFrame(
+            columns=["category", "metric", "scope", "value", "target", "status", "role"]
+        )
+    else:
+        visible = scorecard.loc[
+            scorecard["metric"].isin(visible_metrics),
+            ["category", "metric", "scope", "value", "target", "status", "role"],
+        ]
     lines.append("| " + " | ".join(visible.columns) + " |")
     lines.append("| " + " | ".join(["---"] * len(visible.columns)) + " |")
     for _, row in visible.iterrows():

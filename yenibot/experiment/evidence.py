@@ -442,7 +442,7 @@ def _probability_calibration_comparison_frames(
         method_frames: dict[str, pd.DataFrame] = {
             "raw": _test_predictions(predictions).copy()
         }
-        for method in ("platt", "isotonic"):
+        for method in ("platt", "logit_platt", "beta", "isotonic"):
             try:
                 calibrated = calibrate_split_probabilities_from_val(
                     predictions,

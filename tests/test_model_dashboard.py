@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from yenibot.experiment.dashboard import (
+    _dashboard_markdown,
     attach_active_charter_status,
     write_model_performance_dashboard,
 )
@@ -357,9 +358,23 @@ def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) 
     summary = json.loads(
         (tmp_path / "model_performance_summary.json").read_text(encoding="utf-8")
     )
+    dashboard = (tmp_path / "model_performance_dashboard.md").read_text(
+        encoding="utf-8"
+    )
     assert summary["model_evidence_passed"] is True
     assert summary["phase2_ready"] is False
     assert summary["blockers"] == ["future_unseen_oos_not_ready"]
+    assert "Future unseen OOS: `253 / 720 labeled rows`" in dashboard
+
+
+def test_dashboard_marks_future_oos_progress_na_without_candidate_manifest() -> None:
+    markdown = _dashboard_markdown(
+        scorecard=pd.DataFrame(),
+        phase2_readiness=_readiness(["frozen_candidate_manifest_unavailable"]),
+        future_oos={"new_labeled_rows": 0, "min_rows": 1},
+    )
+
+    assert "Future unseen OOS: `N/A - replacement candidate not preregistered`" in markdown
 
 
 def test_model_dashboard_fails_model_evidence_for_non_future_blocker(

@@ -1394,7 +1394,13 @@ def test_model_evidence_uncertainty_and_calibration_comparison_are_validation_on
     assert uncertainty["resampling_scheme"].eq(
         "fold_cluster_then_within_fold_moving_block"
     ).all()
-    assert set(calibration_summary["method"]) == {"raw", "platt", "isotonic"}
+    assert set(calibration_summary["method"]) == {
+        "raw",
+        "platt",
+        "logit_platt",
+        "beta",
+        "isotonic",
+    }
     assert set(calibration_detail["fit_source"]) == {
         "none_raw_scores",
         "fold_validation_only",
