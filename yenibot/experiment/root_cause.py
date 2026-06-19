@@ -1106,19 +1106,29 @@ def _phase1_blocker_root_cause_frame(
             ),
             future_action,
         )
+        monitor_context = (
+            "while replacement preregistration is pending"
+            if "frozen_candidate_manifest_unavailable" in blockers
+            else "while the frozen future-OOS candidate is pending"
+        )
         add(
             2,
             "monitor_fold_stability",
             str(control_mechanism.get("dominant_mechanism") or "score_ranking_reversal_not_label_balance"),
             fold_evidence,
-            "Monitor without retraining while the frozen future-OOS candidate is pending.",
+            f"Monitor without retraining {monitor_context}.",
         )
         add(
             3,
             "monitor_threshold_quality",
             str(control_oracle.get("root_cause_hint") or "threshold_gap_secondary_to_score_separation"),
             threshold_evidence,
-            "Monitor threshold transfer, but do not change the frozen policy before unseen evaluation.",
+            (
+                "Monitor threshold transfer, but do not choose replacement "
+                "thresholds from the failed/seen holdout."
+                if "frozen_candidate_manifest_unavailable" in blockers
+                else "Monitor threshold transfer, but do not change the frozen policy before unseen evaluation."
+            ),
         )
         add(
             4,

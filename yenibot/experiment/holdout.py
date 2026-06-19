@@ -1208,7 +1208,7 @@ def _future_oos_candidate_plan_frame(
             and (candidate in frozen_primary_aliases or candidate_id in frozen_primary_aliases)
         )
         if stage == "control_profile":
-            candidate_status = "active_control"
+            candidate_status = "safe_control_baseline_reference"
         elif stage == "retired_frozen_policy":
             candidate_status = "historical_retired_policy_do_not_promote"
         elif stage == "future_oos_score_band_policy":
@@ -1226,7 +1226,9 @@ def _future_oos_candidate_plan_frame(
         else:
             candidate_status = "diagnostic_candidate"
         candidate_label = candidate if not policy_name else f"{candidate} [{policy_name}]"
-        if is_retired:
+        if stage == "control_profile":
+            evaluation_status = "baseline_reference_not_frozen_candidate"
+        elif is_retired:
             evaluation_status = "retired_do_not_evaluate"
         elif stage.startswith("future_oos") and not active_preregistration:
             evaluation_status = "not_preregistered"

@@ -513,6 +513,9 @@ def test_future_oos_candidate_plan_records_ready_dates() -> None:
     assert set(plan["candidate"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
     assert plan["plan_rank"].tolist() == [1, 2, 3]
     assert set(plan["candidate_label"]) == {"control", "retired_blend", "blend_control_benchmark_65_35"}
+    control = plan.loc[plan["candidate"].eq("control")].iloc[0]
+    assert control["candidate_status"] == "safe_control_baseline_reference"
+    assert control["evaluation_status"] == "baseline_reference_not_frozen_candidate"
     assert plan.loc[plan["plan_rank"].eq(2), "candidate"].iloc[0] == "blend_control_benchmark_65_35"
     assert plan.loc[plan["candidate"].eq("retired_blend"), "candidate_status"].iloc[0] == "historical_retired_policy_do_not_promote"
     assert bool(plan.loc[plan["candidate"].eq("retired_blend"), "promotion_allowed_now"].iloc[0]) is False

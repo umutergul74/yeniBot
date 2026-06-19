@@ -354,6 +354,8 @@ def test_model_dashboard_writes_professional_tables_and_visuals(tmp_path: Path) 
         "future_oos_progress",
         "prauc_lift_macro_ci_low_min",
         "platt_macro_brier_skill",
+        "best_validation_only_calibrator",
+        "best_calibrator_macro_brier_skill",
     }.issubset(set(result["scorecard"]["metric"]))
     summary = json.loads(
         (tmp_path / "model_performance_summary.json").read_text(encoding="utf-8")

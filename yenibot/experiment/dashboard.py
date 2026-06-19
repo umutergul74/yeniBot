@@ -514,6 +514,100 @@ def _scorecard_frame(
                     "source": "probability_calibration_comparison.csv",
                 }
             )
+    if not calibration.empty and "method" in calibration.columns:
+        ranked = calibration.copy()
+        ranked["_brier_skill"] = pd.to_numeric(
+            ranked.get("mean_brier_skill_vs_climatology"),
+            errors="coerce",
+        )
+        ranked = ranked.sort_values("_brier_skill", ascending=False)
+        if not ranked.empty:
+            best = ranked.iloc[0].to_dict()
+            best_method = str(best.get("method", ""))
+            best_brier_skill = _number(best.get("mean_brier_skill_vs_climatology"))
+            best_log_skill = _number(best.get("mean_log_loss_skill_vs_climatology"))
+            best_positive_fraction = _number(best.get("positive_brier_skill_fold_fraction"))
+            best_ece = _number(best.get("mean_ece_equal_count"))
+            probability_passed = str(best.get("probability_quality_passed", "")).lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            recommendation = str(best.get("recommended_use", ""))
+            summary_status = "passed" if probability_passed else "failed"
+            rows.extend(
+                [
+                    {
+                        "category": "Probability calibration",
+                        "metric": "best_validation_only_calibrator",
+                        "scope": "walk_forward_oos_validation_fit_test_eval",
+                        "value": best_method,
+                        "target": "probability_quality_passed",
+                        "status": summary_status,
+                        "role": "monitor",
+                        "interpretation": (
+                            "Best fold-validation-fit calibrator by macro Brier "
+                            f"skill. Recommended use: {recommendation or 'not_reported'}."
+                        ),
+                        "source": "probability_calibration_comparison.csv",
+                    },
+                    {
+                        "category": "Probability calibration",
+                        "metric": "best_calibrator_macro_brier_skill",
+                        "scope": "walk_forward_oos_validation_fit_test_eval",
+                        "value": best_brier_skill,
+                        "target": "> 0",
+                        "status": "passed" if best_brier_skill > 0 else "failed",
+                        "role": "monitor",
+                        "interpretation": (
+                            "Best available validation-only calibration still must "
+                            "beat fold climatology before probabilities are deployable."
+                        ),
+                        "source": "probability_calibration_comparison.csv",
+                    },
+                    {
+                        "category": "Probability calibration",
+                        "metric": "best_calibrator_log_loss_skill",
+                        "scope": "walk_forward_oos_validation_fit_test_eval",
+                        "value": best_log_skill,
+                        "target": "> 0",
+                        "status": "passed" if best_log_skill > 0 else "failed",
+                        "role": "monitor",
+                        "interpretation": (
+                            "Log-loss skill for the best macro-Brier calibrator."
+                        ),
+                        "source": "probability_calibration_comparison.csv",
+                    },
+                    {
+                        "category": "Probability calibration",
+                        "metric": "best_calibrator_positive_brier_skill_fold_fraction",
+                        "scope": "walk_forward_oos_validation_fit_test_eval",
+                        "value": best_positive_fraction,
+                        "target": ">= 0.60",
+                        "status": "passed" if best_positive_fraction >= 0.60 else "failed",
+                        "role": "monitor",
+                        "interpretation": (
+                            "Fraction of folds where the best calibrator beats "
+                            "climatology on Brier skill."
+                        ),
+                        "source": "probability_calibration_comparison.csv",
+                    },
+                    {
+                        "category": "Probability calibration",
+                        "metric": "best_calibrator_macro_ece",
+                        "scope": "walk_forward_oos_validation_fit_test_eval",
+                        "value": best_ece,
+                        "target": "< 0.05",
+                        "status": "passed" if best_ece < 0.05 else "failed",
+                        "role": "monitor",
+                        "interpretation": (
+                            "Expected calibration error for the best macro-Brier "
+                            "calibrator."
+                        ),
+                        "source": "probability_calibration_comparison.csv",
+                    },
+                ]
+            )
     return pd.DataFrame(rows, columns=columns)
 
 
