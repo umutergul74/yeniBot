@@ -1250,6 +1250,24 @@ def write_experiment_diagnostics(
         publish_recency_research_reports(recency_research_dir, report_dir)
     )
     replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
+    if (
+        replacement_candidate_fit.get("status") == "fit_complete_manifest_pin_required"
+        and future_oos_preflight_status.get("state") == "awaiting_replacement_preregistration"
+    ):
+        future_oos_preflight_status = dict(future_oos_preflight_status)
+        future_oos_preflight_status[
+            "next_action"
+        ] = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+        warnings = list(future_oos_preflight_status.get("warnings", []) or [])
+        warnings.append(
+            "Replacement candidate fit is complete; pin its manifest hash and activate a new future-OOS anchor before scoring."
+        )
+        future_oos_preflight_status["warnings"] = warnings
+        _write_json(report_dir / "future_oos_preflight.json", future_oos_preflight_status)
+        (report_dir / "future_oos_preflight.md").write_text(
+            future_oos_preflight_markdown(future_oos_preflight_status),
+            encoding="utf-8",
+        )
     future_oos_candidate_plan = _future_oos_candidate_plan_frame(
         settings,
         diagnostic_config,

@@ -266,6 +266,75 @@ def _evaluate_predictions(
     }
 
 
+_FUTURE_OOS_PREDICTION_COLUMNS = [
+    "timestamp",
+    "candidate_id",
+    "profile",
+    "fold",
+    "label",
+    "forward_return",
+    "tb_return",
+    "prob_long",
+    "threshold",
+    "selected",
+]
+
+
+def _future_oos_placeholder_summary(status: dict[str, Any]) -> dict[str, Any]:
+    """Return an explicit non-evaluation summary for paused or unavailable OOS."""
+
+    return {
+        "status": str(status.get("evaluation_state", "not_applicable")),
+        "candidate_id": str(status.get("primary_candidate_id", "")),
+        "evaluation_completed": bool(status.get("evaluation_completed", False)),
+        "primary_candidate_passed": status.get("primary_candidate_passed"),
+        "promotion_allowed": bool(status.get("promotion_allowed", False)),
+        "promotion_block_reason": str(status.get("promotion_block_reason", "")),
+        "not_applicable": True,
+        "fit_operations_performed": int(status.get("fit_operations_performed", 0) or 0),
+        "required_candidate_errors": list(status.get("required_candidate_errors", []) or []),
+        "optional_candidate_warnings": list(status.get("optional_candidate_warnings", []) or []),
+        "artifact_integrity_errors": list(status.get("artifact_integrity_errors", []) or []),
+        "note": (
+            "Future-OOS prediction reports are placeholders because no active "
+            "hash-pinned frozen candidate was available for prediction-only scoring."
+        ),
+    }
+
+
+def _write_future_oos_placeholder_outputs(
+    report_path: Path,
+    *,
+    status: dict[str, Any],
+) -> None:
+    """Write header-preserving future-OOS artifacts when evaluation is not active."""
+
+    empty = empty_future_oos_diagnostic_frames()
+    outputs = {
+        "future_oos_temporal_blocks.csv": empty["temporal_blocks"],
+        "future_oos_score_bands.csv": empty["score_bands"],
+        "future_oos_regime_metrics.csv": empty["regime_metrics"],
+        "future_oos_ensemble_disagreement.csv": empty["ensemble_disagreement"],
+        "future_oos_model_metrics.csv": empty_future_oos_model_metrics(),
+    }
+    for filename, frame in outputs.items():
+        frame.to_csv(report_path / filename, index=False)
+    predictions = pd.DataFrame(columns=_FUTURE_OOS_PREDICTION_COLUMNS)
+    predictions.to_parquet(report_path / "future_oos_predictions.parquet", index=False)
+    predictions.to_csv(report_path / "future_oos_prediction_sample.csv", index=False)
+    summary = _future_oos_placeholder_summary(status)
+    _write_json(report_path / "future_oos_failure_summary.json", summary)
+    (report_path / "future_oos_failure_summary.md").write_text(
+        "# Future OOS Failure Summary\n\n"
+        f"- Status: `{summary['status']}`\n"
+        f"- Evaluation completed: `{summary['evaluation_completed']}`\n"
+        f"- Promotion block reason: `{summary['promotion_block_reason']}`\n"
+        "- Model scoring performed: `False`\n"
+        f"- Note: {summary['note']}\n",
+        encoding="utf-8",
+    )
+
+
 def evaluate_future_oos(
     *,
     run_dir: str | Path,
@@ -291,13 +360,32 @@ def evaluate_future_oos(
         )
         status = {
             "enabled": bool(future_cfg.get("enabled", False)),
+            "anchor_data_end": None,
+            "latest_available_data_end": None,
+            "new_labeled_rows": 0,
+            "min_rows": min_rows,
+            "preferred_rows": preferred_rows,
+            "min_rows_remaining": None,
+            "preferred_rows_remaining": None,
             "ready_for_evaluation": False,
             "evaluation_completed": False,
             "evaluation_state": "protocol_disabled",
+            "primary_candidate_id": primary_id,
             "primary_candidate_passed": None,
+            "active_charter_version": str(
+                _cfg(config, ["validation", "charter", "active_version"], "v3_legacy")
+            ),
             "promotion_allowed": False,
             "promotion_block_reason": "future_oos_protocol_disabled_or_missing_anchor",
             "fit_operations_performed": 0,
+            "preflight_state": (
+                str(preflight.get("state", "")) if preflight is not None else None
+            ),
+            "preflight_invariants_passed": (
+                bool(preflight.get("invariants_passed", False))
+                if preflight is not None
+                else None
+            ),
             "artifact_integrity_errors": [],
             "required_candidate_errors": [],
             "optional_candidate_warnings": [],
@@ -312,6 +400,7 @@ def evaluate_future_oos(
             {"status": status, "rows": []},
         )
         _write_json(report_path / "future_oos_readiness.json", status)
+        _write_future_oos_placeholder_outputs(report_path, status=status)
         return evaluation, status
     anchor = pd.to_datetime(anchor_value, utc=True, errors="raise")
     data_dir = Path(str(_cfg(config, ["paths", "data_dir"], "data")))
@@ -621,10 +710,29 @@ def evaluate_future_oos(
             future_oos_failure_markdown(summary),
             encoding="utf-8",
         )
+    else:
+        summary = _future_oos_placeholder_summary(status)
+        _write_json(report_path / "future_oos_failure_summary.json", summary)
+        (report_path / "future_oos_failure_summary.md").write_text(
+            "# Future OOS Failure Summary\n\n"
+            f"- Status: `{summary['status']}`\n"
+            f"- Evaluation completed: `{summary['evaluation_completed']}`\n"
+            f"- Promotion block reason: `{summary['promotion_block_reason']}`\n"
+            "- Model scoring performed: `False`\n"
+            f"- Note: {summary['note']}\n",
+            encoding="utf-8",
+        )
     if prediction_frames:
         predictions = pd.concat(prediction_frames, ignore_index=True)
         predictions.to_parquet(report_path / "future_oos_predictions.parquet", index=False)
         predictions.head(200).to_csv(
+            report_path / "future_oos_prediction_sample.csv",
+            index=False,
+        )
+    else:
+        predictions = pd.DataFrame(columns=_FUTURE_OOS_PREDICTION_COLUMNS)
+        predictions.to_parquet(report_path / "future_oos_predictions.parquet", index=False)
+        predictions.to_csv(
             report_path / "future_oos_prediction_sample.csv",
             index=False,
         )

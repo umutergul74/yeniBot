@@ -305,6 +305,48 @@ def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) ->
     assert status["evaluation_state"] == "waiting_for_min_rows"
     assert status["primary_candidate_passed"] is None
     assert status["fit_operations_performed"] == 0
+    report = tmp_path / "report"
+    for filename in [
+        "future_oos_predictions.parquet",
+        "future_oos_temporal_blocks.csv",
+        "future_oos_score_bands.csv",
+        "future_oos_regime_metrics.csv",
+        "future_oos_ensemble_disagreement.csv",
+        "future_oos_model_metrics.csv",
+        "future_oos_failure_summary.json",
+        "future_oos_failure_summary.md",
+    ]:
+        assert (report / filename).exists()
+    assert pd.read_parquet(report / "future_oos_predictions.parquet").empty
+    failure = json.loads((report / "future_oos_failure_summary.json").read_text())
+    assert failure["not_applicable"] is True
+    assert failure["fit_operations_performed"] == 0
+
+
+def test_future_oos_disabled_protocol_writes_placeholder_artifacts(tmp_path: Path) -> None:
+    config = _config(tmp_path, min_rows=20)
+    config["experiments"]["future_oos_validation"]["enabled"] = False
+    config["experiments"]["frozen_candidates"]["anchor_data_end"] = None
+
+    evaluation, status = evaluate_future_oos(
+        run_dir=tmp_path / "run",
+        report_dir=tmp_path / "report",
+        config=config,
+        manifests=[],
+    )
+
+    assert evaluation.empty
+    assert status["evaluation_state"] == "protocol_disabled"
+    report = tmp_path / "report"
+    assert pd.read_csv(report / "future_oos_temporal_blocks.csv").empty
+    assert pd.read_csv(report / "future_oos_score_bands.csv").empty
+    assert pd.read_csv(report / "future_oos_regime_metrics.csv").empty
+    assert pd.read_csv(report / "future_oos_ensemble_disagreement.csv").empty
+    assert pd.read_csv(report / "future_oos_model_metrics.csv").empty
+    assert pd.read_parquet(report / "future_oos_predictions.parquet").empty
+    failure = json.loads((report / "future_oos_failure_summary.json").read_text())
+    assert failure["status"] == "protocol_disabled"
+    assert failure["not_applicable"] is True
 
 
 def test_candidate_prediction_merge_drops_dataframe_attrs() -> None:

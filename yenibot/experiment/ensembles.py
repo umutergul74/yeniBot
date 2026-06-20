@@ -1099,6 +1099,24 @@ def _profile_blend_markdown(profile_blend: pd.DataFrame) -> str:
 
 def _write_profile_blend_files(path: Path, profile_blend: pd.DataFrame) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    if profile_blend.empty and len(profile_blend.columns) == 0:
+        profile_blend = pd.DataFrame(
+            columns=[
+                "profile",
+                "fold_scope",
+                "blend_method",
+                "blend_weights",
+                "profile_count",
+                "fold_count",
+                "mean_rank_ic",
+                "std_rank_ic",
+                "positive_ic_fraction",
+                "top_10_lift_global",
+                "reviewable",
+                "review_reason",
+                "leader_roles",
+            ]
+        )
     profile_blend.to_csv(path / "profile_blend.csv", index=False)
     (path / "profile_blend.md").write_text(_profile_blend_markdown(profile_blend), encoding="utf-8")
     _write_json(path / "profile_blend.json", {"rows": profile_blend.to_dict(orient="records")})

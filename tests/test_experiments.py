@@ -86,6 +86,7 @@ from yenibot.experiment.seed_reproducibility import (
     _seed_reproducibility_manifest_diff_frame,
     _write_seed_reproducibility_files,
 )
+from yenibot.experiment.ensembles import _write_profile_blend_files
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -4028,6 +4029,21 @@ def test_profile_blend_review_selects_balanced_leader_before_tail_lift() -> None
     assert _best_profile_blend(reviewed)["profile"] == "balanced"
     assert bool(reviewed.loc[reviewed["profile"] == "balanced", "balanced_leader"].item()) is True
     assert bool(reviewed.loc[reviewed["profile"] == "tail", "balanced_eligible"].item()) is False
+
+
+def test_empty_profile_blend_csv_preserves_schema(tmp_path) -> None:
+    _write_profile_blend_files(tmp_path, pd.DataFrame())
+
+    loaded = pd.read_csv(tmp_path / "profile_blend.csv")
+
+    assert loaded.empty
+    assert {
+        "profile",
+        "fold_scope",
+        "blend_method",
+        "reviewable",
+        "review_reason",
+    }.issubset(loaded.columns)
 
 
 def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines, tiny_config, tmp_path) -> None:
