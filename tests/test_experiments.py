@@ -2873,7 +2873,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_stable_plus_4h_taker_flow_term_structure",
+    ]
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
     assert config["experiments"]["profile_blends"]["weighted"] == []
@@ -2971,8 +2973,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert {7, 8, 22, 30, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
-    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
-    assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is False
+    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is True
+    assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is True
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
     mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]
     combo_profile = config["features"]["profiles"]["baseline_stable_train_clip_and_reliability_mask"]
@@ -3029,10 +3031,18 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_buy_ratio_zscore",
         "4h_taker_buy_ratio_delta",
         "4h_taker_imbalance_slope",
+        "4h_taker_imbalance_mean_3_stable_rank",
+        "4h_taker_imbalance_mean_3_stable_tanh",
         "4h_taker_imbalance_mean_12",
         "4h_taker_imbalance_mean_12_stable_rank",
         "4h_taker_imbalance_mean_12_stable_tanh",
         "4h_taker_imbalance_mean_24",
+        "4h_taker_imbalance_mean_24_stable_rank",
+        "4h_taker_imbalance_mean_24_stable_tanh",
+        "4h_taker_mean12_tanh_vs_taker_mean3_tanh_agreement",
+        "4h_taker_mean12_tanh_vs_taker_mean3_tanh_spread",
+        "4h_taker_mean24_tanh_vs_taker_mean12_tanh_agreement",
+        "4h_taker_mean24_tanh_vs_taker_mean12_tanh_spread",
         "4h_large_trade_ratio_stable_rank",
         "4h_taker_mean12_x_ltr_rank_signed",
         "4h_taker_mean12_x_ltr_rank_high",
@@ -3319,6 +3329,30 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "4h_taker_mean12_tanh_guard_ltr_rank_high_damped",
     ]
 
+    term_structure = profile_config(config, "baseline_stable_plus_4h_taker_flow_term_structure")
+    term_structure_columns = filter_feature_columns(columns, term_structure)
+    assert "4h_taker_imbalance_mean_12" in term_structure_columns
+    assert "4h_large_trade_ratio" in term_structure_columns
+    assert "4h_taker_imbalance_mean_3_stable_tanh" in term_structure_columns
+    assert "4h_taker_imbalance_mean_24_stable_tanh" in term_structure_columns
+    assert "4h_taker_mean12_tanh_vs_taker_mean3_tanh_agreement" in term_structure_columns
+    assert "4h_taker_mean24_tanh_vs_taker_mean12_tanh_spread" in term_structure_columns
+    assert "4h_taker_mean12_tanh_guard_ltr_rank_not_high" not in term_structure_columns
+    assert "4h_taker_mean12_x_ltr_rank_high" not in term_structure_columns
+    assert "4h_large_trade_pressure_12_stable_tanh" not in term_structure_columns
+    assert resolve_feature_profile(term_structure)["required_columns"] == [
+        "4h_taker_imbalance_mean_3_stable_rank",
+        "4h_taker_imbalance_mean_3_stable_tanh",
+        "4h_taker_imbalance_mean_12_stable_rank",
+        "4h_taker_imbalance_mean_12_stable_tanh",
+        "4h_taker_imbalance_mean_24_stable_rank",
+        "4h_taker_imbalance_mean_24_stable_tanh",
+        "4h_taker_mean12_tanh_vs_taker_mean3_tanh_agreement",
+        "4h_taker_mean12_tanh_vs_taker_mean3_tanh_spread",
+        "4h_taker_mean24_tanh_vs_taker_mean12_tanh_agreement",
+        "4h_taker_mean24_tanh_vs_taker_mean12_tanh_spread",
+    ]
+
     stable_combined = profile_config(config, "baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate")
     stable_combined_columns = filter_feature_columns(columns, stable_combined)
     assert "cvd_cumulative_rate_norm" not in stable_combined_columns
@@ -3370,7 +3404,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"
         not in config["experiments"]["policy_review"]["future_oos_candidates"]
     )
-    assert config["validation"]["score_reversal_context"]["proposed_profiles"] == []
+    assert config["validation"]["score_reversal_context"]["proposed_profiles"][0]["profile"] == (
+        "baseline_stable_plus_4h_taker_flow_term_structure"
+    )
+    assert (
+        "baseline_stable_plus_4h_taker_flow_term_structure"
+        not in config["experiments"]["experiment_memory"]["rejected_profiles"]
+    )
 
     intrahour_late = profile_config(config, "baseline_stable_plus_15m_late_order_flow")
     intrahour_late_columns = filter_feature_columns(columns, intrahour_late)

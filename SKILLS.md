@@ -124,6 +124,26 @@ Before adding or rerunning any profile, read:
 
 Do not repeat an already rejected experiment unless it has a new, explicit reason and is listed in `allow_retest_profiles`.
 
+Every new performance idea must be a durable hypothesis, not a metric-chasing
+patch:
+
+- State the failure mechanism it targets, the exact prior failed methods it is
+  different from, and the stop condition before adding it to `candidate_profiles`.
+- Prefer reusable primitives, such as a causal transform, diagnostic table,
+  profile definition, or tested policy rule. Do not add one-off code paths that
+  only serve the latest zip.
+- Keep the default control safe. New profile candidates may be configured for
+  historical-CV research, but they must not silently alter the active control,
+  frozen manifests, future-OOS anchors, or Phase 2 readiness state.
+- A renamed version of a rejected idea is still rejected. If a method resembles
+  deletion, hard masking, train-only clipping, broad interactions, guarded
+  tanh flow context, or loss-only score-separation tweaks, document why it is
+  mechanistically distinct before running it.
+- If a candidate fails, record the profile and reason in experiment memory so it
+  cannot re-enter automatic training by accident.
+- If the expected evidence cannot be read from the slim bundle, add a compact
+  diagnostic artifact instead of requiring large prediction dumps by default.
+
 Known lessons:
 
 - Full stable-structure replacement hurt the stronger raw/stable control balance.

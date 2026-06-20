@@ -600,6 +600,62 @@ features:
       append_exclude_patterns:
         - "4h_taker_imbalance_mean_12"
         - "4h_large_trade_ratio"
+    baseline_stable_plus_4h_taker_flow_term_structure:
+      description: "Mechanism candidate: preserve the control backbone and add only causal 4H taker-flow term-structure agreement/spread features so the model can distinguish coherent slow flow from 12-bar score-reversal regimes. This is not deletion, hard masking, clipping, large-trade gating, or a loss-only tweak."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      include_patterns:
+        - "4h_taker_imbalance_mean_3_stable_rank"
+        - "4h_taker_imbalance_mean_3_stable_tanh"
+        - "4h_taker_imbalance_mean_12_stable_rank"
+        - "4h_taker_imbalance_mean_12_stable_tanh"
+        - "4h_taker_imbalance_mean_24_stable_rank"
+        - "4h_taker_imbalance_mean_24_stable_tanh"
+        - "4h_taker_mean12_tanh_vs_taker_mean3_tanh_agreement"
+        - "4h_taker_mean12_tanh_vs_taker_mean3_tanh_spread"
+        - "4h_taker_mean24_tanh_vs_taker_mean12_tanh_agreement"
+        - "4h_taker_mean24_tanh_vs_taker_mean12_tanh_spread"
+      required_columns:
+        - "4h_taker_imbalance_mean_3_stable_rank"
+        - "4h_taker_imbalance_mean_3_stable_tanh"
+        - "4h_taker_imbalance_mean_12_stable_rank"
+        - "4h_taker_imbalance_mean_12_stable_tanh"
+        - "4h_taker_imbalance_mean_24_stable_rank"
+        - "4h_taker_imbalance_mean_24_stable_tanh"
+        - "4h_taker_mean12_tanh_vs_taker_mean3_tanh_agreement"
+        - "4h_taker_mean12_tanh_vs_taker_mean3_tanh_spread"
+        - "4h_taker_mean24_tanh_vs_taker_mean12_tanh_agreement"
+        - "4h_taker_mean24_tanh_vs_taker_mean12_tanh_spread"
+      exclude_patterns:
+        - "4h_taker_buy_ratio"
+        - "4h_taker_sell_ratio"
+        - "4h_true_cvd_zscore"
+        - "4h_true_cvd_delta_norm"
+        - "4h_cvd_cumulative_rate_norm"
+        - "4h_buy_sell_imbalance_ema"
+        - "*orderflow_efficiency*"
+        - "*absorption_pressure*"
+        - "*cvd_price_divergence*"
+        - "cvd_pressure*"
+        - "4h_cvd_pressure*"
+        - "*large_trade_pressure*"
+        - "log_return_stable_*"
+        - "close_denoised_log_return_stable_*"
+        - "realized_vol_14_stable_*"
+        - "gk_vol_14_stable_*"
+        - "atr_14_pct_stable_*"
+        - "adx_14_stable_*"
+        - "vwap_dist_atr_stable_*"
+        - "volume_log_zscore_stable_*"
+        - "volume_denoised_log_zscore_stable_*"
+        - "4h_log_return_stable_*"
+        - "4h_close_denoised_log_return_stable_*"
+        - "4h_realized_vol_14_stable_*"
+        - "4h_gk_vol_14_stable_*"
+        - "4h_atr_14_pct_stable_*"
+        - "4h_adx_14_stable_*"
+        - "4h_vwap_dist_atr_stable_*"
+        - "4h_volume_log_zscore_stable_*"
+        - "4h_volume_denoised_log_zscore_stable_*"
     baseline_stable_no_slow_4h_bounded_flow_no_1h_cvd_rate:
       description: "Stability control with the two most plausible bad-fold stabilizers combined: no slow 4H flow means and no local CVD rate."
       inherit: baseline_stable_no_slow_4h_bounded_flow
@@ -1614,7 +1670,9 @@ features:
     stable_tanh_scale: 2.0
     stable_transforms: [rank, tanh]
     stable_source_columns:
+      - taker_imbalance_mean_3
       - taker_imbalance_mean_12
+      - taker_imbalance_mean_24
       - large_trade_ratio
     interaction_pairs:
       - source: taker_imbalance_mean_12
@@ -1627,6 +1685,17 @@ features:
         context: large_trade_ratio
         context_transform: stable_rank
         modes: [not_high, neutral, low_pass, high_damped]
+    agreement_pairs:
+      - source: taker_imbalance_mean_12
+        source_transform: stable_tanh
+        reference: taker_imbalance_mean_3
+        reference_transform: stable_tanh
+        modes: [agreement, spread]
+      - source: taker_imbalance_mean_24
+        source_transform: stable_tanh
+        reference: taker_imbalance_mean_12
+        reference_transform: stable_tanh
+        modes: [agreement, spread]
   order_flow_volatility_interactions:
     enabled: true
     flow_columns:
@@ -1904,7 +1973,18 @@ validation:
     min_positive_forward_return_fold_rate: 0.55
   score_reversal_context:
     enabled: true
-    proposed_profiles: []
+    proposed_profiles:
+      - profile: baseline_stable_plus_4h_taker_flow_term_structure
+        suspect_feature: 4h_taker_imbalance_mean_12
+        context_feature: 4h_taker_imbalance_mean_3,4h_taker_imbalance_mean_24
+        mechanism: causal_4h_taker_flow_term_structure_agreement
+        prior_failed_profiles:
+          - baseline_stable_no_4h_taker_mean12
+          - baseline_stable_no_slow_4h_bounded_flow
+          - baseline_stable_plus_4h_taker_mean12_ltr_context
+          - baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh
+          - baseline_stable_train_reliability_mask_4h_flow
+        why_not_repeat: "This keeps the control backbone and adds causal fast/slow 4H taker-flow agreement/spread features; it is not raw deletion, hard masking, train-only clipping, broad volatility interaction, large-trade-ratio gating, or a loss-only tweak."
   payoff_policy_robustness:
     min_mean_label_lift_vs_base: 1.05
     min_positive_label_lift_fold_rate: 0.60
@@ -1958,7 +2038,8 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles: []
+  candidate_profiles:
+    - baseline_stable_plus_4h_taker_flow_term_structure
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -1978,7 +2059,7 @@ experiments:
       - train_only_4h_flow_reliability_mask
       - train_only_clip_and_reliability_mask
     conclusion: "Bundle 20260614_054446 produced no promotable candidate. Hard reliability masking increased fold dispersion and damaged positive-fold coverage; clipping was controlled but economically non-inferior evidence was insufficient."
-    next_step: "Keep the control profile. Require a distinct pre-registered mechanism that evaluates ranking stability and top-score payoff together; do not rerun this preprocessing family automatically."
+    next_step: "Keep the control profile. Test only the pre-registered 4H taker-flow term-structure agreement candidate on historical CV; it preserves raw control features and adds causal agreement/spread context instead of deleting, masking, clipping, or large-trade gating."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2174,6 +2255,7 @@ experiments:
       baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr: "Run 20260528_162902: no-raw-LTR conditional context had weak CV stability despite holdout-looking improvement; mean IC 0.0423, std 0.0957, positive folds 63.9%."
       baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only: "Run 20260528_162902: stable-only conditional context remained below control; mean IC 0.0262, positive folds 63.9%, worst folds deteriorated."
       baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh: "Run 20260605_141414 rejected the guarded stable-tanh context hypothesis: mean IC 0.0393, std 0.0962, positive folds 66.7%, official F1 0.4044, worst-5 IC -0.1148. The low-pass guard itself became the top reversal suspect; do not rerun this family without a distinct mechanism."
+      baseline_stable_plus_4h_taker_flow_term_structure: "Pre-registered 2026-06-20: tests whether causal 4H taker-flow fast/slow agreement and spread can expose 12-bar score-reversal regimes while preserving the control backbone. Distinct from direct deletion, hard masking, clipping, large-trade-ratio gating, broad interactions, and loss-only tweaks."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."

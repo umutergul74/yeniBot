@@ -105,6 +105,7 @@ from yenibot.experiment.evidence import (
     _write_probability_calibration_comparison,
 )
 from yenibot.experiment.dashboard import attach_active_charter_status, write_model_performance_dashboard
+from yenibot.experiment.diagnostic_outputs import profile_dirs as _profile_dirs, prewrite_auto_review_inputs
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 from yenibot.experiment.oos_preflight import future_oos_preflight, future_oos_preflight_markdown
@@ -134,6 +135,7 @@ from yenibot.experiment.holdout import (
     _write_holdout_reservation,
     _write_performance_gap_analysis,
 )
+from yenibot.experiment.holdout_boundary import holdout_boundary_passed as _holdout_boundary_passed
 from yenibot.experiment.memory import _experiment_memory_registry_frame, _write_experiment_memory_registry
 from yenibot.experiment.payoff import (
     _frozen_policy_robustness_frame,
@@ -201,25 +203,6 @@ __all__ = [
     '_profile_dirs',
     'write_experiment_diagnostics',
 ]
-
-def _holdout_boundary_passed(audit: pd.DataFrame) -> bool:
-    """Return whether any blocking training scope reached the reserved holdout."""
-
-    if audit.empty:
-        return True
-    if "blocking" in audit.columns:
-        blocking = audit["blocking"].map(
-            lambda value: bool(value)
-            if isinstance(value, (bool,))
-            else str(value).strip().lower() in {"1", "true", "yes"}
-        )
-        passed = audit["passed"].map(
-            lambda value: bool(value)
-            if isinstance(value, (bool,))
-            else str(value).strip().lower() in {"1", "true", "yes"}
-        )
-        return not bool((blocking & ~passed).any())
-    return bool(audit["passed"].astype(bool).all())
 
 def _evaluate_holdout_candidates(
     *,
@@ -913,15 +896,6 @@ def run_experiment_matrix(
         "decision": decision,
     }
 
-def _profile_dirs(run_dir: Path) -> list[Path]:
-    paths = []
-    for profile_dir in run_dir.iterdir():
-        if not profile_dir.is_dir():
-            continue
-        for scope_dir in profile_dir.iterdir():
-            if (scope_dir / "training_manifest.json").exists() and (scope_dir / "predictions_all.parquet").exists():
-                paths.append(scope_dir)
-    return sorted(paths)
 @traced_workflow("diagnostics", diagnostics_status_path)
 def write_experiment_diagnostics(
     *,
@@ -1459,9 +1433,11 @@ def write_experiment_diagnostics(
         holdout_decision=holdout_decision,
         config=diagnostic_config,
     )
-    # Prewrite root-cause diagnostics so the auto-review completeness audit can
-    # require them. They are overwritten below after auto-review adds Phase 2 blockers.
-    pre_phase1_blocker_action_plan = _phase1_blocker_action_plan_frame(
+    # Prewrite files required by the auto-review completeness audit. They are
+    # overwritten below after auto-review adds Phase 2 blockers.
+    score_reversal_context_audit = prewrite_auto_review_inputs(
+        report_dir,
+        entries=entries,
         comparison=comparison,
         profile_blend=profile_blend,
         performance_gap_analysis=performance_gap_analysis,
@@ -1470,83 +1446,25 @@ def write_experiment_diagnostics(
         threshold_forensics=threshold_forensics,
         payoff_policy_robustness_summary=payoff_policy_robustness_summary,
         future_oos_candidate_plan=future_oos_candidate_plan,
-        phase2_readiness={},
-        config=diagnostic_config,
+        diagnostic_config=diagnostic_config,
         settings=settings,
-    )
-    pre_threshold_oracle_gap = _threshold_oracle_gap_frame(threshold_forensics, diagnostic_config)
-    pre_historical_experiment_memory_audit = _historical_experiment_memory_audit_frame(
-        feature_family_drift_summary,
-        diagnostic_config,
-    )
-    score_reversal_context_audit = _score_reversal_context_audit_frame(
-        feature_drift_forensics,
-        pre_historical_experiment_memory_audit,
-        diagnostic_config,
-    )
-    decision["score_reversal_context_audit"] = score_reversal_context_audit.to_dict(orient="records")
-    _write_score_reversal_context_audit(report_dir, score_reversal_context_audit)
-    pre_bad_fold_mechanism_summary = _bad_fold_mechanism_summary_frame(
-        bad_fold_signature=bad_fold_signature,
         feature_family_drift_summary=feature_family_drift_summary,
+        feature_drift_forensics=feature_drift_forensics,
+        bad_fold_signature=bad_fold_signature,
         score_distribution_shift_summary=score_distribution_shift_summary,
         probability_quality_summary=probability_quality_summary,
-        historical_memory_audit=pre_historical_experiment_memory_audit,
-        config=diagnostic_config,
-    )
-    pre_prediction_error_audit = _prediction_error_audit_frame(
-        entries,
-        score_separation_forensics,
-        diagnostic_config,
-    )
-    pre_phase1_blocker_root_cause = _phase1_blocker_root_cause_frame(
-        phase1_blocker_action_plan=pre_phase1_blocker_action_plan,
-        threshold_oracle_gap=pre_threshold_oracle_gap,
-        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
-        historical_experiment_memory_audit=pre_historical_experiment_memory_audit,
-        phase2_readiness={},
-        settings=settings,
-        config=diagnostic_config,
-    )
-    pre_phase1_decision_ladder = _phase1_decision_ladder_payload(
-        phase1_blocker_root_cause=pre_phase1_blocker_root_cause,
-        threshold_oracle_gap=pre_threshold_oracle_gap,
-        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
-        phase2_readiness={},
-        settings=settings,
+        score_separation_forensics=score_separation_forensics,
         recency_policy_decision=recency_policy_decision,
         replacement_candidate_fit=replacement_candidate_fit,
-    )
-    _write_phase1_blocker_action_plan(report_dir, pre_phase1_blocker_action_plan)
-    _write_root_cause_reports(
-        report_dir,
-        phase1_blocker_root_cause=pre_phase1_blocker_root_cause,
-        threshold_oracle_gap=pre_threshold_oracle_gap,
-        bad_fold_mechanism_summary=pre_bad_fold_mechanism_summary,
-        prediction_error_audit=pre_prediction_error_audit,
-        historical_experiment_memory_audit=pre_historical_experiment_memory_audit,
-        decision_ladder=pre_phase1_decision_ladder,
-    )
-    # Prewrite the executive dashboard so report completeness verifies the
-    # tables and visuals themselves. The final active-charter decision
-    # overwrites these provisional files immediately after auto-review.
-    write_model_performance_dashboard(
-        report_dir,
-        entries=entries,
-        comparison=comparison,
-        fold_stability_forensics=fold_stability_forensics,
-        fold_stability_summary=fold_stability_summary,
         rank_ic_aggregate_evidence=rank_ic_aggregate_evidence,
         classification_skill_summary=classification_skill_summary,
-        probability_quality_summary=probability_quality_summary,
         model_evidence_uncertainty=model_evidence_uncertainty,
         probability_calibration_comparison=probability_calibration_comparison,
         payoff_alignment=payoff_alignment,
         seed_stability=seed_stability,
-        phase2_readiness={},
         future_oos_readiness=future_oos_readiness,
-        control_profile=settings["control_profile"],
     )
+    decision["score_reversal_context_audit"] = score_reversal_context_audit.to_dict(orient="records")
     from yenibot.automation import write_auto_review
 
     workflow_checkpoint("run_auto_review", report_dir=report_dir)

@@ -677,7 +677,8 @@ def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_win
     stable_sources = [str(column) for column in (_config_get(cfg, ["stable_source_columns"], []) or [])]
     interaction_pairs = list(_config_get(cfg, ["interaction_pairs"], []) or [])
     gated_pairs = list(_config_get(cfg, ["gated_pairs"], []) or [])
-    if not stable_sources and not interaction_pairs and not gated_pairs:
+    agreement_pairs = list(_config_get(cfg, ["agreement_pairs"], []) or [])
+    if not stable_sources and not interaction_pairs and not gated_pairs and not agreement_pairs:
         return df
 
     stable_window = int(_config_get(cfg, ["stable_window"], default_window))
@@ -765,6 +766,30 @@ def _add_bad_fold_context_features(df: pd.DataFrame, config: object, default_win
             additions[f"{base_name}_low_pass"] = source * low
         if "high_damped" in modes:
             additions[f"{base_name}_high_damped"] = source * (1.0 - 0.75 * high).clip(lower=0.25, upper=1.0)
+
+    for item in agreement_pairs:
+        if not isinstance(item, dict):
+            raise ValueError("features.bad_fold_context.agreement_pairs entries must be mappings")
+        source_column = str(item.get("source", ""))
+        reference_column = str(item.get("reference", ""))
+        if not source_column or not reference_column:
+            raise ValueError("features.bad_fold_context agreement pairs require source and reference")
+        source_transform = str(item.get("source_transform") or "stable_tanh")
+        reference_transform = str(item.get("reference_transform") or "stable_tanh")
+        resolved_source = _resolve_context_source_column(df, source_column, source_transform)
+        resolved_reference = _resolve_context_source_column(df, reference_column, reference_transform)
+        if resolved_source is None or resolved_reference is None:
+            continue
+        modes = {str(mode) for mode in (item.get("modes") or ["agreement", "spread"])}
+        source = _bounded_interaction_source(df[resolved_source])
+        reference = _bounded_interaction_source(df[resolved_reference])
+        source_name = _feature_alias(resolved_source)
+        reference_name = _feature_alias(resolved_reference)
+        base_name = f"{source_name}_vs_{reference_name}"
+        if "agreement" in modes:
+            additions[f"{base_name}_agreement"] = source * reference
+        if "spread" in modes:
+            additions[f"{base_name}_spread"] = ((source - reference) / 2.0).clip(-1.0, 1.0)
 
     if not additions:
         return df

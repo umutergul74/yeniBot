@@ -194,7 +194,7 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "stable_clip_abs": 3.0,
         "stable_tanh_scale": 2.0,
         "stable_transforms": ["rank", "tanh"],
-        "stable_source_columns": ["taker_imbalance_mean_4", "large_trade_ratio"],
+        "stable_source_columns": ["taker_imbalance_mean_3", "taker_imbalance_mean_4", "large_trade_ratio"],
         "interaction_pairs": [
             {
                 "source": "taker_imbalance_mean_4",
@@ -210,6 +210,15 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
                 "context": "large_trade_ratio",
                 "context_transform": "stable_rank",
                 "modes": ["not_high", "neutral", "low_pass", "high_damped"],
+            }
+        ],
+        "agreement_pairs": [
+            {
+                "source": "taker_imbalance_mean_4",
+                "source_transform": "stable_tanh",
+                "reference": "taker_imbalance_mean_3",
+                "reference_transform": "stable_tanh",
+                "modes": ["agreement", "spread"],
             }
         ],
     }
@@ -234,6 +243,8 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "large_trade_pressure_4_minus_3_stable_tanh",
         "taker_imbalance_mean_4_stable_rank",
         "taker_imbalance_mean_4_stable_tanh",
+        "taker_mean4_tanh_vs_taker_mean3_tanh_agreement",
+        "taker_mean4_tanh_vs_taker_mean3_tanh_spread",
         "taker_mean4_x_ltr_rank_signed",
         "taker_mean4_tanh_guard_ltr_rank_not_high",
         "taker_mean4_tanh_guard_ltr_rank_neutral",
@@ -253,6 +264,8 @@ def test_order_flow_v2_features_are_causal_when_future_rows_appended(synthetic_k
         "4h_taker_imbalance_x_rv14_rank_signed",
         "4h_taker_imbalance_mean_4_stable_rank",
         "4h_taker_imbalance_mean_4_stable_tanh",
+        "4h_taker_mean4_tanh_vs_taker_mean3_tanh_agreement",
+        "4h_taker_mean4_tanh_vs_taker_mean3_tanh_spread",
         "4h_taker_mean4_x_ltr_rank_high",
         "4h_taker_mean4_tanh_guard_ltr_rank_not_high",
         "4h_taker_mean4_tanh_guard_ltr_rank_neutral",
