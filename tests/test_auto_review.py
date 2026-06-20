@@ -936,3 +936,80 @@ def test_auto_review_does_not_run_evaluator_without_frozen_manifest(tmp_path) ->
     assert review["phase2_readiness"]["next_action"] == (
         "select_and_preregister_replacement_candidate_from_historical_cv_only"
     )
+
+
+def test_auto_review_routes_replacement_fit_to_manifest_pin_despite_nonblocking_boundary(
+    tmp_path,
+) -> None:
+    _write_minimal_report(tmp_path, future_oos_ready=True)
+    (tmp_path / "decision_report.json").write_text(
+        json.dumps(
+            {
+                "run_id": "test_run",
+                "control_profile": "control_profile",
+                "holdout_boundary_passed": False,
+                "recommendation": "pin_replacement_candidate_manifest_and_activate_new_oos_anchor",
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "profile": "control_profile",
+                "fold_scope": "replacement_recent3",
+                "data_start": "2026-05-23 01:00:00+00:00",
+                "data_end": "2026-05-25 01:00:00+00:00",
+                "holdout_data_start": "2025-12-15 01:00:00+00:00",
+                "passed": True,
+                "blocking": False,
+                "raw_boundary_reached": True,
+                "reason": "replacement_preregistration_scope_after_retired_holdout_allowed",
+            }
+        ]
+    ).to_csv(tmp_path / "holdout_boundary_audit.csv", index=False)
+    (tmp_path / "replacement_candidate_fit.json").write_text(
+        json.dumps(
+            {
+                "status": "fit_complete_manifest_pin_required",
+                "candidate_id": "control_recent3_equal_v2",
+                "profile": "control_profile",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "frozen_candidate_manifest.json").write_text(
+        json.dumps(
+            {
+                "available": False,
+                "enabled": True,
+                "unavailable_reasons": ["replacement_candidate_not_preregistered"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "future_oos_readiness.json").write_text(
+        json.dumps(
+            {
+                "ready_for_evaluation": False,
+                "evaluation_completed": False,
+                "primary_candidate_passed": False,
+                "new_labeled_rows": 737,
+                "min_rows_remaining": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    review = review_experiment_report(tmp_path)
+
+    assert review["holdout"]["boundary_blocking_failed"] is False
+    assert review["next_action"]["action"] == (
+        "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+    )
+    assert review["next_action"]["reasons"] == [
+        "replacement_candidate_fit_complete_manifest_pin_required"
+    ]
+    assert review["phase2_readiness"]["next_action"] == (
+        "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+    )

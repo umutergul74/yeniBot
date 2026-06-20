@@ -302,6 +302,8 @@ def _holdout_boundary_audit_frame(entries: list[dict[str, Any]], settings: dict[
         "data_end",
         "holdout_data_start",
         "passed",
+        "blocking",
+        "raw_boundary_reached",
         "reason",
     ]
     holdout = settings.get("holdout", {}) or {}
@@ -319,6 +321,8 @@ def _holdout_boundary_audit_frame(entries: list[dict[str, Any]], settings: dict[
                     "data_end": "",
                     "holdout_data_start": "",
                     "passed": False,
+                    "blocking": True,
+                    "raw_boundary_reached": False,
                     "reason": "missing_holdout_data_start",
                 }
             ],
@@ -329,28 +333,38 @@ def _holdout_boundary_audit_frame(entries: list[dict[str, Any]], settings: dict[
     rows = []
     for entry in entries:
         row = entry.get("diagnostics", {}).get("row", {}) or {}
+        fold_scope = str(entry.get("fold_scope", ""))
         data_start = str(row.get("data_start", ""))
         data_end = str(row.get("data_end", ""))
         reason = ""
         passed = False
+        blocking = True
+        raw_boundary_reached = False
         if not data_end:
             reason = "missing_entry_data_end"
         else:
             try:
                 end_ts = pd.to_datetime(data_end, utc=True)
-                passed = bool(end_ts < holdout_start)
-                if not passed:
+                raw_boundary_reached = bool(end_ts >= holdout_start)
+                passed = not raw_boundary_reached
+                if raw_boundary_reached and fold_scope.startswith("replacement_"):
+                    passed = True
+                    blocking = False
+                    reason = "replacement_preregistration_scope_after_retired_holdout_allowed"
+                elif not passed:
                     reason = "entry_data_end_reaches_reserved_holdout"
             except (TypeError, ValueError):
                 reason = "invalid_entry_data_end"
         rows.append(
             {
                 "profile": str(entry.get("profile", "")),
-                "fold_scope": str(entry.get("fold_scope", "")),
+                "fold_scope": fold_scope,
                 "data_start": data_start,
                 "data_end": data_end,
                 "holdout_data_start": str(holdout_start),
                 "passed": passed,
+                "blocking": blocking and not passed,
+                "raw_boundary_reached": raw_boundary_reached,
                 "reason": reason,
             }
         )
@@ -1129,6 +1143,7 @@ def _future_oos_candidate_plan_frame(
     settings: dict[str, Any],
     config: dict[str, Any],
     payoff_policy_robustness_summary: pd.DataFrame | None = None,
+    replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
@@ -1166,6 +1181,12 @@ def _future_oos_candidate_plan_frame(
         and frozen_primary in frozen_ids
         and future_protocol_enabled
     )
+    replacement_cfg = _cfg(
+        config,
+        ["experiments", "next_research_cycle", "replacement_candidate"],
+        {},
+    ) or {}
+    replacement_fit = replacement_candidate_fit or {}
     rows: list[dict[str, Any]] = []
 
     def weighted_blend_profiles(candidate: str) -> list[str]:
@@ -1196,6 +1217,9 @@ def _future_oos_candidate_plan_frame(
         current_holdout_mean_tb_return: float | None = None,
         current_holdout_payoff_alignment_fold_rate: float | None = None,
         current_holdout_reject_reason: str = "",
+        candidate_status_override: str = "",
+        evaluation_status_override: str = "",
+        promotion_allowed_override: bool | None = None,
     ) -> None:
         required = [str(profile) for profile in required_profiles or [] if str(profile)]
         missing_profiles = [profile for profile in required if profile not in profiles_cfg]
@@ -1211,6 +1235,8 @@ def _future_oos_candidate_plan_frame(
             candidate_status = "safe_control_baseline_reference"
         elif stage == "retired_frozen_policy":
             candidate_status = "historical_retired_policy_do_not_promote"
+        elif stage == "replacement_preregistration_candidate":
+            candidate_status = "replacement_candidate_fit_required"
         elif stage == "future_oos_score_band_policy":
             candidate_status = (
                 "pre_registered_future_oos_policy"
@@ -1228,6 +1254,8 @@ def _future_oos_candidate_plan_frame(
         candidate_label = candidate if not policy_name else f"{candidate} [{policy_name}]"
         if stage == "control_profile":
             evaluation_status = "baseline_reference_not_frozen_candidate"
+        elif stage == "replacement_preregistration_candidate":
+            evaluation_status = "replacement_preregistration_not_complete"
         elif is_retired:
             evaluation_status = "retired_do_not_evaluate"
         elif stage.startswith("future_oos") and not active_preregistration:
@@ -1236,6 +1264,18 @@ def _future_oos_candidate_plan_frame(
             evaluation_status = "wait_for_future_oos"
         else:
             evaluation_status = "ready_for_future_oos_review"
+        if candidate_status_override:
+            candidate_status = candidate_status_override
+        if evaluation_status_override:
+            evaluation_status = evaluation_status_override
+        promotion_allowed = (
+            row_preregistered
+            and bool(guard.get("future_oos_ready", False))
+            and bool(all_required_allowed)
+            and not is_retired
+        )
+        if promotion_allowed_override is not None:
+            promotion_allowed = bool(promotion_allowed_override)
         rows.append(
             {
                 "candidate_id": candidate_id,
@@ -1254,12 +1294,7 @@ def _future_oos_candidate_plan_frame(
                 "preferred_ready_at": ready_at["preferred_ready_at"],
                 "action": str(guard.get("action", "")),
                 "evaluation_status": evaluation_status,
-                "promotion_allowed_now": (
-                    row_preregistered
-                    and bool(guard.get("future_oos_ready", False))
-                    and bool(all_required_allowed)
-                    and not is_retired
-                ),
+                "promotion_allowed_now": promotion_allowed,
                 "note": note,
                 "policy_name": policy_name,
                 "policy_type": policy_type,
@@ -1294,6 +1329,77 @@ def _future_oos_candidate_plan_frame(
             stage="retired_frozen_policy",
             note=str(policy_review.get("note", "")),
         )
+
+    if bool(replacement_cfg.get("enabled", False)) or replacement_fit:
+        replacement_id = str(
+            replacement_fit.get("candidate_id")
+            or replacement_cfg.get("candidate_id")
+            or ""
+        ).strip()
+        replacement_profile = str(
+            replacement_fit.get("profile")
+            or replacement_cfg.get("profile")
+            or ""
+        ).strip()
+        if replacement_id and replacement_profile:
+            fit_status = str(
+                replacement_fit.get("status")
+                or replacement_cfg.get("status")
+                or ""
+            )
+            frozen_spec_status = str(
+                frozen_primary_spec.get("status", "")
+                if frozen_primary_spec
+                else ""
+            )
+            if active_preregistration and "pin_pending" in frozen_spec_status:
+                status_override = "pre_registered_manifest_pin_pending"
+                eval_override = "manifest_hash_pin_required"
+            elif active_preregistration:
+                status_override = "pre_registered_future_oos_candidate"
+                eval_override = (
+                    "wait_for_future_oos"
+                    if not bool(guard.get("future_oos_ready", False))
+                    else "ready_for_future_oos_review"
+                )
+            elif fit_status == "fit_complete_manifest_pin_required":
+                status_override = "replacement_fit_complete_manifest_pin_required"
+                eval_override = "manifest_hash_pin_required"
+            else:
+                status_override = "replacement_candidate_fit_required"
+                eval_override = "fit_replacement_candidate_before_manifest"
+            add_row(
+                candidate=replacement_id,
+                candidate_type=str(
+                    replacement_fit.get("candidate_type")
+                    or replacement_cfg.get("candidate_type")
+                    or "recency_profile"
+                ),
+                stage="replacement_preregistration_candidate",
+                required_profiles=[replacement_profile],
+                note=(
+                    "Replacement candidate selected from historical walk-forward CV. "
+                    "It requires an explicit frozen manifest hash pin before future-OOS evaluation."
+                ),
+                policy_name=str(
+                    replacement_fit.get("policy_name")
+                    or replacement_cfg.get("policy_name")
+                    or replacement_fit.get("policy")
+                    or replacement_cfg.get("policy")
+                    or ""
+                ),
+                policy_type=str(
+                    replacement_fit.get("policy")
+                    or replacement_cfg.get("policy")
+                    or replacement_fit.get("recency_policy")
+                    or replacement_cfg.get("recency_policy")
+                    or "equal_recent_k"
+                ),
+                selection_source="historical_walk_forward_recency_research",
+                candidate_status_override=status_override,
+                evaluation_status_override=eval_override,
+                promotion_allowed_override=False,
+            )
 
     future_items = [str(item) for item in policy_review.get("future_oos_candidates", []) or []]
     for item in future_items:
@@ -1390,6 +1496,7 @@ def _future_oos_candidate_plan_frame(
         return frame
     stage_order = {
         "control_profile": 0,
+        "replacement_preregistration_candidate": 10,
         "future_oos_candidate": 20,
         "future_oos_score_band_policy": 30,
         "retired_frozen_policy": 80,

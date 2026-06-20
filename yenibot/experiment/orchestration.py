@@ -202,6 +202,25 @@ __all__ = [
     'write_experiment_diagnostics',
 ]
 
+def _holdout_boundary_passed(audit: pd.DataFrame) -> bool:
+    """Return whether any blocking training scope reached the reserved holdout."""
+
+    if audit.empty:
+        return True
+    if "blocking" in audit.columns:
+        blocking = audit["blocking"].map(
+            lambda value: bool(value)
+            if isinstance(value, (bool,))
+            else str(value).strip().lower() in {"1", "true", "yes"}
+        )
+        passed = audit["passed"].map(
+            lambda value: bool(value)
+            if isinstance(value, (bool,))
+            else str(value).strip().lower() in {"1", "true", "yes"}
+        )
+        return not bool((blocking & ~passed).any())
+    return bool(audit["passed"].astype(bool).all())
+
 def _evaluate_holdout_candidates(
     *,
     profile_entries: list[dict[str, Any]],
@@ -998,7 +1017,7 @@ def write_experiment_diagnostics(
     profile_blend = _profile_blend_frame(entries)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
     holdout_boundary_audit = _holdout_boundary_audit_frame(entries, settings)
-    holdout_boundary_passed = bool(holdout_boundary_audit.empty or holdout_boundary_audit["passed"].astype(bool).all())
+    holdout_boundary_passed = _holdout_boundary_passed(holdout_boundary_audit)
     frozen_policy_robustness = _frozen_policy_robustness_frame(entries, diagnostic_config)
     frozen_policy_monitoring_plan = _frozen_policy_monitoring_plan_frame(diagnostic_config, settings)
     experiment_policy_guard = _experiment_policy_guard_frame(settings, diagnostic_config)
@@ -1231,6 +1250,12 @@ def write_experiment_diagnostics(
         publish_recency_research_reports(recency_research_dir, report_dir)
     )
     replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
+    future_oos_candidate_plan = _future_oos_candidate_plan_frame(
+        settings,
+        diagnostic_config,
+        payoff_policy_robustness_summary,
+        replacement_candidate_fit=replacement_candidate_fit,
+    )
     next_research_protocol = research_protocol_payload(
         diagnostic_config,
         phase2_readiness=decision.get("phase2_readiness", {}),

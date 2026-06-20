@@ -1275,6 +1275,10 @@ def _phase1_decision_ladder_payload(
         recommended_next_action = (
             "complete_seed_reproducibility_review_before_replacement_preregistration"
         )
+    elif only_future_oos_blocked and frozen_manifest_missing and replacement_fit_complete:
+        recommended_next_action = (
+            "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+        )
     elif only_future_oos_blocked and frozen_manifest_missing:
         recommended_next_action = (
             "select_and_preregister_replacement_candidate_from_historical_cv_only"

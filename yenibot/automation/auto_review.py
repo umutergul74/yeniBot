@@ -142,6 +142,24 @@ def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return [_json_ready(row) for row in frame.to_dict(orient="records")]
 
 
+def _holdout_boundary_blocking_failed(frame: pd.DataFrame, decision: dict[str, Any]) -> bool:
+    """Return true only for blocking holdout-boundary failures.
+
+    Replacement preregistration scopes may legitimately be fitted after a
+    retired holdout window because they define a new future-OOS anchor. Those
+    rows are still reported, but they must not force a stale "rerun 04 with
+    holdout split" action.
+    """
+
+    if frame.empty:
+        return not bool(decision.get("holdout_boundary_passed", True))
+    if "blocking" in frame.columns:
+        blocking = frame["blocking"].map(_to_bool)
+        passed = frame["passed"].map(lambda value: _to_bool(value, default=True))
+        return bool((blocking & ~passed).any())
+    return not bool(decision.get("holdout_boundary_passed", True))
+
+
 def _best_row(frame: pd.DataFrame, metric: str) -> dict[str, Any]:
     if frame.empty or metric not in frame.columns:
         return {}
@@ -529,6 +547,7 @@ def _next_action(
     decision: dict[str, Any],
     future_oos: dict[str, Any],
     frozen_candidate: dict[str, Any],
+    holdout_boundary_blocking_failed: bool = False,
     seed_reproducibility: dict[str, Any] | None = None,
     replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
@@ -539,7 +558,7 @@ def _next_action(
     if missing_profiles:
         reasons.append("selected_profiles_missing_from_comparison")
         return "fix_missing_selected_profiles", reasons
-    if not bool(decision.get("holdout_boundary_passed", True)):
+    if holdout_boundary_blocking_failed:
         reasons.append("holdout_boundary_audit_failed")
         return "rerun_training_with_holdout_split", reasons
     seed_repro = seed_reproducibility or {}
@@ -562,6 +581,16 @@ def _next_action(
     window_data_ready = bool(policy.get("future_oos_ready", False))
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
+    replacement = replacement_candidate_fit or {}
+    if (
+        not frozen_candidate_available
+        and replacement.get("status") == "fit_complete_manifest_pin_required"
+    ):
+        reasons.append("replacement_candidate_fit_complete_manifest_pin_required")
+        return (
+            "pin_replacement_candidate_manifest_and_activate_new_oos_anchor",
+            reasons,
+        )
     if not frozen_candidate_available:
         reasons.append("replacement_candidate_not_preregistered")
         return (
@@ -577,7 +606,6 @@ def _next_action(
     if bool(future_oos.get("evaluation_completed", False)) and not bool(
         future_oos.get("primary_candidate_passed", False)
     ):
-        replacement = replacement_candidate_fit or {}
         if replacement.get("status") == "fit_complete_manifest_pin_required":
             reasons.append("replacement_candidate_fit_complete_manifest_pin_required")
             return (
@@ -1099,6 +1127,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     comparison = _read_csv(report_path / "profile_comparison.csv")
     blends = _read_csv(report_path / "profile_blend.csv")
     holdout = _read_csv(report_path / "holdout_evaluation.csv")
+    holdout_boundary_audit = _read_csv(report_path / "holdout_boundary_audit.csv")
     policy_plan = _read_csv(report_path / "future_oos_candidate_plan.csv")
     fold_stability_summary = _read_csv(report_path / "fold_stability_summary.csv")
     fold_stability_forensics = _read_csv(report_path / "fold_stability_forensics.csv")
@@ -1163,6 +1192,10 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
     best_blend_lift = _best_row(blends, "top_10_lift_global")
     holdout_best = _best_holdout_rows(holdout)
     policy = _holdout_policy(report_path, decision)
+    holdout_boundary_failed = _holdout_boundary_blocking_failed(
+        holdout_boundary_audit,
+        decision,
+    )
     cv_promotable = _cv_promotable_candidates(full_frame, control_row)
     control_rank_ic_variance = {}
     if not rank_ic_variance.empty and "candidate" in rank_ic_variance.columns:
@@ -1251,6 +1284,7 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         decision=decision,
         future_oos=future_oos_readiness,
         frozen_candidate=frozen_candidate,
+        holdout_boundary_blocking_failed=holdout_boundary_failed,
         seed_reproducibility=seed_reproducibility,
         replacement_candidate_fit=replacement_candidate_fit,
     )
@@ -1285,6 +1319,8 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         "holdout": {
             "policy": policy,
             "best": holdout_best,
+            "boundary_audit": _records(holdout_boundary_audit),
+            "boundary_blocking_failed": holdout_boundary_failed,
             "diagnostic_only": True,
         },
         "future_oos": {

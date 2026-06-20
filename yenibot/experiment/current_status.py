@@ -68,6 +68,9 @@ def build_phase1_current_status(
     frozen_future_oos_passed = bool(
         model_performance_summary.get("frozen_future_oos_evidence_passed", False)
     )
+    ladder_next_action = str(
+        phase1_decision_ladder.get("recommended_next_action") or ""
+    )
 
     if phase2_ready:
         status = "phase2_ready_review_required"
@@ -76,8 +79,12 @@ def build_phase1_current_status(
         status = "seed_reproducibility_review_required"
         next_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
     elif frozen_missing:
-        status = "historical_model_evidence_passed_awaiting_replacement_preregistration"
-        next_action = "select_and_preregister_replacement_candidate_from_historical_cv_only"
+        if ladder_next_action.startswith("pin_replacement_candidate_manifest"):
+            status = "historical_model_evidence_passed_awaiting_replacement_manifest_pin"
+            next_action = ladder_next_action
+        else:
+            status = "historical_model_evidence_passed_awaiting_replacement_preregistration"
+            next_action = "select_and_preregister_replacement_candidate_from_historical_cv_only"
     elif bool(future_oos_readiness.get("ready_for_evaluation", False)) and not bool(
         future_oos_readiness.get("evaluation_completed", False)
     ):

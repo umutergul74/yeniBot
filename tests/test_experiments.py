@@ -677,6 +677,57 @@ def test_future_oos_candidate_plan_marks_active_frozen_candidate_as_preregistere
     assert candidate["evaluation_status"] == "wait_for_future_oos"
 
 
+def test_future_oos_candidate_plan_includes_replacement_fit_manifest_pin_candidate() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+        },
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control"],
+            "policy_review": {
+                "future_oos_monitor": {
+                    "enabled": True,
+                    "anchor_data_end": "2026-06-13 01:00:00+00:00",
+                    "min_new_bars": 720,
+                },
+            },
+            "next_research_cycle": {
+                "replacement_candidate": {
+                    "enabled": True,
+                    "candidate_id": "control_recent3_equal_v2",
+                    "profile": "control",
+                }
+            },
+            "future_oos_validation": {"enabled": True},
+        },
+    }
+    replacement_fit = {
+        "status": "fit_complete_manifest_pin_required",
+        "candidate_id": "control_recent3_equal_v2",
+        "profile": "control",
+        "policy": "equal_recent_k",
+    }
+
+    plan = _future_oos_candidate_plan_frame(
+        experiment_settings(config),
+        config,
+        replacement_candidate_fit=replacement_fit,
+    )
+    candidate = plan.loc[
+        plan["stage"].eq("replacement_preregistration_candidate")
+    ].iloc[0]
+
+    assert candidate["candidate"] == "control_recent3_equal_v2"
+    assert candidate["required_profiles"] == "control"
+    assert candidate["candidate_status"] == "replacement_fit_complete_manifest_pin_required"
+    assert candidate["evaluation_status"] == "manifest_hash_pin_required"
+    assert candidate["selection_source"] == "historical_walk_forward_recency_research"
+    assert bool(candidate["promotion_allowed_now"]) is False
+
+
 def test_holdout_signal_pass_is_separate_from_threshold_deployment_gate() -> None:
     config = {
         "validation": {
@@ -2030,6 +2081,48 @@ def test_current_status_prefers_artifact_state_over_stale_protocol_text() -> Non
     assert status["replacement_preregistration_required"] is True
 
 
+def test_current_status_routes_replacement_fit_to_manifest_pin() -> None:
+    seed_audit = pd.DataFrame(
+        [
+            {
+                "comparison_role": "same_seed_reproduction",
+                "reproducibility_status": "same_seed_reproduced",
+            }
+        ]
+    )
+
+    status = build_phase1_current_status(
+        run_id="run",
+        control_profile="control",
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["frozen_candidate_manifest_unavailable"],
+        },
+        model_performance_summary={
+            "historical_walk_forward_evidence_passed": True,
+            "model_evidence_passed": True,
+            "frozen_future_oos_evidence_passed": False,
+        },
+        phase1_decision_ladder={
+            "recommended_next_action": "pin_replacement_candidate_manifest_and_activate_new_oos_anchor",
+            "run_04_required_now": False,
+            "run_05_first": True,
+        },
+        next_research_protocol={},
+        future_oos_preflight={"state": "awaiting_replacement_preregistration"},
+        future_oos_readiness={"ready_for_evaluation": False},
+        seed_reproducibility_audit=seed_audit,
+        training_execution={"training_executed_count": 0},
+    )
+
+    assert status["current_status"] == (
+        "historical_model_evidence_passed_awaiting_replacement_manifest_pin"
+    )
+    assert status["next_action"] == (
+        "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+    )
+
+
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:
     config = {"experiments": {"diagnostics": {"prediction_error_audit_rows_per_case": 2}}}
     rows = []
@@ -2528,6 +2621,16 @@ def test_holdout_boundary_audit_rejects_entries_inside_reserved_holdout() -> Non
                 }
             },
         },
+        {
+            "profile": "replacement_fit",
+            "fold_scope": "replacement_recent3",
+            "diagnostics": {
+                "row": {
+                    "data_start": "2026-05-23 01:00:00+00:00",
+                    "data_end": "2026-05-25 01:00:00+00:00",
+                }
+            },
+        },
     ]
 
     audit = _holdout_boundary_audit_frame(entries, settings)
@@ -2535,7 +2638,15 @@ def test_holdout_boundary_audit_rejects_entries_inside_reserved_holdout() -> Non
     assert bool(audit.loc[audit["profile"].eq("control"), "passed"].iloc[0]) is True
     rejected = audit.loc[audit["profile"].eq("old_run")].iloc[0]
     assert bool(rejected["passed"]) is False
+    assert bool(rejected["blocking"]) is True
     assert rejected["reason"] == "entry_data_end_reaches_reserved_holdout"
+    replacement = audit.loc[audit["profile"].eq("replacement_fit")].iloc[0]
+    assert bool(replacement["passed"]) is True
+    assert bool(replacement["blocking"]) is False
+    assert bool(replacement["raw_boundary_reached"]) is True
+    assert replacement["reason"] == (
+        "replacement_preregistration_scope_after_retired_holdout_allowed"
+    )
 
 
 def test_frozen_policy_robustness_uses_configured_score_band() -> None:
