@@ -256,6 +256,8 @@ def _missing_required_files(
                 [
                     "replacement_candidate_fit.json",
                     "replacement_candidate_fit.md",
+                    "replacement_preregistration_patch.json",
+                    "replacement_preregistration_patch.md",
                 ]
             )
     return [name for name in required if not (report_dir / name).exists()]

@@ -126,6 +126,111 @@ def _replacement_markdown(payload: dict[str, Any]) -> str:
     )
 
 
+def _preregistration_patch_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build the explicit config patch required after replacement fitting.
+
+    The patch intentionally leaves ``expected_manifest_hash`` as a manual pin.
+    That keeps the workflow two-step and prevents diagnostics-only edits from
+    silently activating a future-OOS candidate.
+    """
+
+    candidate_id = str(payload.get("candidate_id", ""))
+    source_run_id = str(payload.get("source_run_id", ""))
+    anchor_data_end = str(payload.get("anchor_data_end", ""))
+    threshold = dict(payload.get("threshold", {}) or {})
+    candidate_spec = {
+        "candidate_id": candidate_id,
+        "candidate_type": "recency_profile",
+        "profile": str(payload.get("profile", "")),
+        "source_run_id": source_run_id,
+        "anchor_data_end": anchor_data_end,
+        "fold_scope": str(payload.get("fold_scope", "replacement_recent3")),
+        "recency_policy": "equal_recent_k",
+        "recent_k": int(payload.get("recent_k", 3) or 3),
+        "threshold": threshold,
+        "status": "preregistered_manifest_pin_pending",
+        "required_for_evaluation": True,
+        "expected_manifest_hash": "<fill_after_05_generates_manifest_hash>",
+    }
+    return {
+        "status": "replacement_fit_complete_manifest_pin_required",
+        "candidate_id": candidate_id,
+        "source_run_id": source_run_id,
+        "anchor_data_end": anchor_data_end,
+        "manual_pin_required": True,
+        "same_window_selection_allowed": False,
+        "failed_future_oos_used_for_policy_selection": False,
+        "stage_1_unpinned_config_patch": {
+            "experiments": {
+                "frozen_candidates": {
+                    "enabled": True,
+                    "lifecycle_state": "replacement_candidate_preregistered_manifest_pin_pending",
+                    "protocol_version": "v1",
+                    "anchor_run_id": source_run_id,
+                    "anchor_data_end": anchor_data_end,
+                    "primary_candidate_id": candidate_id,
+                    "artifact_policy": (
+                        "reference_and_hash_existing_pre_anchor_fold_artifacts; "
+                        "never_refit_during_future_oos_evaluation"
+                    ),
+                    "candidates": [candidate_spec],
+                },
+                "future_oos_validation": {
+                    "enabled": True,
+                    "pause_reason": (
+                        "Enabled only after replacement candidate fit. "
+                        "Evaluation remains blocked until expected_manifest_hash "
+                        "is pinned and enough new rows mature after anchor."
+                    ),
+                },
+                "next_research_cycle": {
+                    "status": "replacement_fit_complete_manifest_pin_required",
+                    "replacement_candidate": {
+                        "enabled": False,
+                        "status": "fit_complete_manifest_pin_required",
+                        "candidate_id": candidate_id,
+                    },
+                },
+            }
+        },
+        "stage_2_pin_instruction": (
+            "Run notebook 05 once with the stage_1 patch, copy the generated "
+            "manifest_hash from frozen_candidate_index.csv into "
+            "expected_manifest_hash, then rerun notebook 05. Do not evaluate "
+            "future OOS until preflight passes all manifest checks."
+        ),
+    }
+
+
+def _preregistration_patch_markdown(payload: dict[str, Any]) -> str:
+    patch = payload.get("stage_1_unpinned_config_patch", {})
+    return "\n".join(
+        [
+            "# Replacement Candidate Preregistration Patch",
+            "",
+            f"- Status: `{payload.get('status')}`",
+            f"- Candidate: `{payload.get('candidate_id')}`",
+            f"- Source run: `{payload.get('source_run_id')}`",
+            f"- Anchor: `{payload.get('anchor_data_end')}`",
+            "- Manual manifest hash pin required: `True`",
+            "- Failed future-OOS used for policy selection: `False`",
+            "",
+            "## Stage 1",
+            "",
+            "Apply the JSON-equivalent config patch below, then run notebook 05.",
+            "",
+            "```json",
+            json.dumps(patch, indent=2, sort_keys=True),
+            "```",
+            "",
+            "## Stage 2",
+            "",
+            str(payload.get("stage_2_pin_instruction", "")),
+            "",
+        ]
+    )
+
+
 def run_replacement_candidate_fit(
     *,
     frame: pd.DataFrame,
@@ -257,10 +362,19 @@ def run_replacement_candidate_fit(
         "manifest_pin_required": True,
         "promotion_allowed": False,
     }
+    preregistration_patch = _preregistration_patch_payload(payload)
     scope_path = Path(result["output_dir"])
     _write_json(scope_path / "replacement_candidate_fit.json", payload)
     (scope_path / "replacement_candidate_fit.md").write_text(
         _replacement_markdown(payload),
+        encoding="utf-8",
+    )
+    _write_json(
+        scope_path / "replacement_preregistration_patch.json",
+        preregistration_patch,
+    )
+    (scope_path / "replacement_preregistration_patch.md").write_text(
+        _preregistration_patch_markdown(preregistration_patch),
         encoding="utf-8",
     )
     _write_json(run_path / "replacement_candidate_fit.json", payload)
@@ -268,9 +382,18 @@ def run_replacement_candidate_fit(
         _replacement_markdown(payload),
         encoding="utf-8",
     )
+    _write_json(
+        run_path / "replacement_preregistration_patch.json",
+        preregistration_patch,
+    )
+    (run_path / "replacement_preregistration_patch.md").write_text(
+        _preregistration_patch_markdown(preregistration_patch),
+        encoding="utf-8",
+    )
     return {
         **payload,
         "output_dir": scope_path,
+        "preregistration_patch": preregistration_patch,
         "summary": result.get("summary", {}),
     }
 
@@ -286,8 +409,43 @@ def publish_replacement_candidate_reports(
     target.mkdir(parents=True, exist_ok=True)
     payload_path = source / "replacement_candidate_fit.json"
     if not payload_path.exists():
-        return {"available": False, "status": "replacement_fit_not_run"}
-    for name in ("replacement_candidate_fit.json", "replacement_candidate_fit.md"):
+        payload = {
+            "available": False,
+            "enabled": None,
+            "status": "replacement_fit_not_run",
+            "manifest_pin_required": False,
+            "promotion_allowed": False,
+            "next_action": (
+                "run_notebook_04_with_historical_recency_research_enabled; "
+                "if historical gates pass, fit the replacement candidate"
+            ),
+        }
+        patch = {
+            "status": "replacement_fit_not_run",
+            "manual_pin_required": False,
+            "stage_1_unpinned_config_patch": {},
+            "stage_2_pin_instruction": (
+                "No replacement fit artifact exists yet, so no frozen "
+                "candidate manifest can be pinned."
+            ),
+        }
+        _write_json(target / "replacement_candidate_fit.json", payload)
+        (target / "replacement_candidate_fit.md").write_text(
+            _replacement_markdown(payload),
+            encoding="utf-8",
+        )
+        _write_json(target / "replacement_preregistration_patch.json", patch)
+        (target / "replacement_preregistration_patch.md").write_text(
+            _preregistration_patch_markdown(patch),
+            encoding="utf-8",
+        )
+        return payload
+    for name in (
+        "replacement_candidate_fit.json",
+        "replacement_candidate_fit.md",
+        "replacement_preregistration_patch.json",
+        "replacement_preregistration_patch.md",
+    ):
         item = source / name
         if item.exists():
             shutil.copy2(item, target / name)

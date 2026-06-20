@@ -227,6 +227,8 @@ def _write_experiment_bundle(
         "recency_ensemble_manifest.json",
         "replacement_candidate_fit.json",
         "replacement_candidate_fit.md",
+        "replacement_preregistration_patch.json",
+        "replacement_preregistration_patch.md",
         "experiment_registry_snapshot.jsonl",
         "payoff_alignment.csv",
         "payoff_alignment_summary.csv",

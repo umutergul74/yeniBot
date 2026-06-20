@@ -22,8 +22,11 @@ The current safe control profile is configured in `config.yaml`:
   evaluation on June 13, 2026 and failed. It is retired and must not be tuned
   or retested on that same window.
 - `experiments.research_focus.mode`: `walk_forward_cv_repair`
-- Future-OOS and recency replacement work is paused, not erased. Phase 2 remains
-  blocked while the historical walk-forward failure mechanism is repaired.
+- `experiments.next_research_cycle.status`: `replacement_preregistration_research`
+- Future-OOS scoring remains paused, but historical-CV recency replacement
+  research and replacement-candidate fit are enabled. Phase 2 remains blocked
+  until the replacement fit completes, its frozen manifest hash is explicitly
+  pinned, and a new future-OOS window passes.
 - The active frozen-candidate slot is intentionally empty after the failed
   June 13 candidate. The old manifest lives in immutable historical reports
   and `frozen_candidate_outcomes`; do not regenerate or re-hash it as a current

@@ -155,6 +155,14 @@ def test_replacement_fit_uses_fixed_policy_anchor_and_validation_only(
     assert result["failed_future_oos_used_for_policy_selection"] is False
     assert result["manifest_pin_required"] is True
     assert (run_dir / "replacement_candidate_fit.json").exists()
+    patch_path = run_dir / "replacement_preregistration_patch.json"
+    assert patch_path.exists()
+    patch = json.loads(patch_path.read_text(encoding="utf-8"))
+    assert patch["manual_pin_required"] is True
+    frozen = patch["stage_1_unpinned_config_patch"]["experiments"]["frozen_candidates"]
+    assert frozen["primary_candidate_id"] == "control_recent3_v2"
+    assert frozen["anchor_data_end"] == anchor.isoformat()
+    assert frozen["candidates"][0]["expected_manifest_hash"].startswith("<fill_after_05")
 
 
 def test_replacement_fit_rejects_policy_not_selected_historically(
@@ -265,3 +273,25 @@ def test_replacement_manifest_freezes_threshold_policy_and_three_models(
     assert manifest["threshold"]["value"] == pytest.approx(0.42)
     assert manifest["selection_evidence_hash"] == "selection-evidence"
     assert int(index.iloc[0]["model_count"]) == 3
+
+
+def test_publish_replacement_reports_writes_placeholder_when_fit_missing(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "run"
+    target = tmp_path / "reports"
+    source.mkdir()
+
+    payload = replacement.publish_replacement_candidate_reports(source, target)
+
+    assert payload["status"] == "replacement_fit_not_run"
+    assert (target / "replacement_candidate_fit.json").exists()
+    assert (target / "replacement_candidate_fit.md").exists()
+    assert (target / "replacement_preregistration_patch.json").exists()
+    assert (target / "replacement_preregistration_patch.md").exists()
+    patch = json.loads(
+        (target / "replacement_preregistration_patch.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert patch["stage_1_unpinned_config_patch"] == {}

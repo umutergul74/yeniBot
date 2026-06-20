@@ -2030,7 +2030,7 @@ experiments:
     candidates: []
   future_oos_validation:
     enabled: false
-    pause_reason: "Paused after immutable candidate failure while walk-forward CV feature reliability is repaired. Phase 2 remains blocked."
+    pause_reason: "Paused until the replacement candidate fit is complete and its frozen manifest hash is explicitly pinned. Phase 2 remains blocked."
     min_rows: 720
     preferred_rows: 2160
     block_length: 24
@@ -2064,13 +2064,13 @@ experiments:
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
   next_research_cycle:
-    status: current_code_reproducibility_retrain
+    status: replacement_preregistration_research
     source_failed_candidate_id: control_fold_ensemble_v1
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
-    primary_hypothesis: null
-    next_action: "Run notebook 04, then 05. Recreate the full control and same-seed audit under the current training-code signature before interpreting seed or runtime drift."
+    primary_hypothesis: historical_cv_recency_replacement_preregistration
+    next_action: "Run notebook 04, then 05. Notebook 04 must select any replacement policy from historical walk-forward CV only, fit the replacement candidate through the new anchor, and leave future-OOS promotion blocked until the generated manifest hash is pinned."
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2081,7 +2081,7 @@ experiments:
       embargo_bars: 6
       selection_rule: compare_only_on_historical_walk_forward_test_windows
     recency_ensemble:
-      enabled: false
+      enabled: true
       policies:
         - {name: all_eligible_equal, policy: equal_all_eligible}
         - {name: latest_only, policy: latest_only}
@@ -2132,7 +2132,7 @@ experiments:
       failed_future_oos_use: diagnostics_only_no_policy_selection
       promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
     replacement_candidate:
-      enabled: false
+      enabled: true
       candidate_id: control_recent3_equal_v2
       candidate_type: recency_profile
       profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -2147,7 +2147,8 @@ experiments:
       resume_existing: true
       force_retrain: false
       failed_future_oos_use: fit_only_after_retirement_never_policy_selection
-      status: paused_after_fit_for_walk_forward_cv_repair
+      require_recency_decision_ready: true
+      status: enabled_for_historical_cv_preregistration_build
       promotion_allowed: false
   experiment_memory:
     enabled: true
