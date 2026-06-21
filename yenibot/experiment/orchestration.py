@@ -1255,6 +1255,7 @@ def write_experiment_diagnostics(
         future_oos_readiness=future_oos_readiness,
         frozen_candidate_index=frozen_candidate_index,
         seed_reproducibility_audit=seed_reproducibility_audit,
+        replacement_candidate_fit=replacement_candidate_fit,
     )
     _write_json(
         report_dir / "next_research_protocol.json",
@@ -1571,6 +1572,7 @@ def write_experiment_diagnostics(
         future_oos_readiness=future_oos_readiness,
         frozen_candidate_index=frozen_candidate_index,
         seed_reproducibility_audit=seed_reproducibility_audit,
+        replacement_candidate_fit=replacement_candidate_fit,
     )
     _write_json(report_dir / "next_research_protocol.json", next_research_protocol)
     (report_dir / "next_research_protocol.md").write_text(

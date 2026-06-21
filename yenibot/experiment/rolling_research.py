@@ -246,6 +246,7 @@ def research_protocol_payload(
     future_oos_readiness: dict[str, Any] | None = None,
     frozen_candidate_index: pd.DataFrame | None = None,
     seed_reproducibility_audit: pd.DataFrame | None = None,
+    replacement_candidate_fit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Expose the immutable rules for the next research cycle in reports."""
 
@@ -257,6 +258,10 @@ def research_protocol_payload(
     future_readiness = future_oos_readiness or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
     artifact_override = phase2_readiness is not None
+    replacement_fit = replacement_candidate_fit or {}
+    replacement_fit_complete = (
+        replacement_fit.get("status") == "fit_complete_manifest_pin_required"
+    )
     frozen_available = bool(
         frozen_candidate_index is not None
         and not frozen_candidate_index.empty
@@ -284,6 +289,9 @@ def research_protocol_payload(
     ):
         current_status = "seed_reproducibility_review_required"
         current_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
+    elif artifact_override and replacement_fit_complete:
+        current_status = "replacement_fit_complete_manifest_pin_required"
+        current_action = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
     elif artifact_override and (
         "frozen_candidate_manifest_unavailable" in blockers or not frozen_available
     ):
@@ -322,6 +330,14 @@ def research_protocol_payload(
         "rolling_origin": cycle.get("rolling_origin", {}),
         "recency_ensemble": cycle.get("recency_ensemble", {}),
         "replacement_candidate": cycle.get("replacement_candidate", {}),
+        "replacement_candidate_fit_status": replacement_fit.get("status"),
+        "replacement_candidate_id": replacement_fit.get(
+            "candidate_id",
+            (cycle.get("replacement_candidate", {}) or {}).get("candidate_id"),
+        ),
+        "replacement_manifest_pin_required": bool(
+            replacement_fit.get("manifest_pin_required", False)
+        ),
         "phase2_code_allowed": False,
     }
 
@@ -337,6 +353,9 @@ def research_protocol_markdown(protocol: dict[str, Any]) -> str:
             f"- Current blockers: `{', '.join(protocol.get('current_blockers') or []) or 'none'}`",
             f"- Seed reproducibility passed: `{protocol.get('seed_reproducibility_passed')}`",
             f"- Frozen candidate manifest available: `{protocol.get('frozen_candidate_manifest_available')}`",
+            f"- Replacement candidate fit status: `{protocol.get('replacement_candidate_fit_status')}`",
+            f"- Replacement candidate id: `{protocol.get('replacement_candidate_id')}`",
+            f"- Replacement manifest pin required: `{protocol.get('replacement_manifest_pin_required')}`",
             f"- Future-OOS preflight state: `{protocol.get('future_oos_preflight_state')}`",
             f"- Failed candidate: `{protocol.get('source_failed_candidate_id')}`",
             f"- Failed OOS role: `{protocol.get('failed_oos_role')}`",

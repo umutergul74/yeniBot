@@ -87,6 +87,7 @@ from yenibot.experiment.seed_reproducibility import (
     _write_seed_reproducibility_files,
 )
 from yenibot.experiment.ensembles import _write_profile_blend_files
+from yenibot.experiment.rolling_research import research_protocol_payload
 
 
 def _labeled_frame(synthetic_klines, config: dict, *, periods: int = 220) -> tuple[pd.DataFrame, list[str]]:
@@ -2010,6 +2011,46 @@ def test_root_cause_uses_readiness_check_and_preserves_new_anchor_requirement() 
     )
     assert ladder["frozen_candidate_manifest_missing"] is True
     assert ladder["seed_review_pending"] is False
+
+
+def test_research_protocol_routes_completed_replacement_fit_to_manifest_pin() -> None:
+    protocol = research_protocol_payload(
+        {
+            "experiments": {
+                "next_research_cycle": {
+                    "status": "replacement_preregistration_research",
+                    "next_action": "select_and_preregister_replacement_candidate_from_historical_cv_only",
+                    "same_window_selection_allowed": False,
+                    "new_future_oos_anchor_required": True,
+                    "replacement_candidate": {
+                        "candidate_id": "control_recent3_equal_v2",
+                    },
+                }
+            }
+        },
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["frozen_candidate_manifest_unavailable"],
+        },
+        future_oos_preflight={"state": "awaiting_replacement_preregistration"},
+        future_oos_readiness={"ready_for_evaluation": False},
+        frozen_candidate_index=pd.DataFrame(),
+        replacement_candidate_fit={
+            "status": "fit_complete_manifest_pin_required",
+            "candidate_id": "control_recent3_equal_v2",
+            "manifest_pin_required": True,
+        },
+    )
+
+    assert protocol["status"] == "replacement_fit_complete_manifest_pin_required"
+    assert protocol["next_action"] == (
+        "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+    )
+    assert protocol["replacement_candidate_fit_status"] == (
+        "fit_complete_manifest_pin_required"
+    )
+    assert protocol["replacement_candidate_id"] == "control_recent3_equal_v2"
+    assert protocol["replacement_manifest_pin_required"] is True
 
 
 def test_decision_ladder_keeps_seed_review_action_when_seed_blocker_present() -> None:
