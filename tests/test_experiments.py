@@ -2940,11 +2940,24 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "superseded_not_active"
     assert config["validation"]["charter"]["versions"]["v4_evidence"]["status"] == "active"
     frozen = config["experiments"]["frozen_candidates"]
-    assert frozen["lifecycle_state"] == "awaiting_replacement_preregistration"
-    assert frozen["primary_candidate_id"] is None
-    assert frozen["anchor_data_end"] is None
-    assert frozen["candidates"] == []
-    assert config["experiments"]["future_oos_validation"]["enabled"] is False
+    assert frozen["lifecycle_state"] == "replacement_candidate_preregistered_manifest_pin_pending"
+    assert frozen["primary_candidate_id"] == "control_recent3_equal_v2"
+    assert frozen["anchor_run_id"] == "20260621_075454"
+    assert frozen["anchor_data_end"] == "2026-06-13T01:00:00+00:00"
+    assert len(frozen["candidates"]) == 1
+    frozen_candidate = frozen["candidates"][0]
+    assert frozen_candidate["candidate_id"] == "control_recent3_equal_v2"
+    assert frozen_candidate["profile"] == (
+        "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility"
+    )
+    assert frozen_candidate["source_run_id"] == "20260621_075454"
+    assert frozen_candidate["status"] == "preregistered_manifest_pin_pending"
+    assert frozen_candidate["expected_manifest_hash"].startswith("<fill_after_05")
+    assert frozen_candidate["threshold"]["guarded"] is True
+    assert frozen_candidate["threshold"]["selected_from"] == (
+        "pre_anchor_latest_fold_validation_only"
+    )
+    assert config["experiments"]["future_oos_validation"]["enabled"] is True
     assert config["experiments"]["future_oos_validation"]["min_rows"] == 720
     assert config["experiments"]["future_oos_validation"]["gates"]["min_rank_ic"] == 0.03
     robustness = config["experiments"]["policy_review"]["robustness"]
@@ -3012,7 +3025,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert {7, 8, 22, 30, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
-    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is True
+    assert config["experiments"]["next_research_cycle"]["status"] == (
+        "replacement_fit_complete_manifest_pin_required"
+    )
+    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
+    assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
+        "fit_complete_manifest_pin_required"
+    )
     assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is True
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
     mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]

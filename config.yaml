@@ -2091,16 +2091,36 @@ experiments:
         - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
   frozen_candidates:
     enabled: true
-    lifecycle_state: awaiting_replacement_preregistration
+    lifecycle_state: replacement_candidate_preregistered_manifest_pin_pending
     protocol_version: v1
-    anchor_run_id: null
-    anchor_data_end: null
-    primary_candidate_id: null
-    artifact_policy: "reference_and_hash_existing_pre_anchor_fold_artifacts; never refit during future OOS evaluation"
-    candidates: []
+    anchor_run_id: "20260621_075454"
+    anchor_data_end: "2026-06-13T01:00:00+00:00"
+    primary_candidate_id: control_recent3_equal_v2
+    artifact_policy: "reference_and_hash_existing_pre_anchor_fold_artifacts; never_refit_during_future_oos_evaluation"
+    candidates:
+      - candidate_id: control_recent3_equal_v2
+        candidate_type: recency_profile
+        profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+        fold_scope: replacement_recent3
+        recency_policy: equal_recent_k
+        recent_k: 3
+        source_run_id: "20260621_075454"
+        anchor_data_end: "2026-06-13T01:00:00+00:00"
+        required_for_evaluation: true
+        status: preregistered_manifest_pin_pending
+        expected_manifest_hash: "<fill_after_05_generates_manifest_hash>"
+        threshold:
+          guarded: true
+          selected_from: pre_anchor_latest_fold_validation_only
+          source: replacement_recent3_common_validation_guarded_f1
+          validation_f1: 0.4601611459265891
+          validation_precision: 0.33994708994708994
+          validation_pred_long_rate: 0.7
+          validation_recall: 0.7119113573407202
+          value: 0.42674046854178105
   future_oos_validation:
-    enabled: false
-    pause_reason: "Paused until the replacement candidate fit is complete and its frozen manifest hash is explicitly pinned. Phase 2 remains blocked."
+    enabled: true
+    pause_reason: "Enabled only after replacement candidate fit. Evaluation remains blocked until expected_manifest_hash is pinned and enough new rows mature after anchor."
     min_rows: 720
     preferred_rows: 2160
     block_length: 24
@@ -2134,13 +2154,13 @@ experiments:
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
   next_research_cycle:
-    status: replacement_preregistration_research
+    status: replacement_fit_complete_manifest_pin_required
     source_failed_candidate_id: control_fold_ensemble_v1
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
     primary_hypothesis: historical_cv_recency_replacement_preregistration
-    next_action: "Run notebook 04, then 05. Notebook 04 must select any replacement policy from historical walk-forward CV only, fit the replacement candidate through the new anchor, and leave future-OOS promotion blocked until the generated manifest hash is pinned."
+    next_action: "Run notebook 05 once, copy the generated manifest_hash from frozen_candidate_index.csv into expected_manifest_hash, then rerun notebook 05. Do not evaluate future OOS until preflight passes all manifest checks."
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2202,7 +2222,7 @@ experiments:
       failed_future_oos_use: diagnostics_only_no_policy_selection
       promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
     replacement_candidate:
-      enabled: true
+      enabled: false
       candidate_id: control_recent3_equal_v2
       candidate_type: recency_profile
       profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -2212,13 +2232,13 @@ experiments:
       selection_track: balanced_noninferiority
       selection_data: historical_walk_forward_only
       anchor_data_end: "2026-06-13 01:00:00+00:00"
-      source_run_id: "20260613_134953"
+      source_run_id: "20260621_075454"
       fold_scope: replacement_recent3
       resume_existing: true
       force_retrain: false
       failed_future_oos_use: fit_only_after_retirement_never_policy_selection
       require_recency_decision_ready: true
-      status: enabled_for_historical_cv_preregistration_build
+      status: fit_complete_manifest_pin_required
       promotion_allowed: false
   experiment_memory:
     enabled: true
