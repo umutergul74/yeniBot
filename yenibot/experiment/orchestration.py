@@ -52,10 +52,7 @@ from yenibot.experiment.configuration import (
     profile_config,
     resolve_experiment_run_id,
 )
-from yenibot.experiment.current_status import (
-    build_phase1_current_status,
-    write_phase1_current_status,
-)
+from yenibot.experiment.current_status import build_phase1_current_status, write_phase1_current_status
 from yenibot.experiment.drift import (
     _feature_drift_forensics_frame,
     _feature_family_drift_summary_frame,
@@ -92,12 +89,7 @@ from yenibot.experiment.ensembles import (
     _write_seed_audit_files,
     _write_seed_ensemble_files,
 )
-from yenibot.experiment.execution import (
-    diagnostics_status_path,
-    traced_workflow,
-    training_status_path,
-    workflow_checkpoint,
-)
+from yenibot.experiment.execution import diagnostics_status_path, traced_workflow, training_status_path, workflow_checkpoint
 from yenibot.experiment.evidence import (
     _model_evidence_uncertainty_frame,
     _probability_calibration_comparison_frames,
@@ -154,6 +146,7 @@ from yenibot.experiment.rank_ic import (
     _write_rank_ic_stability_evidence,
     _write_rank_ic_uncertainty,
 )
+from yenibot.experiment.report_consistency import write_report_consistency_audit
 from yenibot.experiment.registry import append_experiment_registry
 from yenibot.experiment.root_cause import (
     _bad_fold_mechanism_summary_frame,
@@ -166,11 +159,7 @@ from yenibot.experiment.root_cause import (
     _write_phase1_blocker_action_plan,
     _write_root_cause_reports,
 )
-from yenibot.experiment.rolling_research import (
-    publish_recency_research_reports,
-    research_protocol_markdown,
-    research_protocol_payload,
-)
+from yenibot.experiment.rolling_research import publish_recency_research_reports, research_protocol_markdown, research_protocol_payload
 from yenibot.experiment.replacement import publish_replacement_candidate_reports
 from yenibot.experiment.seed_audit import run_seed_audit_extension
 from yenibot.experiment.seed_reproducibility import _seed_reproducibility_reports, _write_seed_reproducibility_files
@@ -1605,6 +1594,9 @@ def write_experiment_diagnostics(
         decision_ladder=phase1_decision_ladder,
     )
     _write_decision_files(report_dir, comparison, decision)
+    operator_next_step = write_report_consistency_audit(report_dir)
+    decision["operator_next_step"] = operator_next_step
+    _write_decision_files(report_dir, comparison, decision)
     _write_decision_files(run_dir, comparison, decision)
     write_model_performance_dashboard(
         run_dir,
@@ -1783,6 +1775,7 @@ def write_experiment_diagnostics(
         "holdout_entries": holdout_entries,
         "missing_selected_profiles": missing_selected,
         "decision": decision,
+        "operator_next_step": operator_next_step,
         "zip_paths": zip_paths,
         "write_full_bundles": bool(write_full_bundles),
         "bundle_zip": str(bundle_path) if bundle_path is not None else None,

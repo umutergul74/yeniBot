@@ -339,6 +339,8 @@ Required diagnostic artifacts include:
 - `model_metric_definitions.csv`
 - `model_calibration_reliability.csv`
 - `model_precision_recall_curve.csv`
+- `report_consistency_audit.csv`
+- `operator_next_step.json`
 - `model_evidence_uncertainty.csv`
 - `probability_calibration_comparison.csv`
 - `probability_calibration_comparison_by_fold.csv`

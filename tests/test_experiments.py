@@ -4590,6 +4590,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/auto_review.md" in archive.namelist()
         assert "matrix/next_actions.json" in archive.namelist()
         assert "matrix/phase2_readiness.json" in archive.namelist()
+        assert "matrix/report_consistency_audit.csv" in archive.namelist()
+        assert "matrix/operator_next_step.json" in archive.namelist()
         assert "matrix/phase1_transition_plan.json" in archive.namelist()
         assert "matrix/model_performance_dashboard.md" in archive.namelist()
         assert "matrix/model_performance_scorecard.csv" in archive.namelist()
@@ -4654,6 +4656,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/auto_review.md" in names
     assert "matrix/next_actions.json" in names
     assert "matrix/phase2_readiness.json" in names
+    assert "matrix/report_consistency_audit.csv" in names
+    assert "matrix/operator_next_step.json" in names
     assert "matrix/phase1_transition_plan.json" in names
     assert all("/diagnostics/" not in name for name in names)
 
