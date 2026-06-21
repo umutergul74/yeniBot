@@ -2873,9 +2873,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_plus_4h_taker_flow_term_structure",
-    ]
+    assert config["experiments"]["candidate_profiles"] == []
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
     assert config["experiments"]["profile_blends"]["weighted"] == []
@@ -3404,13 +3402,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh"
         not in config["experiments"]["policy_review"]["future_oos_candidates"]
     )
-    assert config["validation"]["score_reversal_context"]["proposed_profiles"][0]["profile"] == (
-        "baseline_stable_plus_4h_taker_flow_term_structure"
-    )
+    assert config["validation"]["score_reversal_context"]["proposed_profiles"] == []
     assert (
         "baseline_stable_plus_4h_taker_flow_term_structure"
-        not in config["experiments"]["experiment_memory"]["rejected_profiles"]
+        in config["experiments"]["experiment_memory"]["rejected_profiles"]
     )
+    rejected = set(config["experiments"]["experiment_memory"]["rejected_profiles"])
+    assert not (set(config["experiments"]["candidate_profiles"]) & rejected)
 
     intrahour_late = profile_config(config, "baseline_stable_plus_15m_late_order_flow")
     intrahour_late_columns = filter_feature_columns(columns, intrahour_late)

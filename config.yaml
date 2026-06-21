@@ -1973,18 +1973,7 @@ validation:
     min_positive_forward_return_fold_rate: 0.55
   score_reversal_context:
     enabled: true
-    proposed_profiles:
-      - profile: baseline_stable_plus_4h_taker_flow_term_structure
-        suspect_feature: 4h_taker_imbalance_mean_12
-        context_feature: 4h_taker_imbalance_mean_3,4h_taker_imbalance_mean_24
-        mechanism: causal_4h_taker_flow_term_structure_agreement
-        prior_failed_profiles:
-          - baseline_stable_no_4h_taker_mean12
-          - baseline_stable_no_slow_4h_bounded_flow
-          - baseline_stable_plus_4h_taker_mean12_ltr_context
-          - baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh
-          - baseline_stable_train_reliability_mask_4h_flow
-        why_not_repeat: "This keeps the control backbone and adds causal fast/slow 4H taker-flow agreement/spread features; it is not raw deletion, hard masking, train-only clipping, broad volatility interaction, large-trade-ratio gating, or a loss-only tweak."
+    proposed_profiles: []
   payoff_policy_robustness:
     min_mean_label_lift_vs_base: 1.05
     min_positive_label_lift_fold_rate: 0.60
@@ -2038,8 +2027,7 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles:
-    - baseline_stable_plus_4h_taker_flow_term_structure
+  candidate_profiles: []
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2058,8 +2046,9 @@ experiments:
       - train_only_large_trade_distribution_clipping
       - train_only_4h_flow_reliability_mask
       - train_only_clip_and_reliability_mask
-    conclusion: "Bundle 20260614_054446 produced no promotable candidate. Hard reliability masking increased fold dispersion and damaged positive-fold coverage; clipping was controlled but economically non-inferior evidence was insufficient."
-    next_step: "Keep the control profile. Test only the pre-registered 4H taker-flow term-structure agreement candidate on historical CV; it preserves raw control features and adds causal agreement/spread context instead of deleting, masking, clipping, or large-trade gating."
+      - causal_4h_taker_flow_term_structure_agreement
+    conclusion: "Bundle 20260620_203235 produced no promotable candidate. The term-structure agreement profile improved triage mean IC only slightly, but increased fold dispersion, reduced top-score payoff coverage, worsened worst-fold IC, and lost top-10 lift versus the control."
+    next_step: "Keep the control profile. Do not run another feature-profile search until the completed replacement candidate is explicitly pinned as a frozen manifest and evaluated on a new unseen OOS anchor."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2255,7 +2244,7 @@ experiments:
       baseline_stable_plus_4h_taker_mean12_ltr_context_no_raw_ltr: "Run 20260528_162902: no-raw-LTR conditional context had weak CV stability despite holdout-looking improvement; mean IC 0.0423, std 0.0957, positive folds 63.9%."
       baseline_stable_plus_4h_taker_mean12_ltr_context_stable_only: "Run 20260528_162902: stable-only conditional context remained below control; mean IC 0.0262, positive folds 63.9%, worst folds deteriorated."
       baseline_stable_plus_4h_taker_mean12_ltr_guarded_tanh: "Run 20260605_141414 rejected the guarded stable-tanh context hypothesis: mean IC 0.0393, std 0.0962, positive folds 66.7%, official F1 0.4044, worst-5 IC -0.1148. The low-pass guard itself became the top reversal suspect; do not rerun this family without a distinct mechanism."
-      baseline_stable_plus_4h_taker_flow_term_structure: "Pre-registered 2026-06-20: tests whether causal 4H taker-flow fast/slow agreement and spread can expose 12-bar score-reversal regimes while preserving the control backbone. Distinct from direct deletion, hard masking, clipping, large-trade-ratio gating, broad interactions, and loss-only tweaks."
+      baseline_stable_plus_4h_taker_flow_term_structure: "Bundle 20260620_203235: pre-registered causal 4H taker-flow fast/slow agreement/spread profile is archived as non-promotable. It slightly improved triage mean IC, but damaged fold dispersion, top-10 lift, top-10 positive-lift coverage, and worst-fold behavior versus the control."
       baseline_stable_plus_15m_flow_efficiency_rank: "Bundle 20260513_182426: not promotable as a standalone profile; keep inactive until selected-profile completeness is validated."
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
@@ -2293,6 +2282,8 @@ experiments:
         reason: "Run 20260528_214759: label-margin loss 0.05 lowered mean IC to 0.0695, increased std to 0.0803, reduced positive folds to 80.6%, and lowered official F1 to 0.4234 despite better top-10 lift."
       baseline_stable_return_pairwise_loss_light:
         reason: "Run 20260604_141520: forward-return pairwise loss lowered mean IC from 0.0734 to 0.0706, increased std to 0.0728, reduced positive folds to 83.3%, lowered official F1 to 0.4289, and weakened top-10 lift versus control."
+      baseline_stable_plus_4h_taker_flow_term_structure:
+        reason: "Bundle 20260620_203235: pre-registered term-structure agreement candidate was non-promotable. Versus triage control, mean IC rose only +0.0061 while std worsened to 0.1085, positive folds were only 66.7%, top-10 lift fell from 1.2276 to 1.1497, top-10 positive-lift fold rate fell to 50%, and worst-5 IC deteriorated."
       baseline_plus_4h_bounded_whale_stable_structure:
         reason: "Full stable-structure replacement reduced mean IC and increased instability versus the prior control."
       baseline_plus_4h_bounded_whale_no_4h_tier1_plus_4h_stable_overlay:
