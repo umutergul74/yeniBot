@@ -155,10 +155,12 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
         )
     )
 
+    frozen_available = bool(frozen.get("available", False))
     replacement_fit_complete = (
         replacement.get("status") == "fit_complete_manifest_pin_required"
     )
-    if replacement_fit_complete:
+    replacement_pin_pending = replacement_fit_complete and not frozen_available
+    if replacement_pin_pending:
         rows.append(
             _row(
                 check="replacement_fit_routes_to_manifest_pin",
@@ -174,7 +176,8 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
                 observed=(
                     f"actions={json.dumps(actions, sort_keys=True)}; "
                     f"protocol_status={protocol.get('status')}; "
-                    f"pin_required={protocol.get('replacement_manifest_pin_required')}"
+                    f"pin_required={protocol.get('replacement_manifest_pin_required')}; "
+                    f"frozen_available={frozen_available}"
                 ),
             )
         )
@@ -302,8 +305,11 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
         "replacement_candidate_fit_status": replacement.get("status")
         or protocol.get("replacement_candidate_fit_status"),
         "replacement_manifest_pin_required": bool(
-            replacement.get("manifest_pin_required", False)
-            or protocol.get("replacement_manifest_pin_required", False)
+            (
+                replacement.get("manifest_pin_required", False)
+                or protocol.get("replacement_manifest_pin_required", False)
+            )
+            and not frozen_available
         ),
         "future_oos_preflight_state": preflight.get("state"),
         "future_oos_ready_for_evaluation": bool(

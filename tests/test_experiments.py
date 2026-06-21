@@ -2940,7 +2940,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "superseded_not_active"
     assert config["validation"]["charter"]["versions"]["v4_evidence"]["status"] == "active"
     frozen = config["experiments"]["frozen_candidates"]
-    assert frozen["lifecycle_state"] == "replacement_candidate_preregistered_manifest_pin_pending"
+    assert frozen["lifecycle_state"] == "replacement_candidate_manifest_pinned_awaiting_future_oos"
     assert frozen["primary_candidate_id"] == "control_recent3_equal_v2"
     assert frozen["anchor_run_id"] == "20260621_075454"
     assert frozen["anchor_data_end"] == "2026-06-13T01:00:00+00:00"
@@ -2951,8 +2951,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility"
     )
     assert frozen_candidate["source_run_id"] == "20260621_075454"
-    assert frozen_candidate["status"] == "preregistered_manifest_pin_pending"
-    assert frozen_candidate["expected_manifest_hash"].startswith("<fill_after_05")
+    assert frozen_candidate["status"] == "manifest_pinned_awaiting_future_oos"
+    assert frozen_candidate["expected_manifest_hash"] == (
+        "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857"
+    )
     assert frozen_candidate["threshold"]["guarded"] is True
     assert frozen_candidate["threshold"]["selected_from"] == (
         "pre_anchor_latest_fold_validation_only"
@@ -3026,11 +3028,11 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "replacement_fit_complete_manifest_pin_required"
+        "replacement_candidate_manifest_pinned_awaiting_future_oos"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
-        "fit_complete_manifest_pin_required"
+        "manifest_pinned_awaiting_future_oos"
     )
     assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is True
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]

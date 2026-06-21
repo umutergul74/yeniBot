@@ -2091,7 +2091,7 @@ experiments:
         - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
   frozen_candidates:
     enabled: true
-    lifecycle_state: replacement_candidate_preregistered_manifest_pin_pending
+    lifecycle_state: replacement_candidate_manifest_pinned_awaiting_future_oos
     protocol_version: v1
     anchor_run_id: "20260621_075454"
     anchor_data_end: "2026-06-13T01:00:00+00:00"
@@ -2107,8 +2107,8 @@ experiments:
         source_run_id: "20260621_075454"
         anchor_data_end: "2026-06-13T01:00:00+00:00"
         required_for_evaluation: true
-        status: preregistered_manifest_pin_pending
-        expected_manifest_hash: "<fill_after_05_generates_manifest_hash>"
+        status: manifest_pinned_awaiting_future_oos
+        expected_manifest_hash: "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857"
         threshold:
           guarded: true
           selected_from: pre_anchor_latest_fold_validation_only
@@ -2120,7 +2120,7 @@ experiments:
           value: 0.42674046854178105
   future_oos_validation:
     enabled: true
-    pause_reason: "Enabled only after replacement candidate fit. Evaluation remains blocked until expected_manifest_hash is pinned and enough new rows mature after anchor."
+    pause_reason: "Replacement candidate manifest is pinned. Evaluation remains blocked until enough new rows mature after the new anchor."
     min_rows: 720
     preferred_rows: 2160
     block_length: 24
@@ -2154,13 +2154,13 @@ experiments:
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
   next_research_cycle:
-    status: replacement_fit_complete_manifest_pin_required
+    status: replacement_candidate_manifest_pinned_awaiting_future_oos
     source_failed_candidate_id: control_fold_ensemble_v1
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
     primary_hypothesis: historical_cv_recency_replacement_preregistration
-    next_action: "Run notebook 05 once, copy the generated manifest_hash from frozen_candidate_index.csv into expected_manifest_hash, then rerun notebook 05. Do not evaluate future OOS until preflight passes all manifest checks."
+    next_action: "Run notebook 05 to verify the pinned manifest. Future-OOS scoring remains blocked until enough fresh rows mature after the 2026-06-13 anchor."
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2238,7 +2238,7 @@ experiments:
       force_retrain: false
       failed_future_oos_use: fit_only_after_retirement_never_policy_selection
       require_recency_decision_ready: true
-      status: fit_complete_manifest_pin_required
+      status: manifest_pinned_awaiting_future_oos
       promotion_allowed: false
   experiment_memory:
     enabled: true

@@ -130,6 +130,50 @@ def test_report_consistency_fails_on_stale_research_protocol_action(tmp_path: Pa
     assert operator["consistency_status"] == "failed"
 
 
+def test_report_consistency_allows_historical_replacement_fit_after_manifest_pin(
+    tmp_path: Path,
+) -> None:
+    _write_base_report(tmp_path, protocol_action="wait_for_new_future_oos_rows")
+    blockers = ["future_unseen_oos_not_ready"]
+    for filename in [
+        "auto_review.json",
+        "phase2_readiness.json",
+        "phase1_current_status.json",
+        "next_research_protocol.json",
+        "future_oos_preflight.json",
+    ]:
+        payload = json.loads((tmp_path / filename).read_text(encoding="utf-8"))
+        if filename == "auto_review.json":
+            payload["next_action"] = {"action": "wait_for_new_future_oos_rows"}
+            payload["phase2_readiness"]["blockers"] = blockers
+        elif filename == "phase2_readiness.json":
+            payload["blockers"] = blockers
+            payload["next_action"] = "wait_for_new_future_oos_rows"
+        elif filename == "phase1_current_status.json":
+            payload["phase2_blockers"] = blockers
+            payload["active_blocker"] = blockers[0]
+            payload["next_action"] = "wait_for_new_future_oos_rows"
+        elif filename == "next_research_protocol.json":
+            payload["status"] = "replacement_candidate_manifest_pinned_awaiting_future_oos"
+            payload["next_action"] = "wait_for_new_future_oos_rows"
+            payload["replacement_manifest_pin_required"] = False
+        elif filename == "future_oos_preflight.json":
+            payload["state"] = "waiting_for_min_rows"
+            payload["next_action"] = "wait_for_new_future_oos_rows"
+        _write_json(tmp_path / filename, payload)
+    _write_json(
+        tmp_path / "frozen_candidate_manifest.json",
+        {"available": True, "manifest_hash": "abc", "expected_manifest_hash": "abc"},
+    )
+
+    frame, operator = build_report_consistency_audit(tmp_path)
+
+    assert set(frame["status"]) == {"passed"}
+    assert operator["consistency_status"] == "passed"
+    assert operator["next_action"] == "wait_for_new_future_oos_rows"
+    assert operator["replacement_manifest_pin_required"] is False
+
+
 def test_write_report_consistency_outputs_operator_files(tmp_path: Path) -> None:
     _write_base_report(tmp_path)
 
