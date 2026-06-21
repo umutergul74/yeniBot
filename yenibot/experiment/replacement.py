@@ -148,6 +148,7 @@ def _preregistration_patch_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "recency_policy": "equal_recent_k",
         "recent_k": int(payload.get("recent_k", 3) or 3),
         "threshold": threshold,
+        "manifest_candidate_status": "preregistered_manifest_pin_pending",
         "status": "preregistered_manifest_pin_pending",
         "required_for_evaluation": True,
         "expected_manifest_hash": "<fill_after_05_generates_manifest_hash>",

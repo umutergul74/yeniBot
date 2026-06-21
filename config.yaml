@@ -2107,6 +2107,7 @@ experiments:
         source_run_id: "20260621_075454"
         anchor_data_end: "2026-06-13T01:00:00+00:00"
         required_for_evaluation: true
+        manifest_candidate_status: preregistered_manifest_pin_pending
         status: manifest_pinned_awaiting_future_oos
         expected_manifest_hash: "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857"
         threshold:

@@ -2951,6 +2951,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility"
     )
     assert frozen_candidate["source_run_id"] == "20260621_075454"
+    assert frozen_candidate["manifest_candidate_status"] == "preregistered_manifest_pin_pending"
     assert frozen_candidate["status"] == "manifest_pinned_awaiting_future_oos"
     assert frozen_candidate["expected_manifest_hash"] == (
         "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857"

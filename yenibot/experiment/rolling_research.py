@@ -289,7 +289,7 @@ def research_protocol_payload(
     ):
         current_status = "seed_reproducibility_review_required"
         current_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
-    elif artifact_override and replacement_fit_complete:
+    elif artifact_override and replacement_fit_complete and not frozen_available:
         current_status = "replacement_fit_complete_manifest_pin_required"
         current_action = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
     elif artifact_override and (
@@ -336,7 +336,7 @@ def research_protocol_payload(
             (cycle.get("replacement_candidate", {}) or {}).get("candidate_id"),
         ),
         "replacement_manifest_pin_required": bool(
-            replacement_fit.get("manifest_pin_required", False)
+            replacement_fit.get("manifest_pin_required", False) and not frozen_available
         ),
         "phase2_code_allowed": False,
     }

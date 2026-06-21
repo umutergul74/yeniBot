@@ -240,6 +240,38 @@ def test_frozen_manifest_fails_closed_on_expected_hash_mismatch(tmp_path: Path) 
     assert "expected_manifest_hash_mismatch" in index.loc[0, "unavailable_reasons"]
 
 
+def test_frozen_manifest_hash_survives_operator_status_after_pin(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    _, entry = _fake_scope(run_dir)
+    config = _config(tmp_path)
+
+    manifests, _ = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "stage1_report",
+        entries=[entry],
+        config=config,
+    )
+    pinned_hash = manifests[0]["manifest_hash"]
+    candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
+    candidate["expected_manifest_hash"] = pinned_hash
+    candidate["manifest_candidate_status"] = candidate["status"]
+    candidate["status"] = "manifest_pinned_awaiting_future_oos"
+
+    manifests_after_pin, index = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "stage2_report",
+        entries=[entry],
+        config=config,
+    )
+
+    assert manifests_after_pin[0]["manifest_hash"] == pinned_hash
+    assert manifests_after_pin[0]["candidate_status"] == "preregistered"
+    assert manifests_after_pin[0]["available"] is True
+    assert manifests_after_pin[0]["manifest_hash_verified"] is True
+    assert bool(index.loc[0, "available"]) is True
+    assert index.loc[0, "unavailable_reasons"] == ""
+
+
 def test_optional_frozen_benchmark_does_not_invalidate_primary(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     _, entry = _fake_scope(run_dir)

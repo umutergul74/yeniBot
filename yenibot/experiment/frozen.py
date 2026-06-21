@@ -129,6 +129,22 @@ def _configured_threshold_payload(spec: dict[str, Any], entry: dict[str, Any]) -
     return _threshold_payload(entry)
 
 
+def _manifest_candidate_status(spec: dict[str, Any]) -> str:
+    """Return the immutable status string stored in the frozen manifest.
+
+    ``status`` is allowed to move through operator lifecycle states after the
+    manifest hash is pinned. The hash must still reproduce the exact pre-pin
+    manifest, so configs can carry ``manifest_candidate_status`` as the stable
+    freeze-time value.
+    """
+
+    return str(
+        spec.get("manifest_candidate_status")
+        or spec.get("status")
+        or "preregistered"
+    )
+
+
 def _profile_component(
     *,
     profile: str,
@@ -341,7 +357,7 @@ def freeze_candidate_manifests(
             "protocol_version": str(frozen_cfg.get("protocol_version", "v1")),
             "candidate_id": candidate_id,
             "candidate_type": candidate_type,
-            "candidate_status": str(spec.get("status", "preregistered")),
+            "candidate_status": _manifest_candidate_status(spec),
             "evaluation_role": str(
                 spec.get(
                     "evaluation_role",

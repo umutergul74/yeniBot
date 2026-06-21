@@ -38,6 +38,34 @@ def _action_from_auto_review(auto_review: dict[str, Any]) -> str:
     return str(action or "")
 
 
+def _canonical_action(action: str) -> str:
+    value = str(action or "")
+    if not value:
+        return ""
+    if value.startswith("pin_replacement_candidate_manifest"):
+        return PIN_MANIFEST_ACTION
+    if value.startswith("select_and_preregister_replacement_candidate"):
+        return "select_and_preregister_replacement_candidate_from_historical_cv_only"
+    if value in {
+        "refresh_01_02_03_then_recheck_without_running_04",
+        "wait_for_new_unseen_bars_keep_control",
+        "wait_for_new_future_oos_rows",
+        "wait_for_new_future_oos_rows_after_manifest_verification",
+    }:
+        return "wait_for_new_future_oos_rows"
+    if value in {
+        "run_no_refit_future_oos_evaluator",
+        "run_notebook_05_prediction_only",
+    }:
+        return "run_no_refit_future_oos_evaluator"
+    if value in {
+        "repair_preflight_blockers_do_not_evaluate",
+        "repair_future_oos_preflight_without_refit",
+    }:
+        return "repair_future_oos_preflight_without_refit"
+    return value
+
+
 def _row(
     *,
     check: str,
@@ -115,13 +143,14 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
     memory = _read_csv(path / "experiment_memory_registry.csv")
 
     rows = _core_file_rows(path)
-    actions = {
+    raw_actions = {
         "auto_review": _action_from_auto_review(auto_review),
         "phase2_readiness": str(phase2.get("next_action") or ""),
         "phase1_current_status": str(current.get("next_action") or ""),
         "next_research_protocol": str(protocol.get("next_action") or ""),
         "future_oos_preflight": str(preflight.get("next_action") or ""),
     }
+    actions = {key: _canonical_action(value) for key, value in raw_actions.items()}
     unique_actions = _unique_nonempty(actions)
     rows.append(
         _row(
@@ -129,7 +158,10 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
             passed=len(unique_actions) <= 1,
             severity="error",
             expected="all operator-facing next_action fields match",
-            observed=json.dumps(actions, sort_keys=True),
+            observed=json.dumps(
+                {"canonical": actions, "raw": raw_actions},
+                sort_keys=True,
+            ),
         )
     )
 

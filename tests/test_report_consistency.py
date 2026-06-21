@@ -174,6 +174,48 @@ def test_report_consistency_allows_historical_replacement_fit_after_manifest_pin
     assert operator["replacement_manifest_pin_required"] is False
 
 
+def test_report_consistency_canonicalizes_equivalent_wait_actions(tmp_path: Path) -> None:
+    _write_base_report(tmp_path, protocol_action="wait_for_new_future_oos_rows")
+    blockers = ["future_unseen_oos_not_ready"]
+    replacements = {
+        "auto_review.json": {"next_action": {"action": "wait_for_new_unseen_bars_keep_control"}},
+        "phase2_readiness.json": {"next_action": "wait_for_new_unseen_bars_keep_control"},
+        "phase1_current_status.json": {
+            "next_action": "wait_for_new_future_oos_rows_after_manifest_verification"
+        },
+        "next_research_protocol.json": {
+            "status": "replacement_candidate_manifest_pinned_awaiting_future_oos",
+            "next_action": "wait_for_new_future_oos_rows",
+            "replacement_manifest_pin_required": False,
+        },
+        "future_oos_preflight.json": {
+            "state": "waiting_for_mature_labeled_rows",
+            "next_action": "refresh_01_02_03_then_recheck_without_running_04",
+        },
+    }
+    for filename, updates in replacements.items():
+        payload = json.loads((tmp_path / filename).read_text(encoding="utf-8"))
+        payload.update(updates)
+        if filename == "auto_review.json":
+            payload["phase2_readiness"]["blockers"] = blockers
+        if filename == "phase2_readiness.json":
+            payload["blockers"] = blockers
+        if filename == "phase1_current_status.json":
+            payload["phase2_blockers"] = blockers
+            payload["active_blocker"] = blockers[0]
+        _write_json(tmp_path / filename, payload)
+    _write_json(
+        tmp_path / "frozen_candidate_manifest.json",
+        {"available": True, "manifest_hash": "abc", "expected_manifest_hash": "abc"},
+    )
+
+    frame, operator = build_report_consistency_audit(tmp_path)
+
+    assert set(frame["status"]) == {"passed"}
+    assert operator["consistency_status"] == "passed"
+    assert operator["next_action"] == "wait_for_new_future_oos_rows"
+
+
 def test_write_report_consistency_outputs_operator_files(tmp_path: Path) -> None:
     _write_base_report(tmp_path)
 
