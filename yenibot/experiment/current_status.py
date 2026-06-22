@@ -90,6 +90,12 @@ def build_phase1_current_status(
     ):
         status = "future_oos_ready_prediction_only"
         next_action = "run_no_refit_future_oos_evaluator"
+    elif (
+        "future_unseen_oos_not_ready" in blockers
+        and future_oos_preflight.get("state") == "waiting_for_mature_labeled_rows"
+    ):
+        status = "replacement_manifest_pinned_waiting_for_future_oos_rows"
+        next_action = "wait_for_new_future_oos_rows"
     else:
         status = "phase1_blocked_review_required"
         next_action = str(

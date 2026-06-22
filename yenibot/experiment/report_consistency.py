@@ -48,10 +48,14 @@ def _canonical_action(action: str) -> str:
         return "select_and_preregister_replacement_candidate_from_historical_cv_only"
     if value in {
         "refresh_01_02_03_then_recheck_without_running_04",
+        "refresh_data_and_run_05_when_future_oos_minimum_is_available",
+        "refresh_01_02_03_then_run_05_when_future_oos_rows_are_available",
         "wait_for_new_unseen_bars_keep_control",
         "wait_for_new_future_oos_rows",
         "wait_for_new_future_oos_rows_after_manifest_verification",
     }:
+        return "wait_for_new_future_oos_rows"
+    if "enough fresh rows mature" in value:
         return "wait_for_new_future_oos_rows"
     if value in {
         "run_no_refit_future_oos_evaluator",

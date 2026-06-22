@@ -181,11 +181,11 @@ def test_report_consistency_canonicalizes_equivalent_wait_actions(tmp_path: Path
         "auto_review.json": {"next_action": {"action": "wait_for_new_unseen_bars_keep_control"}},
         "phase2_readiness.json": {"next_action": "wait_for_new_unseen_bars_keep_control"},
         "phase1_current_status.json": {
-            "next_action": "wait_for_new_future_oos_rows_after_manifest_verification"
+            "next_action": "refresh_data_and_run_05_when_future_oos_minimum_is_available"
         },
         "next_research_protocol.json": {
             "status": "replacement_candidate_manifest_pinned_awaiting_future_oos",
-            "next_action": "wait_for_new_future_oos_rows",
+            "next_action": "Run notebook 05 to verify the pinned manifest. Future-OOS scoring remains blocked until enough fresh rows mature after the 2026-06-13 anchor.",
             "replacement_manifest_pin_required": False,
         },
         "future_oos_preflight.json": {

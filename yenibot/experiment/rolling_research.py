@@ -303,6 +303,9 @@ def research_protocol_payload(
     ):
         current_status = "future_oos_ready_prediction_only"
         current_action = "run_no_refit_future_oos_evaluator"
+    elif artifact_override and "future_unseen_oos_not_ready" in blockers and frozen_available:
+        current_status = "replacement_manifest_pinned_waiting_for_future_oos_rows"
+        current_action = "wait_for_new_future_oos_rows"
     return {
         "status": current_status,
         "primary_hypothesis": cycle.get("primary_hypothesis"),

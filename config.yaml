@@ -2161,7 +2161,7 @@ experiments:
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
     primary_hypothesis: historical_cv_recency_replacement_preregistration
-    next_action: "Run notebook 05 to verify the pinned manifest. Future-OOS scoring remains blocked until enough fresh rows mature after the 2026-06-13 anchor."
+    next_action: "wait_for_new_future_oos_rows"
     rolling_origin:
       enabled: false
       train_bars: 5040

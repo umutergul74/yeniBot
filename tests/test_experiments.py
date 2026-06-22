@@ -2165,6 +2165,48 @@ def test_current_status_routes_replacement_fit_to_manifest_pin() -> None:
     )
 
 
+def test_current_status_reports_manifest_pinned_future_oos_wait() -> None:
+    seed_audit = pd.DataFrame(
+        [
+            {
+                "comparison_role": "same_seed_reproduction",
+                "reproducibility_status": "same_seed_reproduced",
+            }
+        ]
+    )
+
+    status = build_phase1_current_status(
+        run_id="run",
+        control_profile="control",
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["future_unseen_oos_not_ready"],
+        },
+        model_performance_summary={
+            "historical_walk_forward_evidence_passed": True,
+            "model_evidence_passed": True,
+            "frozen_future_oos_evidence_passed": False,
+        },
+        phase1_decision_ladder={
+            "recommended_next_action": "refresh_data_and_run_05_when_future_oos_minimum_is_available",
+            "run_04_required_now": False,
+            "run_05_first": True,
+        },
+        next_research_protocol={
+            "next_action": "wait_for_new_future_oos_rows",
+        },
+        future_oos_preflight={"state": "waiting_for_mature_labeled_rows"},
+        future_oos_readiness={"ready_for_evaluation": False},
+        seed_reproducibility_audit=seed_audit,
+        training_execution={"training_executed_count": 0},
+    )
+
+    assert status["current_status"] == (
+        "replacement_manifest_pinned_waiting_for_future_oos_rows"
+    )
+    assert status["next_action"] == "wait_for_new_future_oos_rows"
+
+
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:
     config = {"experiments": {"diagnostics": {"prediction_error_audit_rows_per_case": 2}}}
     rows = []
