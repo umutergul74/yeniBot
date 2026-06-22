@@ -186,6 +186,22 @@ features:
         - "realized_vol_14"
         - "gk_vol_14"
         - "atr_14_pct"
+    baseline_stable_model_medium_capacity:
+      description: "Model-skeleton diagnostic: keep the current control feature set and loss exactly the same, but reduce TCN+GRU capacity to test whether bad-fold score reversal is partly capacity/overfit driven."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          tcn_channels: 48
+          gru_hidden: 96
+          fusion_hidden: 96
+    baseline_stable_model_small_capacity:
+      description: "Model-skeleton diagnostic: keep the current control feature set and loss exactly the same, but use a materially smaller TCN+GRU encoder to test robustness before inventing new feature families."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          tcn_channels: 32
+          gru_hidden: 64
+          fusion_hidden: 64
     baseline_stable_train_clip_4h_large_trade:
       description: "Mechanism experiment A: preserve the strong control feature set and apply train-fold-only 1%-99% clipping to 4H large-trade ratio distribution shocks."
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -2027,7 +2043,9 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles: []
+  candidate_profiles:
+    - baseline_stable_model_medium_capacity
+    - baseline_stable_model_small_capacity
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2037,7 +2055,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: mechanism_cycle_completed_no_promotion
+    status: model_skeleton_capacity_sprint_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2047,8 +2065,8 @@ experiments:
       - train_only_4h_flow_reliability_mask
       - train_only_clip_and_reliability_mask
       - causal_4h_taker_flow_term_structure_agreement
-    conclusion: "Bundle 20260620_203235 produced no promotable candidate. The term-structure agreement profile improved triage mean IC only slightly, but increased fold dispersion, reduced top-score payoff coverage, worsened worst-fold IC, and lost top-10 lift versus the control."
-    next_step: "Keep the control profile. Do not run another feature-profile search until the completed replacement candidate is explicitly pinned as a frozen manifest and evaluated on a new unseen OOS anchor."
+    conclusion: "Feature deletion, masking, clipping, pairwise loss, futures context, and term-structure overlays have not solved bad-fold score reversal. The next research cycle must isolate the model skeleton before proposing another feature family."
+    next_step: "Run a capacity-only TCN+GRU diagnostic sprint on historical walk-forward CV: same control feature set, same labels, same loss, same early-stop metric; compare medium/small capacity candidates against the control for Rank IC, worst-fold IC, top-score payoff, and F1 skill."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false

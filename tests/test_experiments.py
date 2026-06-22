@@ -2956,7 +2956,26 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_stable_model_medium_capacity",
+        "baseline_stable_model_small_capacity",
+    ]
+    medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
+    small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
+    assert medium["inherit"] == config["experiments"]["control_profile"]
+    assert small["inherit"] == config["experiments"]["control_profile"]
+    assert medium["config_overrides"]["model"] == {
+        "tcn_channels": 48,
+        "gru_hidden": 96,
+        "fusion_hidden": 96,
+    }
+    assert small["config_overrides"]["model"] == {
+        "tcn_channels": 32,
+        "gru_hidden": 64,
+        "fusion_hidden": 64,
+    }
+    assert "training" not in medium["config_overrides"]
+    assert "training" not in small["config_overrides"]
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
     assert config["experiments"]["profile_blends"]["weighted"] == []
