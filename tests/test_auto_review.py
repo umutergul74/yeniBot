@@ -591,7 +591,7 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     review = review_experiment_report(tmp_path)
 
     assert review["report_completeness"]["complete"] is True
-    assert review["next_action"]["action"] == "wait_for_new_unseen_bars_keep_control"
+    assert review["next_action"]["action"] == "wait_for_new_future_oos_rows"
     assert review["next_action"]["do_not_promote_from_current_holdout"] is True
     assert review["cv"]["control"]["profile"] == "control_profile"
     assert review["future_oos"]["best_candidate_plan_row"]["candidate_label"] == "candidate_profile [top_10]"
@@ -814,7 +814,7 @@ def test_write_auto_review_outputs_files(tmp_path) -> None:
     assert (tmp_path / "phase1_transition_plan.json").exists()
     assert (tmp_path / "phase1_transition_plan.md").exists()
     next_actions = json.loads((tmp_path / "next_actions.json").read_text(encoding="utf-8"))
-    assert next_actions["action"] == "wait_for_new_unseen_bars_keep_control"
+    assert next_actions["action"] == "wait_for_new_future_oos_rows"
     phase2 = json.loads((tmp_path / "phase2_readiness.json").read_text(encoding="utf-8"))
     assert phase2["decision"] == "DO_NOT_PROCEED_TO_PHASE2"
     assert phase2["long_f1_source"] == "validation_selected_threshold"

@@ -614,6 +614,7 @@ def test_future_oos_preflight_is_read_only_while_waiting(tmp_path: Path) -> None
     assert result["invariants_passed"] is True
     assert result["ready_for_evaluation"] is False
     assert result["state"] == "waiting_for_mature_labeled_rows"
+    assert result["next_action"] == "wait_for_new_future_oos_rows"
     assert result["fit_operations_performed"] == 0
     assert result["side_effect_free"] is True
     assert before == after

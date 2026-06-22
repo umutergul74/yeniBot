@@ -340,7 +340,7 @@ def future_oos_preflight(
         next_action = "run_notebook_05_prediction_only"
     else:
         state = "waiting_for_mature_labeled_rows"
-        next_action = "refresh_01_02_03_then_recheck_without_running_04"
+        next_action = "wait_for_new_future_oos_rows"
 
     return {
         "preflight_version": "future_oos_preflight_v1",

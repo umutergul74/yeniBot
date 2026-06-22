@@ -1284,7 +1284,7 @@ def _phase1_decision_ladder_payload(
             "select_and_preregister_replacement_candidate_from_historical_cv_only"
         )
     elif only_future_oos_blocked:
-        recommended_next_action = "refresh_data_and_run_05_when_future_oos_minimum_is_available"
+        recommended_next_action = "wait_for_new_future_oos_rows"
     elif run_04_now:
         recommended_next_action = "run_04_only_after_pre_registered_hypothesis"
     elif threshold_transfer_blocker:

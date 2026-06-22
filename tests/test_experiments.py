@@ -3073,6 +3073,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
     )
+    assert config["experiments"]["next_research_cycle"]["next_action"] == (
+        "wait_for_new_future_oos_rows"
+    )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
         "manifest_pinned_awaiting_future_oos"

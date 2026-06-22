@@ -22,16 +22,18 @@ The current safe control profile is configured in `config.yaml`:
   evaluation on June 13, 2026 and failed. It is retired and must not be tuned
   or retested on that same window.
 - `experiments.research_focus.mode`: `walk_forward_cv_repair`
-- `experiments.next_research_cycle.status`: `replacement_preregistration_research`
-- Future-OOS scoring remains paused, but historical-CV recency replacement
-  research and replacement-candidate fit are enabled. Phase 2 remains blocked
-  until the replacement fit completes, its frozen manifest hash is explicitly
-  pinned, and a new future-OOS window passes.
-- The active frozen-candidate slot is intentionally empty after the failed
-  June 13 candidate. The old manifest lives in immutable historical reports
-  and `frozen_candidate_outcomes`; do not regenerate or re-hash it as a current
-  primary. Start a new OOS counter only after a replacement and new anchor are
-  pre-registered.
+- `experiments.next_research_cycle.status`: `replacement_candidate_manifest_pinned_awaiting_future_oos`
+- Replacement candidate `control_recent3_equal_v2` has been selected from
+  historical rolling-origin CV only, fitted through the new anchor, and pinned
+  as the current frozen candidate. Its expected manifest hash is
+  `baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857`.
+- Future-OOS scoring remains paused until enough fresh mature labeled rows
+  exist after the `2026-06-13T01:00:00+00:00` anchor. Phase 2 remains blocked
+  until this pinned candidate is evaluated without refitting and passes its
+  pre-registered future-OOS gates.
+- The failed June 13 candidate remains immutable historical evidence in
+  `frozen_candidate_outcomes`; do not regenerate or re-hash it as a current
+  primary, and do not use its failed window for replacement policy selection.
 - Bundle `20260614_054446` completed the train-fold-only preprocessing cycle
   without a promotable candidate. Hard reliability masking changed 10 of 12
   triage folds, raised dispersion, reduced positive-fold coverage, and damaged
@@ -53,9 +55,8 @@ The current safe control profile is configured in `config.yaml`:
 - Bundle 70 rejected `dual_horizon_all_recent3_50_50`: its IC improvement was
   real, but mean F1 was `0.4383` and positive top-decile return occurred in
   only `69.4%` of folds. `recent_3_equal` alone cleared every committed
-  balanced non-inferiority gate. `control_recent3_equal_v2` was fitted and is
-  retained as historical research, but its manifest-pinning workflow is paused
-  until the underlying control profile is repaired on historical CV.
+  balanced non-inferiority gate. `control_recent3_equal_v2` is now the pinned
+  replacement candidate awaiting a fresh unseen OOS window.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 

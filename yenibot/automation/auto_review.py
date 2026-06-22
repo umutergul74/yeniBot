@@ -618,11 +618,11 @@ def _next_action(
         reasons.append("candidate_passed_cv_gates")
         if not bool(policy.get("future_oos_ready", False)):
             reasons.append("future_oos_not_ready_do_not_promote_from_current_holdout")
-            return "wait_for_new_unseen_bars_keep_control", reasons
+            return "wait_for_new_future_oos_rows", reasons
         return "review_cv_promotable_candidate_on_future_oos", reasons
     if not bool(policy.get("future_oos_ready", False)):
         reasons.append("future_oos_not_ready")
-        return "wait_for_new_unseen_bars_keep_control", reasons
+        return "wait_for_new_future_oos_rows", reasons
     reasons.append("no_candidate_beats_control_cv_gates")
     return "keep_control_profile", reasons
 
