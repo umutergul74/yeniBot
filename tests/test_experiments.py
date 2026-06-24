@@ -73,6 +73,7 @@ from yenibot.experiments import (
     _validation_charter_review_frame,
     _validation_charter_proposal_frame,
     _validate_requested_fold_ids,
+    validate_training_research_contract,
     experiment_settings,
     prepare_training_holdout_split,
     profile_config,
@@ -3089,6 +3090,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert {7, 8, 22, 30, 32, 35}.issubset(set(config["experiments"]["triage_fold_ids"]))
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
+    assert config["experiments"]["research_focus"]["status"] == (
+        "model_skeleton_capacity_sprint_preregistered"
+    )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
     )
@@ -3921,6 +3925,37 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "4h_gk_vol_14" not in no_vol_no_whale_zscore_columns
     assert "4h_vpt_zscore" not in no_vol_no_whale_zscore_columns
     assert "4h_whale_sell_flag" in no_vol_no_whale_zscore_columns
+
+
+def test_training_research_contract_validates_invariants_not_lifecycle_names() -> None:
+    config = load_config("config.yaml")
+
+    contract = validate_training_research_contract(config)
+
+    assert contract["research_cycle_status"] == (
+        "replacement_candidate_manifest_pinned_awaiting_future_oos"
+    )
+    assert contract["research_focus_mode"] == "walk_forward_cv_repair"
+    assert contract["research_focus_status"] == "model_skeleton_capacity_sprint_preregistered"
+    assert contract["seed_audit_mode"] == "in_run"
+
+    renamed = copy.deepcopy(config)
+    renamed["experiments"]["next_research_cycle"]["status"] = "future_research_stage_name"
+    renamed["experiments"]["research_focus"]["status"] = "future_capacity_stage_name"
+    renamed_contract = validate_training_research_contract(renamed)
+    assert renamed_contract["research_cycle_status"] == "future_research_stage_name"
+    assert renamed_contract["research_focus_status"] == "future_capacity_stage_name"
+
+
+def test_training_research_contract_fails_with_actionable_policy_error() -> None:
+    config = load_config("config.yaml")
+    config["experiments"]["next_research_cycle"]["same_window_selection_allowed"] = True
+
+    with pytest.raises(
+        ValueError,
+        match="same_window_selection_allowed must be false",
+    ):
+        validate_training_research_contract(config)
 
 
 def test_full_promotion_gate_uses_threshold_selected_f1() -> None:

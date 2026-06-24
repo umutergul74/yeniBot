@@ -54,6 +54,7 @@ __all__ = [
     '_future_oos_allowed_benchmark_profiles',
     '_experiment_policy_guard',
     '_apply_experiment_policy_guard',
+    'validate_training_research_contract',
     'experiment_settings',
     '_available_walk_forward_fold_ids',
     '_resolve_seed_audit_fold_ids',
@@ -94,6 +95,46 @@ __all__ = [
     '_future_oos_monitor_state',
     '_future_oos_ready_at_fields',
 ]
+
+def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate stable notebook-04 safety invariants without pinning lifecycle labels."""
+
+    experiments = _cfg(config, ["experiments"], {}) or {}
+    research = experiments.get("next_research_cycle", {}) or {}
+    research_focus = experiments.get("research_focus", {}) or {}
+    seed_audit = experiments.get("seed_audit", {}) or {}
+
+    errors: list[str] = []
+    research_status = str(research.get("status") or "").strip()
+    research_focus_status = str(research_focus.get("status") or "").strip()
+
+    if not research_status:
+        errors.append("experiments.next_research_cycle.status must be set")
+    if str(research_focus.get("mode") or "") != "walk_forward_cv_repair":
+        errors.append("experiments.research_focus.mode must be walk_forward_cv_repair")
+    if not research_focus_status:
+        errors.append("experiments.research_focus.status must be set")
+    if not bool(seed_audit.get("enabled", False)):
+        errors.append("experiments.seed_audit.enabled must be true")
+    if str(seed_audit.get("mode") or "") != "in_run":
+        errors.append("experiments.seed_audit.mode must be in_run")
+    if seed_audit.get("source_run_id") not in (None, ""):
+        errors.append("experiments.seed_audit.source_run_id must be empty for in-run audits")
+    if research.get("same_window_selection_allowed") is not False:
+        errors.append("experiments.next_research_cycle.same_window_selection_allowed must be false")
+    if research.get("new_future_oos_anchor_required") is not True:
+        errors.append("experiments.next_research_cycle.new_future_oos_anchor_required must be true")
+
+    if errors:
+        details = "\n- ".join(errors)
+        raise ValueError(f"Notebook 04 research contract is invalid:\n- {details}")
+
+    return {
+        "research_cycle_status": research_status,
+        "research_focus_mode": str(research_focus["mode"]),
+        "research_focus_status": research_focus_status,
+        "seed_audit_mode": str(seed_audit["mode"]),
+    }
 
 def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:
     """Return an in-memory config copy with the requested active feature profile."""

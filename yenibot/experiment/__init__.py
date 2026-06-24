@@ -5,6 +5,7 @@ from yenibot.experiment.configuration import latest_experiment_run
 from yenibot.experiment.configuration import profile_config
 from yenibot.experiment.configuration import profile_run_dir
 from yenibot.experiment.configuration import resolve_experiment_run_id
+from yenibot.experiment.configuration import validate_training_research_contract
 from yenibot.experiment.holdout import prepare_training_holdout_split
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
@@ -25,6 +26,7 @@ __all__ = [
     'profile_config',
     'profile_run_dir',
     'resolve_experiment_run_id',
+    'validate_training_research_contract',
     'prepare_training_holdout_split',
     'freeze_candidate_manifests',
     'evaluate_future_oos',

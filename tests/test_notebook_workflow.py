@@ -44,9 +44,9 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     diagnostics = _source(_load_notebook("05_diagnostics_validation.ipynb"))
 
     assert "open_after_failed_future_oos" not in training
-    assert "current_code_reproducibility_retrain" in training
-    assert "walk_forward_cv_repair" in training
-    assert "in_run" in training
+    assert "current_code_reproducibility_retrain" not in training
+    assert "replacement_preregistration_research" not in training
+    assert "validate_training_research_contract" in training
     assert "20260614_054446" not in training
     for source in (combined, training):
         assert "run_recency_ensemble_research" in source
