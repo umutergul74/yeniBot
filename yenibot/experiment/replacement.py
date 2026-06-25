@@ -103,6 +103,13 @@ def _selection_evidence(
 
 
 def _replacement_markdown(payload: dict[str, Any]) -> str:
+    pinned = payload.get("status") == "manifest_pinned_existing_candidate"
+    final_note = (
+        "- Candidate was fitted in the declared source run and its manifest hash is already pinned. "
+        "Artifact integrity is verified separately by future-OOS preflight."
+        if pinned
+        else "- Promotion is blocked until the generated manifest hash is pinned in config."
+    )
     return "\n".join(
         [
             "# Replacement Candidate Fit",
@@ -120,7 +127,7 @@ def _replacement_markdown(payload: dict[str, Any]) -> str:
             "- Policy-selection data: historical walk-forward only.",
             "- Failed future-OOS data: fit-eligible after retirement, never used for policy selection.",
             "- Future-OOS fit operations performed: `0`.",
-            "- Promotion is blocked until the generated manifest hash is pinned in config.",
+            final_note,
             "",
         ]
     )
@@ -402,6 +409,8 @@ def run_replacement_candidate_fit(
 def publish_replacement_candidate_reports(
     run_dir: str | Path,
     report_dir: str | Path,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Copy compact replacement build evidence into the diagnostics bundle."""
 
@@ -410,26 +419,73 @@ def publish_replacement_candidate_reports(
     target.mkdir(parents=True, exist_ok=True)
     payload_path = source / "replacement_candidate_fit.json"
     if not payload_path.exists():
-        payload = {
-            "available": False,
-            "enabled": None,
-            "status": "replacement_fit_not_run",
-            "manifest_pin_required": False,
-            "promotion_allowed": False,
-            "next_action": (
-                "run_notebook_04_with_historical_recency_research_enabled; "
-                "if historical gates pass, fit the replacement candidate"
+        frozen = _cfg(config or {}, ["experiments", "frozen_candidates"], {}) or {}
+        candidates = list(frozen.get("candidates", []) or [])
+        primary_id = str(frozen.get("primary_candidate_id") or "")
+        primary = next(
+            (
+                dict(item)
+                for item in candidates
+                if str(item.get("candidate_id") or "") == primary_id
             ),
-        }
-        patch = {
-            "status": "replacement_fit_not_run",
-            "manual_pin_required": False,
-            "stage_1_unpinned_config_patch": {},
-            "stage_2_pin_instruction": (
-                "No replacement fit artifact exists yet, so no frozen "
-                "candidate manifest can be pinned."
-            ),
-        }
+            {},
+        )
+        expected_hash = str(primary.get("expected_manifest_hash") or "").strip()
+        pinned = bool(
+            primary
+            and expected_hash
+            and "<fill_" not in expected_hash
+            and str(primary.get("status") or "").startswith("manifest_pinned")
+        )
+        if pinned:
+            payload = {
+                "available": True,
+                "enabled": False,
+                "status": "manifest_pinned_existing_candidate",
+                "candidate_id": primary_id,
+                "candidate_type": primary.get("candidate_type"),
+                "profile": primary.get("profile"),
+                "source_run_id": primary.get("source_run_id"),
+                "fold_scope": primary.get("fold_scope"),
+                "anchor_data_end": primary.get("anchor_data_end"),
+                "threshold": dict(primary.get("threshold", {}) or {}),
+                "expected_manifest_hash": expected_hash,
+                "manifest_pin_required": False,
+                "promotion_allowed": False,
+                "future_oos_fit_operations_performed": 0,
+                "next_action": "wait_for_future_oos_preflight_and_mature_labeled_rows",
+            }
+            patch = {
+                "status": "manifest_already_pinned",
+                "candidate_id": primary_id,
+                "manual_pin_required": False,
+                "stage_1_unpinned_config_patch": {},
+                "stage_2_pin_instruction": (
+                    "No config patch is required. Verify the pinned candidate "
+                    "and source artifacts through future_oos_preflight.json."
+                ),
+            }
+        else:
+            payload = {
+                "available": False,
+                "enabled": None,
+                "status": "replacement_fit_not_run",
+                "manifest_pin_required": False,
+                "promotion_allowed": False,
+                "next_action": (
+                    "run_notebook_04_with_historical_recency_research_enabled; "
+                    "if historical gates pass, fit the replacement candidate"
+                ),
+            }
+            patch = {
+                "status": "replacement_fit_not_run",
+                "manual_pin_required": False,
+                "stage_1_unpinned_config_patch": {},
+                "stage_2_pin_instruction": (
+                    "No replacement fit artifact exists yet, so no frozen "
+                    "candidate manifest can be pinned."
+                ),
+            }
         _write_json(target / "replacement_candidate_fit.json", payload)
         (target / "replacement_candidate_fit.md").write_text(
             _replacement_markdown(payload),

@@ -1212,7 +1212,11 @@ def write_experiment_diagnostics(
     recency_research_summary, recency_policy_decision = (
         publish_recency_research_reports(recency_research_dir, report_dir)
     )
-    replacement_candidate_fit = publish_replacement_candidate_reports(run_dir, report_dir)
+    replacement_candidate_fit = publish_replacement_candidate_reports(
+        run_dir,
+        report_dir,
+        config=diagnostic_config,
+    )
     if (
         replacement_candidate_fit.get("status") == "fit_complete_manifest_pin_required"
         and future_oos_preflight_status.get("state") == "awaiting_replacement_preregistration"

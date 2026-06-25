@@ -2958,11 +2958,15 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_model_medium_capacity",
-        "baseline_stable_model_small_capacity",
+        "baseline_stable_model_tcn32_only",
+        "baseline_stable_model_gru64_only",
+        "baseline_stable_model_fusion64_only",
     ]
     medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
     small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
+    tcn_only = config["features"]["profiles"]["baseline_stable_model_tcn32_only"]
+    gru_only = config["features"]["profiles"]["baseline_stable_model_gru64_only"]
+    fusion_only = config["features"]["profiles"]["baseline_stable_model_fusion64_only"]
     assert medium["inherit"] == config["experiments"]["control_profile"]
     assert small["inherit"] == config["experiments"]["control_profile"]
     assert medium["config_overrides"]["model"] == {
@@ -2977,6 +2981,12 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     }
     assert "training" not in medium["config_overrides"]
     assert "training" not in small["config_overrides"]
+    assert tcn_only["config_overrides"]["model"] == {"tcn_channels": 32}
+    assert gru_only["config_overrides"]["model"] == {"gru_hidden": 64}
+    assert fusion_only["config_overrides"]["model"] == {"fusion_hidden": 64}
+    assert "training" not in tcn_only["config_overrides"]
+    assert "training" not in gru_only["config_overrides"]
+    assert "training" not in fusion_only["config_overrides"]
     assert config["experiments"]["profile_blends"]["include_auto_rank_mean"] is False
     assert config["experiments"]["profile_blends"]["include_auto_equal_weight"] is False
     assert config["experiments"]["profile_blends"]["weighted"] == []
@@ -3091,7 +3101,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "model_skeleton_capacity_sprint_preregistered"
+        "model_component_capacity_isolation_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
@@ -3112,6 +3122,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert combo_profile["config_overrides"]["training"]["preprocessing"]["quantile_clip"]["enabled"] is True
     assert combo_profile["config_overrides"]["training"]["preprocessing"]["stability_mask"]["enabled"] is True
     rejected = config["experiments"]["experiment_memory"]["rejected_profiles"]
+    assert "uniform medium capacity" in rejected["baseline_stable_model_medium_capacity"]["reason"]
+    assert "uniform small capacity" in rejected["baseline_stable_model_small_capacity"]["reason"]
     assert "non-promotable" in rejected["baseline_stable_train_clip_4h_large_trade"]["reason"]
     assert "hard train-fold masking" in rejected["baseline_stable_train_reliability_mask_4h_flow"]["reason"]
     assert "did not stabilize" in rejected["baseline_stable_train_clip_and_reliability_mask"]["reason"]
@@ -3936,7 +3948,9 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
     )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
-    assert contract["research_focus_status"] == "model_skeleton_capacity_sprint_preregistered"
+    assert contract["research_focus_status"] == (
+        "model_component_capacity_isolation_preregistered"
+    )
     assert contract["seed_audit_mode"] == "in_run"
 
     renamed = copy.deepcopy(config)

@@ -202,6 +202,24 @@ features:
           tcn_channels: 32
           gru_hidden: 64
           fusion_hidden: 64
+    baseline_stable_model_tcn32_only:
+      description: "Component-capacity isolation: halve only TCN channels while keeping the control GRU, fusion head, features, loss, and training policy unchanged."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          tcn_channels: 32
+    baseline_stable_model_gru64_only:
+      description: "Component-capacity isolation: halve only GRU hidden width while keeping the control TCN, fusion head, features, loss, and training policy unchanged."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          gru_hidden: 64
+    baseline_stable_model_fusion64_only:
+      description: "Component-capacity isolation: halve only the fusion hidden width while keeping the control TCN, GRU, features, loss, and training policy unchanged."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          fusion_hidden: 64
     baseline_stable_train_clip_4h_large_trade:
       description: "Mechanism experiment A: preserve the strong control feature set and apply train-fold-only 1%-99% clipping to 4H large-trade ratio distribution shocks."
       inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
@@ -2044,8 +2062,9 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_stable_model_medium_capacity
-    - baseline_stable_model_small_capacity
+    - baseline_stable_model_tcn32_only
+    - baseline_stable_model_gru64_only
+    - baseline_stable_model_fusion64_only
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2055,7 +2074,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: model_skeleton_capacity_sprint_preregistered
+    status: model_component_capacity_isolation_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2065,8 +2084,10 @@ experiments:
       - train_only_4h_flow_reliability_mask
       - train_only_clip_and_reliability_mask
       - causal_4h_taker_flow_term_structure_agreement
-    conclusion: "Feature deletion, masking, clipping, pairwise loss, futures context, and term-structure overlays have not solved bad-fold score reversal. The next research cycle must isolate the model skeleton before proposing another feature family."
-    next_step: "Run a capacity-only TCN+GRU diagnostic sprint on historical walk-forward CV: same control feature set, same labels, same loss, same early-stop metric; compare medium/small capacity candidates against the control for Rank IC, worst-fold IC, top-score payoff, and F1 skill."
+      - uniform_medium_model_capacity
+      - uniform_small_model_capacity
+    conclusion: "Bundle 20260624_171150 showed that uniform model shrinkage is not promotable. The small encoder improved triage fold stability, positive-fold coverage, and worst-fold IC, but damaged top-score lift, PRAUC, and official F1; the medium encoder did not improve dispersion and lost top-score concentration. Capacity is therefore a plausible partial mechanism, but the responsible TCN, GRU, or fusion component must be isolated."
+    next_step: "Run a component-only capacity sprint on the same historical triage folds: halve only TCN channels, only GRU hidden width, or only fusion hidden width. Promote no candidate unless it preserves top-10 payoff and official classification skill while improving ranking stability."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2264,6 +2285,8 @@ experiments:
     reject_retests: true
     allow_retest_profiles: []
     reference_notes:
+      baseline_stable_model_medium_capacity: "Bundle 20260624_171150: uniform medium shrinkage raised triage mean IC but slightly worsened std, left positive-fold coverage at 58.3%, reduced official F1 to 0.4348, and collapsed top-10 lift to 0.9938. Reject as a combined-capacity configuration."
+      baseline_stable_model_small_capacity: "Bundle 20260624_171150: uniform small shrinkage was diagnostically useful but non-promotable. It improved triage std from 0.0985 to 0.0834, positive folds to 75%, and worst-5 IC to -0.0085, but reduced official F1 to 0.4372, PRAUC, and top-10 lift to 1.0483. Use this only as evidence for component-level capacity isolation."
       baseline_stable_train_clip_4h_large_trade: "Bundle 20260614_054446: train-only clipping was controlled and improved triage mean IC by 0.0047 with a small std reduction, but official F1 was flat and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive/non-promotable; do not auto-rerun."
       baseline_stable_train_reliability_mask_4h_flow: "Bundle 20260614_054446: hard reliability masking touched 10/12 triage folds and produced unstable alternating wins/losses. Mean IC rose, but std increased to 0.1121, positive folds fell to 50%, official F1 and top-10 lift deteriorated. Reject this masking rule."
       baseline_stable_train_clip_and_reliability_mask: "Bundle 20260614_054446: adding clipping did not repair hard-mask instability. Std remained 0.1110, positive folds 50%, official F1 0.4323, and top-10 lift 1.1770. Reject the combined rule."
@@ -2289,6 +2312,10 @@ experiments:
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
       training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
     rejected_profiles:
+      baseline_stable_model_medium_capacity:
+        reason: "Bundle 20260624_171150: uniform medium capacity was non-promotable. Triage std worsened from 0.0985 to 0.1017, positive-fold coverage stayed at 58.3%, official F1 fell from 0.4558 to 0.4348, and top-10 lift fell from 1.2276 to 0.9938."
+      baseline_stable_model_small_capacity:
+        reason: "Bundle 20260624_171150: uniform small capacity improved stability and worst folds, but was non-promotable because official F1 fell from 0.4558 to 0.4372, PRAUC weakened, and top-10 lift fell from 1.2276 to 1.0483. Do not rerun the combined shrinkage; isolate TCN, GRU, and fusion capacity instead."
       baseline_stable_train_clip_4h_large_trade:
         reason: "Bundle 20260614_054446: controlled but non-promotable. Triage mean IC improved only 0.0047, std improvement missed the preregistered minimum, official F1 was flat, and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive and require an explicit retest reason."
       baseline_stable_train_reliability_mask_4h_flow:

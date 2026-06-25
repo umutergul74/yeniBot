@@ -57,6 +57,13 @@ The current safe control profile is configured in `config.yaml`:
   only `69.4%` of folds. `recent_3_equal` alone cleared every committed
   balanced non-inferiority gate. `control_recent3_equal_v2` is now the pinned
   replacement candidate awaiting a fresh unseen OOS window.
+- Bundle `20260624_171150` completed the first model-capacity diagnostic.
+  Uniform medium shrinkage was rejected because it worsened dispersion and
+  collapsed top-decile lift. Uniform small shrinkage improved triage std,
+  positive-fold coverage, and worst-fold IC, but damaged official F1, PRAUC,
+  and top-decile concentration. Do not rerun either combined configuration.
+  The next historical-CV sprint isolates TCN, GRU, and fusion width one at a
+  time while keeping features, labels, loss, and training policy fixed.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 

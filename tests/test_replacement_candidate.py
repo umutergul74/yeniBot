@@ -295,3 +295,50 @@ def test_publish_replacement_reports_writes_placeholder_when_fit_missing(
         )
     )
     assert patch["stage_1_unpinned_config_patch"] == {}
+
+
+def test_publish_replacement_reports_uses_pinned_config_when_run_fit_is_historical(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "run"
+    target = tmp_path / "reports"
+    source.mkdir()
+    config = {
+        "experiments": {
+            "frozen_candidates": {
+                "primary_candidate_id": "control_recent3_equal_v2",
+                "candidates": [
+                    {
+                        "candidate_id": "control_recent3_equal_v2",
+                        "candidate_type": "recency_profile",
+                        "profile": "control",
+                        "source_run_id": "source-run",
+                        "fold_scope": "replacement_recent3",
+                        "anchor_data_end": "2026-06-13T01:00:00+00:00",
+                        "status": "manifest_pinned_awaiting_future_oos",
+                        "expected_manifest_hash": "a" * 64,
+                        "threshold": {"value": 0.42},
+                    }
+                ],
+            }
+        }
+    }
+
+    payload = replacement.publish_replacement_candidate_reports(
+        source,
+        target,
+        config=config,
+    )
+
+    assert payload["available"] is True
+    assert payload["status"] == "manifest_pinned_existing_candidate"
+    assert payload["candidate_id"] == "control_recent3_equal_v2"
+    assert payload["source_run_id"] == "source-run"
+    assert payload["manifest_pin_required"] is False
+    patch = json.loads(
+        (target / "replacement_preregistration_patch.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert patch["status"] == "manifest_already_pinned"
+    assert patch["manual_pin_required"] is False
