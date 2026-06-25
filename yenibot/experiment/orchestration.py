@@ -26,7 +26,6 @@ from yenibot.experiment.common import (
     _hash_payload,
     _json_ready,
     _read_json,
-    _set_cfg,
     _slug,
     _write_json,
 )
@@ -80,15 +79,17 @@ from yenibot.experiment.ensembles import (
     _profile_delta_vs_control,
     _seed_audit_coverage_frame,
     _seed_audit_entries_to_frames,
-    _seed_audit_scope,
-    _seed_ensemble_entries,
-    _seed_ensemble_frame,
     _write_profile_blend_files,
     _write_profile_delta,
     _write_profile_diagnostic_summaries,
     _write_seed_audit_files,
-    _write_seed_ensemble_files,
 )
+from yenibot.experiment.seed_ensemble_research import (
+    build_seed_ensemble_entries_or_legacy,
+    seed_ensemble_report_frames,
+    write_seed_ensemble_outputs,
+)
+from yenibot.experiment.seed_audit import run_in_run_seed_audits
 from yenibot.experiment.execution import diagnostics_status_path, traced_workflow, training_status_path, workflow_checkpoint
 from yenibot.experiment.evidence import (
     _model_evidence_uncertainty_frame,
@@ -552,7 +553,6 @@ def run_experiment_matrix(
 
     full_rows = _decision_rows(full_rows, config, scope="full") if full_rows else []
     comparison = _comparison_frame([*triage_rows, *full_rows])
-    seed_results: list[dict[str, Any]] = []
     seed_audit_cfg = settings.get("seed_audit", {}) or {}
     workflow_checkpoint(
         "train_seed_audit",
@@ -560,29 +560,17 @@ def run_experiment_matrix(
         profiles=seed_audit_cfg.get("profiles", []),
         seeds=seed_audit_cfg.get("seeds", []),
     )
-    if bool(seed_audit_cfg.get("enabled", False)):
-        audit_profiles = [str(profile) for profile in seed_audit_cfg.get("profiles", []) or [settings["control_profile"]]]
-        audit_seeds = [int(seed) for seed in seed_audit_cfg.get("seeds", []) or []]
-        audit_fold_ids = [int(fold_id) for fold_id in seed_audit_cfg.get("resolved_fold_ids", [])]
-        for profile in audit_profiles:
-            for seed in audit_seeds:
-                seed_cfg = copy.deepcopy(config)
-                _set_cfg(seed_cfg, ["project", "random_seed"], seed)
-                result = run_profile_experiment(
-                    frame,
-                    seed_cfg,
-                    profile=profile,
-                    checkpoint_dir=checkpoint_dir,
-                    run_id=run_id,
-                    fold_scope=_seed_audit_scope(seed),
-                    fold_ids=audit_fold_ids,
-                    resume_existing=resume_existing,
-                    force_retrain=force_retrain,
-                    device=device,
-                )
-                result["summary"]["seed"] = seed
-                seed_results.append(result)
-    seed_ensemble_results = _seed_ensemble_entries(seed_results, config)
+    seed_results = run_in_run_seed_audits(
+        frame,
+        config,
+        settings,
+        checkpoint_dir=checkpoint_dir,
+        run_id=run_id,
+        device=device,
+    )
+    seed_ensemble_results = build_seed_ensemble_entries_or_legacy(
+        profile_results, seed_results, config
+    )
     write_preprocessing_audit([*profile_results, *seed_results], run_dir)
     profile_blend_results = _profile_blend_entries(profile_results, config)
     all_results = [*profile_results, *seed_results, *seed_ensemble_results, *profile_blend_results]
@@ -594,7 +582,7 @@ def run_experiment_matrix(
         settings,
         available_fold_ids=available_fold_ids,
     )
-    seed_ensemble = _seed_ensemble_frame(all_results)
+    seed_ensemble, seed_ensemble_decision = seed_ensemble_report_frames(all_results, config)
     profile_blend = _profile_blend_frame(all_results)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, config, settings["control_profile"])
     workflow_checkpoint("compute_training_diagnostics", result_count=len(all_results))
@@ -703,7 +691,7 @@ def run_experiment_matrix(
     )
     _write_future_oos_candidate_plan(run_dir, future_oos_candidate_plan)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
-    _write_seed_ensemble_files(run_dir, seed_ensemble)
+    write_seed_ensemble_outputs(run_dir, seed_ensemble, seed_ensemble_decision)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
@@ -775,6 +763,7 @@ def run_experiment_matrix(
         "seed_audit_profiles": [str(profile) for profile in seed_audit_cfg.get("profiles", [])] if seed_audit_cfg else [],
         "seed_audit_seeds": [int(seed) for seed in seed_audit_cfg.get("seeds", [])] if seed_audit_cfg else [],
         "seed_audit_coverage": seed_audit_coverage.to_dict(orient="records"),
+        "seed_ensemble_decision": seed_ensemble_decision.to_dict(orient="records"),
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
         **{key: training_execution[key] for key in _TRAINING_EXECUTION_KEYS},
         "executed_training_scopes": training_execution["executed_training_scopes"],
@@ -833,6 +822,7 @@ def run_experiment_matrix(
         "seed_stability": seed_stability,
         "seed_audit_coverage": seed_audit_coverage,
         "seed_ensemble": seed_ensemble,
+        "seed_ensemble_decision": seed_ensemble_decision,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
         "phase1_blocker_action_plan": phase1_blocker_action_plan,
@@ -954,7 +944,9 @@ def write_experiment_diagnostics(
         )
     profile_entries = list(entries)
     workflow_checkpoint("build_profile_summaries", profile_scope_count=len(profile_entries))
-    seed_ensemble_entries = _seed_ensemble_entries(profile_entries, diagnostic_config)
+    seed_ensemble_entries = build_seed_ensemble_entries_or_legacy(
+        profile_entries, profile_entries, diagnostic_config
+    )
     profile_blend_entries = _profile_blend_entries(profile_entries, diagnostic_config)
     entries = [*profile_entries, *seed_ensemble_entries, *profile_blend_entries]
 
@@ -976,7 +968,9 @@ def write_experiment_diagnostics(
     seed_audit_extension, seed_reproducibility_audit = _seed_reproducibility_reports(
         profile_entries, settings, diagnostic_config, seed_audit_extension, seed_audit_coverage
     )
-    seed_ensemble = _seed_ensemble_frame(entries)
+    seed_ensemble, seed_ensemble_decision = seed_ensemble_report_frames(
+        entries, diagnostic_config
+    )
     profile_blend = _profile_blend_frame(entries)
     profile_blend = _profile_blend_review_frame(profile_blend, comparison, diagnostic_config, settings["control_profile"])
     holdout_boundary_audit = _holdout_boundary_audit_frame(entries, settings)
@@ -1069,6 +1063,7 @@ def write_experiment_diagnostics(
             str(profile) for profile in (settings.get("seed_audit", {}) or {}).get("profiles", [])
         ],
         "seed_audit_seeds": [int(seed) for seed in (settings.get("seed_audit", {}) or {}).get("seeds", [])],
+        "seed_ensemble_decision": seed_ensemble_decision.to_dict(orient="records"),
         "skipped_profiles": settings.get("skipped_profiles", []) or [],
         **{key: training_execution.get(key) for key in _TRAINING_EXECUTION_KEYS},
         "executed_training_scopes": training_execution.get("executed_training_scopes", []),
@@ -1360,7 +1355,7 @@ def write_experiment_diagnostics(
     _write_seed_audit_files(report_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_seed_reproducibility_files(report_dir, seed_reproducibility_audit)
     _write_experiment_memory_registry(report_dir, experiment_memory_registry)
-    _write_seed_ensemble_files(report_dir, seed_ensemble)
+    write_seed_ensemble_outputs(report_dir, seed_ensemble, seed_ensemble_decision)
     _write_profile_blend_files(report_dir, profile_blend)
     _write_performance_gap_analysis(report_dir, performance_gap_analysis)
     _write_forensics_reports(
@@ -1623,7 +1618,7 @@ def write_experiment_diagnostics(
     _write_profile_delta(run_dir, profile_delta)
     _write_seed_audit_files(run_dir, seed_audit, seed_stability, seed_audit_coverage)
     _write_experiment_memory_registry(run_dir, experiment_memory_registry)
-    _write_seed_ensemble_files(run_dir, seed_ensemble)
+    write_seed_ensemble_outputs(run_dir, seed_ensemble, seed_ensemble_decision)
     _write_profile_blend_files(run_dir, profile_blend)
     _write_performance_gap_analysis(run_dir, performance_gap_analysis)
     _write_phase1_blocker_action_plan(run_dir, phase1_blocker_action_plan)
@@ -1712,6 +1707,7 @@ def write_experiment_diagnostics(
         "seed_audit_coverage": seed_audit_coverage,
         "seed_reproducibility_audit": seed_reproducibility_audit,
         "seed_ensemble": seed_ensemble,
+        "seed_ensemble_decision": seed_ensemble_decision,
         "profile_blend": profile_blend,
         "performance_gap_analysis": performance_gap_analysis,
         "phase1_blocker_action_plan": phase1_blocker_action_plan,

@@ -27,7 +27,53 @@ from yenibot.experiment.ensembles import (
 )
 from yenibot.experiment.training import run_profile_experiment
 
-__all__ = ["run_seed_audit_extension"]
+__all__ = ["run_in_run_seed_audits", "run_seed_audit_extension"]
+
+
+def run_in_run_seed_audits(
+    frame: pd.DataFrame,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    *,
+    checkpoint_dir: str | Path,
+    run_id: str,
+    device: str | None = None,
+) -> list[dict[str, Any]]:
+    """Train configured seed scopes with their resolved per-seed fold plans."""
+
+    seed_cfg = settings.get("seed_audit", {}) or {}
+    if not bool(seed_cfg.get("enabled", False)):
+        return []
+    profiles = [
+        str(profile)
+        for profile in seed_cfg.get("profiles", []) or [settings["control_profile"]]
+    ]
+    fold_ids_by_seed = seed_cfg.get("resolved_fold_ids_by_seed", {}) or {}
+    results: list[dict[str, Any]] = []
+    for profile in profiles:
+        for seed in [int(value) for value in seed_cfg.get("seeds", []) or []]:
+            seed_config = copy.deepcopy(config)
+            _set_cfg(seed_config, ["project", "random_seed"], seed)
+            result = run_profile_experiment(
+                frame,
+                seed_config,
+                profile=profile,
+                checkpoint_dir=checkpoint_dir,
+                run_id=run_id,
+                fold_scope=_seed_audit_scope(seed),
+                fold_ids=[
+                    int(fold_id)
+                    for fold_id in fold_ids_by_seed.get(
+                        str(seed), seed_cfg.get("resolved_fold_ids", [])
+                    )
+                ],
+                resume_existing=bool(settings.get("resume_existing", True)),
+                force_retrain=bool(settings.get("force_retrain", False)),
+                device=device,
+            )
+            result["summary"]["seed"] = seed
+            results.append(result)
+    return results
 
 
 def run_seed_audit_extension(

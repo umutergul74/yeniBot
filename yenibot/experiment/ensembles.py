@@ -18,7 +18,7 @@ from yenibot.experiment.common import (
     _slug,
     _write_json,
 )
-from yenibot.experiment.configuration import _resolve_seed_audit_fold_ids
+from yenibot.experiment.configuration import _resolve_seed_audit_fold_ids_for_seed
 
 from yenibot.experiment.training import (
     summarize_profile_predictions,
@@ -273,20 +273,8 @@ def _seed_audit_coverage_frame(
                     for value in pd.to_numeric(predictions["fold"], errors="coerce").dropna().unique()
                 )
         available = sorted(observed_universe)
-    if seed_cfg.get("resolved_fold_ids"):
-        configured = list(dict.fromkeys(int(fold_id) for fold_id in seed_cfg.get("resolved_fold_ids", [])))
-    else:
-        configured = _resolve_seed_audit_fold_ids(seed_cfg, available)
     available_set = set(available)
-    valid = [fold_id for fold_id in configured if fold_id in available_set]
-    invalid = [fold_id for fold_id in configured if fold_id not in available_set]
     min_span = float(seed_cfg.get("min_temporal_span_fraction", 0.80))
-    if valid and available and len(available) == 1:
-        span = 1.0
-    elif valid and available:
-        span = float((max(valid) - min(valid)) / (max(available) - min(available)))
-    else:
-        span = 0.0
     entry_lookup = {
         (str(entry.get("profile", "")), _seed_from_scope(str(entry.get("fold_scope", "")))): entry
         for entry in entries
@@ -297,6 +285,25 @@ def _seed_audit_coverage_frame(
     seeds = [int(seed) for seed in seed_cfg.get("seeds", []) or []]
     for profile in profiles:
         for seed in seeds:
+            resolved_by_seed = seed_cfg.get("resolved_fold_ids_by_seed", {}) or {}
+            if str(seed) in resolved_by_seed:
+                configured = list(
+                    dict.fromkeys(int(fold_id) for fold_id in resolved_by_seed[str(seed)])
+                )
+            else:
+                configured = _resolve_seed_audit_fold_ids_for_seed(
+                    seed_cfg,
+                    available,
+                    seed,
+                )
+            valid = [fold_id for fold_id in configured if fold_id in available_set]
+            invalid = [fold_id for fold_id in configured if fold_id not in available_set]
+            if valid and available and len(available) == 1:
+                span = 1.0
+            elif valid and available:
+                span = float((max(valid) - min(valid)) / (max(available) - min(available)))
+            else:
+                span = 0.0
             entry = entry_lookup.get((profile, seed))
             observed: list[int] = []
             if entry is not None:
@@ -592,7 +599,7 @@ def _seed_ensemble_entries(entries: list[dict[str, Any]], config: dict[str, Any]
 def _seed_ensemble_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
     rows = []
     for entry in entries:
-        if str(entry.get("fold_scope", "")) != "seed_ensemble":
+        if not str(entry.get("fold_scope", "")).startswith("seed_ensemble"):
             continue
         row = dict(entry["diagnostics"]["row"])
         predictions = entry.get("predictions", pd.DataFrame())

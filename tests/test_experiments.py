@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import yenibot.experiment.seed_ensemble_research as seed_ensemble_research
 from yenibot.config import load_config
 from yenibot.experiments import (
     _attach_holdout_soft_pass,
@@ -62,6 +63,7 @@ from yenibot.experiments import (
     _score_separation_forensics_frame,
     _seed_audit_coverage_frame,
     _resolve_seed_audit_fold_ids,
+    _resolve_seed_audit_fold_ids_for_seed,
     _reconcile_seed_extension_summary,
     _seed_reproducibility_audit_frame,
     _training_signature,
@@ -86,6 +88,9 @@ from yenibot.features import build_feature_matrix, filter_feature_columns, resol
 from yenibot.experiment.seed_reproducibility import (
     _seed_reproducibility_manifest_diff_frame,
     _write_seed_reproducibility_files,
+)
+from yenibot.experiment.seed_ensemble_research import (
+    _validation_percentile_predictions,
 )
 from yenibot.experiment.ensembles import _write_profile_blend_files
 from yenibot.experiment.rolling_research import research_protocol_payload
@@ -2956,12 +2961,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
-    assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_model_tcn32_only",
-        "baseline_stable_model_gru64_only",
-        "baseline_stable_model_fusion64_only",
-    ]
+    assert config["experiments"]["max_auto_full_candidates"] == 0
+    assert config["experiments"]["candidate_profiles"] == []
     medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
     small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
     tcn_only = config["features"]["profiles"]["baseline_stable_model_tcn32_only"]
@@ -3053,9 +3054,29 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert config["experiments"]["seed_audit"]["fold_ids"] == "auto"
+    assert config["experiments"]["seed_audit"]["fold_ids_by_seed"] == {
+        "42": "auto",
+        "43": "all",
+        "44": "all",
+    }
     assert config["experiments"]["seed_audit"]["fold_count"] == 8
     assert config["experiments"]["seed_audit"]["include_boundary_folds"] is True
     assert config["experiments"]["seed_audit"]["min_temporal_span_fraction"] == 0.90
+    assert config["experiments"]["seed_audit"]["reference_full_seed"] == 42
+    assert config["experiments"]["seed_audit"]["include_control_full_seed"] is True
+    assert config["experiments"]["seed_audit"]["ensemble"]["candidate_id"] == (
+        "baseline_seed_rank_ensemble_v1"
+    )
+    assert config["experiments"]["seed_audit"]["ensemble"]["exploratory_fold_ids"] == [
+        0,
+        5,
+        10,
+        15,
+        21,
+        26,
+        31,
+        36,
+    ]
     notes = config["experiments"]["experiment_memory"]["reference_notes"]
     assert "weak as a standalone profile" in notes["baseline_no_4h_tier1_4h_large_trade_pressure_long"]
     assert "Retired frozen review selection" in notes["blend_prob_mean_953a4ee825"]
@@ -3101,7 +3122,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "model_component_capacity_isolation_preregistered"
+        "baseline_seed_rank_ensemble_confirmatory_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
@@ -3124,6 +3145,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     rejected = config["experiments"]["experiment_memory"]["rejected_profiles"]
     assert "uniform medium capacity" in rejected["baseline_stable_model_medium_capacity"]["reason"]
     assert "uniform small capacity" in rejected["baseline_stable_model_small_capacity"]["reason"]
+    assert "TCN32-only failed joint gates" in rejected["baseline_stable_model_tcn32_only"]["reason"]
+    assert "GRU64-only lowered mean IC" in rejected["baseline_stable_model_gru64_only"]["reason"]
+    assert "fusion64-only lowered mean IC" in rejected["baseline_stable_model_fusion64_only"]["reason"]
     assert "non-promotable" in rejected["baseline_stable_train_clip_4h_large_trade"]["reason"]
     assert "hard train-fold masking" in rejected["baseline_stable_train_reliability_mask_4h_flow"]["reason"]
     assert "did not stabilize" in rejected["baseline_stable_train_clip_and_reliability_mask"]["reason"]
@@ -3949,7 +3973,7 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
     )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "model_component_capacity_isolation_preregistered"
+        "baseline_seed_rank_ensemble_confirmatory_preregistered"
     )
     assert contract["seed_audit_mode"] == "in_run"
 
@@ -5123,6 +5147,8 @@ def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config
     assert "seeded/seed_audit_coverage.csv" in names
     assert "seeded/seed_stability.csv" in names
     assert "seeded/seed_ensemble.csv" in names
+    assert "seeded/seed_ensemble_decision.csv" in names
+    assert "seeded/seed_ensemble_decision.json" in names
     assert "seeded/seed_reproducibility_audit.csv" in names
     assert "seeded/seed_reproducibility_manifest_diff.csv" in names
     assert "seeded/seed_reproducibility_environment_audit.csv" in names
@@ -5153,6 +5179,251 @@ def test_seed_audit_auto_fold_ids_cover_current_boundaries() -> None:
     assert resolved[0] == 0
     assert resolved[-1] == 36
     assert resolved == sorted(set(resolved))
+
+
+def test_seed_specific_fold_plan_keeps_reference_audit_small_and_new_seeds_full() -> None:
+    available = list(range(37))
+    seed_cfg = {
+        "fold_ids": "auto",
+        "fold_ids_by_seed": {"42": "auto", "43": "all", "44": "full"},
+        "fold_count": 8,
+        "include_boundary_folds": True,
+    }
+
+    reference = _resolve_seed_audit_fold_ids_for_seed(seed_cfg, available, 42)
+    seed_43 = _resolve_seed_audit_fold_ids_for_seed(seed_cfg, available, 43)
+    seed_44 = _resolve_seed_audit_fold_ids_for_seed(seed_cfg, available, 44)
+
+    assert len(reference) == 8
+    assert reference[0] == 0
+    assert reference[-1] == 36
+    assert seed_43 == available
+    assert seed_44 == available
+
+
+def test_validation_percentile_transform_uses_only_fold_validation_distribution() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=7, freq="h", tz="UTC")
+    predictions = pd.DataFrame(
+        {
+            "fold": [0] * 7,
+            "split": ["val"] * 4 + ["test"] * 3,
+            "timestamp": timestamps,
+            "prob_long": [0.2, 0.4, 0.4, 0.8, 0.1, 0.4, 0.9],
+        }
+    )
+
+    transformed = _validation_percentile_predictions(predictions)
+    extended = pd.concat(
+        [
+            predictions,
+            pd.DataFrame(
+                {
+                    "fold": [0, 0],
+                    "split": ["test", "test"],
+                    "timestamp": pd.date_range(
+                        "2024-01-02", periods=2, freq="h", tz="UTC"
+                    ),
+                    "prob_long": [-10.0, 10.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    transformed_extended = _validation_percentile_predictions(extended).iloc[:7]
+
+    np.testing.assert_allclose(
+        transformed["prob_long"],
+        [0.125, 0.5, 0.5, 0.875, 0.0, 0.5, 1.0],
+    )
+    np.testing.assert_allclose(
+        transformed_extended["prob_long"],
+        transformed["prob_long"],
+    )
+    np.testing.assert_allclose(
+        transformed["prob_long_raw"],
+        predictions["prob_long"],
+    )
+
+
+def test_preregistered_seed_ensemble_separates_exploratory_and_confirmatory_folds(
+    monkeypatch,
+) -> None:
+    rows = []
+    for fold in range(3):
+        for split in ("val", "test"):
+            for position, score in enumerate((0.1, 0.3, 0.6, 0.9)):
+                rows.append(
+                    {
+                        "fold": fold,
+                        "split": split,
+                        "timestamp": pd.Timestamp("2024-01-01", tz="UTC")
+                        + pd.Timedelta(hours=fold * 20 + position + (10 if split == "test" else 0)),
+                        "source_row_position": fold * 100
+                        + position
+                        + (10 if split == "test" else 0),
+                        "label": int(position >= 2),
+                        "forward_return": float(position - 1.5) / 100.0,
+                        "prob_long": score,
+                    }
+                )
+    base = pd.DataFrame(rows)
+
+    def fake_summary(predictions, config, *, profile, feature_columns, fold_scope):
+        return {
+            "row": {
+                "profile": profile,
+                "fold_scope": fold_scope,
+                "fold_count": int(predictions["fold"].nunique()),
+            }
+        }
+
+    monkeypatch.setattr(seed_ensemble_research, "summarize_profile_predictions", fake_summary)
+    full = {
+        "profile": "control",
+        "fold_scope": "full",
+        "feature_columns": ["feature"],
+        "predictions": base.copy(),
+    }
+    seed_results = []
+    for seed, offset in ((42, 0.0), (43, 0.02), (44, -0.02)):
+        prediction = base.copy()
+        prediction["prob_long"] = prediction["prob_long"] + offset
+        seed_results.append(
+            {
+                "profile": "control",
+                "fold_scope": f"seed_audit_seed_{seed:03d}",
+                "feature_columns": ["feature"],
+                "predictions": prediction,
+            }
+        )
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+        },
+        "experiments": {
+            "control_profile": "control",
+            "seed_audit": {
+                "profiles": ["control"],
+                "reference_full_seed": 42,
+                "include_control_full_seed": True,
+                "ensemble": {
+                    "enabled": True,
+                    "required_seed_count": 3,
+                    "candidate_id": "baseline_seed_rank_ensemble_v1",
+                    "exploratory_fold_ids": [0],
+                },
+            },
+        },
+    }
+
+    entries = seed_ensemble_research.build_seed_ensemble_entries(
+        [full],
+        seed_results,
+        config,
+    )
+    by_scope = {entry["fold_scope"]: entry for entry in entries}
+
+    assert len(entries) == 6
+    assert set(by_scope["seed_ensemble_rank_exploratory"]["predictions"]["fold"]) == {0}
+    assert set(by_scope["seed_ensemble_rank_confirmatory"]["predictions"]["fold"]) == {1, 2}
+    rank_predictions = by_scope["seed_ensemble_rank_confirmatory"]["predictions"]
+    assert rank_predictions["prob_long"].between(0.0, 1.0).all()
+    assert rank_predictions["ensemble_seed_count"].eq(3).all()
+    assert by_scope["seed_ensemble_rank_confirmatory"]["diagnostics"]["row"][
+        "automatic_promotion_allowed"
+    ] is False
+
+
+def test_seed_ensemble_confirmatory_decision_never_auto_promotes(monkeypatch) -> None:
+    predictions = pd.DataFrame(
+        {
+            "fold": [1] * 8 + [2] * 8,
+            "split": (["val"] * 4 + ["test"] * 4) * 2,
+            "timestamp": pd.date_range("2024-01-01", periods=16, freq="h", tz="UTC"),
+            "label": [0, 0, 1, 1] * 4,
+            "forward_return": [-0.01, -0.005, 0.005, 0.01] * 4,
+            "prob_long": [0.1, 0.3, 0.6, 0.9] * 4,
+        }
+    )
+    control_row = {
+        "mean_rank_ic": 0.05,
+        "std_rank_ic": 0.08,
+        "positive_ic_fraction": 0.70,
+        "worst_5_rank_ic_mean": -0.10,
+        "top_10_lift_global": 1.10,
+        "test_f1_at_official_threshold": 0.43,
+    }
+
+    monkeypatch.setattr(
+        seed_ensemble_research,
+        "summarize_profile_predictions",
+        lambda *args, **kwargs: {"row": control_row},
+    )
+    candidate_row = {
+        "fold_count": 29,
+        "mean_rank_ic": 0.05,
+        "std_rank_ic": 0.07,
+        "positive_ic_fraction": 0.75,
+        "worst_5_rank_ic_mean": -0.08,
+        "top_10_lift_global": 1.10,
+        "top_10_forward_return_global": 0.001,
+        "test_f1_at_official_threshold": 0.43,
+        "test_pred_long_rate_at_official_threshold": 0.65,
+        "ensemble_seeds": "42,43,44",
+        "ensemble_method": "validation_percentile_rank_mean",
+    }
+    entries = [
+        {
+            "profile": "control",
+            "fold_scope": "full",
+            "feature_columns": ["feature"],
+            "predictions": predictions,
+            "diagnostics": {"row": control_row},
+        },
+        {
+            "profile": "control",
+            "fold_scope": "seed_ensemble_rank_confirmatory",
+            "feature_columns": ["feature"],
+            "predictions": predictions,
+            "diagnostics": {"row": candidate_row},
+        },
+    ]
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+        },
+        "experiments": {
+            "control_profile": "control",
+            "seed_audit": {
+                "ensemble": {
+                    "enabled": True,
+                    "candidate_id": "baseline_seed_rank_ensemble_v1",
+                    "confirmatory_gates": {
+                        "min_confirmatory_folds": 20,
+                        "min_mean_rank_ic_delta": -0.003,
+                        "max_std_rank_ic_delta": -0.005,
+                        "min_positive_ic_fraction_delta": 0.0,
+                        "min_worst_5_rank_ic_delta": 0.01,
+                        "min_top_10_lift_ratio": 0.98,
+                        "min_top_10_forward_return": 0.0,
+                        "min_official_f1_delta": -0.005,
+                        "max_prediction_long_rate": 0.70,
+                    },
+                }
+            },
+        },
+    }
+
+    decision = seed_ensemble_research.seed_ensemble_decision_frame(entries, config)
+
+    assert bool(decision.loc[0, "historical_cv_gates_passed"]) is True
+    assert bool(decision.loc[0, "candidate_ready_for_future_preregistration"]) is True
+    assert bool(decision.loc[0, "automatic_promotion_allowed"]) is False
+    assert decision.loc[0, "next_action"] == (
+        "review_then_preregister_with_new_future_oos_anchor"
+    )
 
 
 def test_seed_audit_coverage_auto_fold_ids_pass_when_boundaries_observed() -> None:

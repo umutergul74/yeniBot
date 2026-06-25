@@ -58,6 +58,7 @@ __all__ = [
     'experiment_settings',
     '_available_walk_forward_fold_ids',
     '_resolve_seed_audit_fold_ids',
+    '_resolve_seed_audit_fold_ids_for_seed',
     '_attach_resolved_seed_audit_folds',
     '_diagnostic_seed_audit_settings',
     '_validate_requested_fold_ids',
@@ -476,6 +477,8 @@ def _resolve_seed_audit_fold_ids(
     auto_values = {"auto", "balanced", "temporal_coverage"}
     if isinstance(raw, str):
         raw_text = raw.strip().lower()
+        if raw_text in {"all", "full"}:
+            return available
         if raw_text in auto_values:
             fold_count = int(seed_cfg.get("fold_count", len(fallback) or 8))
             if bool(seed_cfg.get("include_boundary_folds", True)) and len(available) >= 2:
@@ -496,6 +499,25 @@ def _resolve_seed_audit_fold_ids(
         return available
     return _dedupe_ints(requested)
 
+def _resolve_seed_audit_fold_ids_for_seed(
+    seed_cfg: dict[str, Any],
+    available_fold_ids: list[int],
+    seed: int,
+    *,
+    fallback_fold_ids: list[int] | None = None,
+) -> list[int]:
+    """Resolve an optional seed-specific fold plan without mutating shared config."""
+
+    by_seed = seed_cfg.get("fold_ids_by_seed", {}) or {}
+    plan = by_seed.get(str(int(seed)), by_seed.get(int(seed), seed_cfg.get("fold_ids")))
+    local = copy.deepcopy(seed_cfg)
+    local["fold_ids"] = plan
+    return _resolve_seed_audit_fold_ids(
+        local,
+        available_fold_ids,
+        fallback_fold_ids=fallback_fold_ids,
+    )
+
 def _attach_resolved_seed_audit_folds(
     settings: dict[str, Any],
     available_fold_ids: list[int],
@@ -506,13 +528,24 @@ def _attach_resolved_seed_audit_folds(
     seed_cfg = updated.get("seed_audit", {}) or {}
     if not bool(seed_cfg.get("enabled", False)):
         return updated
-    resolved = _resolve_seed_audit_fold_ids(
-        seed_cfg,
-        available_fold_ids,
-        fallback_fold_ids=fallback_fold_ids,
-    )
     updated["seed_audit"] = copy.deepcopy(seed_cfg)
-    updated["seed_audit"]["resolved_fold_ids"] = resolved
+    resolved_by_seed = {
+        str(int(seed)): _resolve_seed_audit_fold_ids_for_seed(
+            seed_cfg,
+            available_fold_ids,
+            int(seed),
+            fallback_fold_ids=fallback_fold_ids,
+        )
+        for seed in seed_cfg.get("seeds", []) or []
+    }
+    updated["seed_audit"]["resolved_fold_ids_by_seed"] = resolved_by_seed
+    updated["seed_audit"]["resolved_fold_ids"] = sorted(
+        {
+            int(fold_id)
+            for fold_ids in resolved_by_seed.values()
+            for fold_id in fold_ids
+        }
+    )
     return updated
 
 def _diagnostic_seed_audit_settings(
@@ -528,6 +561,13 @@ def _diagnostic_seed_audit_settings(
         seed_cfg["resolved_fold_ids"] = list(
             dict.fromkeys(int(fold_id) for fold_id in run_seed_cfg.get("resolved_fold_ids", []))
         )
+    if run_seed_cfg.get("resolved_fold_ids_by_seed"):
+        seed_cfg["resolved_fold_ids_by_seed"] = {
+            str(seed): list(dict.fromkeys(int(fold_id) for fold_id in fold_ids))
+            for seed, fold_ids in (
+                run_seed_cfg.get("resolved_fold_ids_by_seed", {}) or {}
+            ).items()
+        }
     updated["seed_audit"] = seed_cfg
     return updated
 
@@ -566,16 +606,28 @@ def _preflight_fold_plans(
     )
     seed_cfg = settings.get("seed_audit", {}) or {}
     if bool(seed_cfg.get("enabled", False)):
-        seed_fold_ids = _resolve_seed_audit_fold_ids(
-            seed_cfg,
-            available_fold_ids,
-            fallback_fold_ids=triage_fold_ids or None,
-        )
-        _validate_requested_fold_ids(
-            plan_name="experiments.seed_audit.fold_ids",
-            requested_fold_ids=seed_fold_ids or None,
-            available_fold_ids=available_fold_ids,
-        )
+        seeds = [int(seed) for seed in seed_cfg.get("seeds", []) or []]
+        plans = {
+            str(seed): _resolve_seed_audit_fold_ids_for_seed(
+                seed_cfg,
+                available_fold_ids,
+                seed,
+                fallback_fold_ids=triage_fold_ids or None,
+            )
+            for seed in seeds
+        } or {
+            "default": _resolve_seed_audit_fold_ids(
+                seed_cfg,
+                available_fold_ids,
+                fallback_fold_ids=triage_fold_ids or None,
+            )
+        }
+        for seed, seed_fold_ids in plans.items():
+            _validate_requested_fold_ids(
+                plan_name=f"experiments.seed_audit.fold_ids[{seed}]",
+                requested_fold_ids=seed_fold_ids or None,
+                available_fold_ids=available_fold_ids,
+            )
     return available_fold_ids
 
 def _profile_requires_intrahour_features(config: dict[str, Any], profile: str) -> bool:
