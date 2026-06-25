@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -100,3 +101,43 @@ def test_traced_workflow_records_failure_and_last_checkpoint(tmp_path: Path) -> 
     assert payload["current_stage"] == "compute_metrics"
     assert payload["error"]["type"] == "ValueError"
     assert "bad metric input" in payload["error"]["message"]
+
+
+def test_workflow_journal_retries_transient_drive_write_failure(tmp_path: Path) -> None:
+    status_path = tmp_path / "workflow_status.json"
+    original_write_text = Path.write_text
+    calls = {"count": 0}
+
+    def flaky_write_text(path: Path, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise ConnectionAbortedError(103, "temporary Drive disconnect")
+        return original_write_text(path, *args, **kwargs)
+
+    with (
+        patch("yenibot.experiment.execution.Path.write_text", new=flaky_write_text),
+        patch("yenibot.experiment.execution.sleep", return_value=None),
+    ):
+        journal = WorkflowJournal("unit_test", status_path)
+
+    assert calls["count"] == 3
+    assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_workflow_journal_warns_but_does_not_abort_after_retry_exhaustion(
+    tmp_path: Path,
+) -> None:
+    status_path = tmp_path / "workflow_status.json"
+
+    with (
+        patch(
+            "yenibot.experiment.execution.Path.write_text",
+            side_effect=ConnectionAbortedError(103, "persistent Drive disconnect"),
+        ),
+        patch("yenibot.experiment.execution.sleep", return_value=None),
+        pytest.warns(RuntimeWarning, match="workflow will continue"),
+    ):
+        journal = WorkflowJournal("unit_test", status_path)
+
+    assert not status_path.exists()
+    assert journal.payload["persistence_warnings"][-1]["operation"] == "write"

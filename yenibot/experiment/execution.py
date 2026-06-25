@@ -6,10 +6,12 @@ import contextvars
 import functools
 import json
 import traceback
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, Callable, ParamSpec, TypeVar
+from uuid import uuid4
 
 
 P = ParamSpec("P")
@@ -19,6 +21,20 @@ _CURRENT_JOURNAL: contextvars.ContextVar["WorkflowJournal | None"] = contextvars
     "yenibot_experiment_workflow_journal",
     default=None,
 )
+
+_STATUS_WRITE_ATTEMPTS = 6
+_STATUS_WRITE_BASE_DELAY_SECONDS = 0.25
+_RETRYABLE_STATUS_ERRNOS = {
+    5,    # transient Drive/remote I/O failure
+    11,   # resource temporarily unavailable
+    16,   # device or resource busy
+    32,   # sharing violation on Windows-backed mounts
+    103,  # software caused connection abort
+    104,  # connection reset by peer
+    107,  # transport endpoint not connected
+    110,  # connection timed out
+    116,  # stale file handle
+}
 
 
 def _utc_now() -> str:
@@ -35,6 +51,13 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
+
+def _retryable_status_error(error: OSError) -> bool:
+    return (
+        isinstance(error, (ConnectionAbortedError, ConnectionResetError, TimeoutError))
+        or error.errno in _RETRYABLE_STATUS_ERRNOS
+        or getattr(error, "winerror", None) in {32, 53, 64, 121}
+    )
 
 
 class WorkflowJournal:
@@ -60,9 +83,13 @@ class WorkflowJournal:
 
         old_path = self.path
         self.path = path
-        self._write()
-        if old_path != path and old_path.exists():
-            old_path.unlink()
+        persisted = self._write()
+        if persisted and old_path != path:
+            try:
+                if old_path.exists():
+                    old_path.unlink()
+            except OSError as error:
+                self._warn_persistence_failure("cleanup", old_path, error)
 
     def checkpoint(self, stage: str, **context: Any) -> None:
         now = _utc_now()
@@ -105,14 +132,66 @@ class WorkflowJournal:
         )
         self._write()
 
-    def _write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(f"{self.path.suffix}.tmp")
-        temporary.write_text(
-            json.dumps(_json_value(self.payload), indent=2, sort_keys=True),
-            encoding="utf-8",
+    def _warn_persistence_failure(
+        self,
+        operation: str,
+        path: Path,
+        error: OSError,
+    ) -> None:
+        event = {
+            "operation": operation,
+            "path": str(path),
+            "timestamp": _utc_now(),
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+        self.payload["persistence_warnings"] = [
+            *self.payload.get("persistence_warnings", []),
+            event,
+        ][-20:]
+        warnings.warn(
+            "Workflow status persistence failed after retries; the model workflow "
+            f"will continue and retry at the next checkpoint. path={path} "
+            f"error={type(error).__name__}: {error}",
+            RuntimeWarning,
+            stacklevel=3,
         )
-        temporary.replace(self.path)
+
+    def _write(self) -> bool:
+        serialized = json.dumps(_json_value(self.payload), indent=2, sort_keys=True)
+        last_error: OSError | None = None
+
+        for attempt in range(_STATUS_WRITE_ATTEMPTS):
+            temporary = self.path.with_name(
+                f".{self.path.name}.{uuid4().hex}.tmp"
+            )
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(serialized, encoding="utf-8")
+                temporary.replace(self.path)
+                return True
+            except OSError as error:
+                last_error = error
+                try:
+                    if temporary.exists():
+                        temporary.unlink()
+                except OSError:
+                    pass
+                if (
+                    not _retryable_status_error(error)
+                    or attempt + 1 >= _STATUS_WRITE_ATTEMPTS
+                ):
+                    break
+                sleep(
+                    min(
+                        _STATUS_WRITE_BASE_DELAY_SECONDS * (2**attempt),
+                        2.0,
+                    )
+                )
+
+        assert last_error is not None
+        self._warn_persistence_failure("write", self.path, last_error)
+        return False
 
 
 def traced_workflow(
