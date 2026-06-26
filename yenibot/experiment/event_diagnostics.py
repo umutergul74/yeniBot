@@ -232,6 +232,7 @@ def _label_event_audit_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
         candidate = str(entry.get("profile", ""))
         fold_scope = str(entry.get("fold_scope", ""))
         candidate_type = _diagnostic_candidate_type(fold_scope)
+        all_reference: dict[str, Any] = {}
         for band, mask in _band_masks(event_frame).items():
             row = _event_summary_row(
                 event_frame,
@@ -242,9 +243,8 @@ def _label_event_audit_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
                 mask=mask.fillna(False),
             )
             if band != "all":
-                all_row = rows[-1] if rows and rows[-1].get("event_band") == "all" else {}
-                base_return = _float(all_row, "mean_forward_return")
-                base_ic = _float(all_row, "rank_ic")
+                base_return = _float(all_reference, "mean_forward_return")
+                base_ic = _float(all_reference, "rank_ic")
                 row["diagnostic_interpretation"] = (
                     "event_subset_has_better_return_or_rank_ic"
                     if (
@@ -261,6 +261,7 @@ def _label_event_audit_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
                 )
             else:
                 row["diagnostic_interpretation"] = "all_rows_reference"
+                all_reference = dict(row)
             rows.append(row)
     return pd.DataFrame(rows, columns=columns)
 

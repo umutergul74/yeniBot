@@ -2039,6 +2039,19 @@ def test_event_diagnostics_identify_event_and_sample_information() -> None:
             "do_not_add_event_weighting_without_stronger_evidence",
         }
     )
+    best_band = frames["event_conditioned_performance"].iloc[0][
+        "best_event_band_by_forward_return"
+    ]
+    best_band_row = frames["label_event_audit"].loc[
+        frames["label_event_audit"]["event_band"].eq(best_band)
+    ].iloc[0]
+    if best_band_row["mean_forward_return"] > frames["label_event_audit"].iloc[0][
+        "mean_forward_return"
+    ]:
+        assert (
+            best_band_row["diagnostic_interpretation"]
+            == "event_subset_has_better_return_or_rank_ic"
+        )
     assert {"family", "information_signal", "recommended_action"}.issubset(
         frames["sample_information_audit"].columns
     )
