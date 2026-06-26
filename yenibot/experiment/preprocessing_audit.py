@@ -109,3 +109,117 @@ def write_preprocessing_audit(
     )
     (target / "preprocessing_audit_summary.md").write_text(markdown, encoding="utf-8")
     return combined
+
+
+def write_sample_weight_audit(
+    entries: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> pd.DataFrame:
+    """Collect train-fold sample weighting decisions into one report."""
+
+    columns = [
+        "profile",
+        "fold_scope",
+        "fold",
+        "component",
+        "enabled",
+        "row_count",
+        "mean_weight",
+        "std_weight",
+        "min_weight",
+        "p10_weight",
+        "p50_weight",
+        "p90_weight",
+        "max_weight",
+        "effective_sample_size",
+        "effective_sample_fraction",
+        "selected_column_count",
+        "selected_columns",
+        "horizon_bars",
+        "event_quantile",
+        "event_strength",
+        "notes",
+    ]
+    frames: list[pd.DataFrame] = []
+    for entry in entries:
+        scope_dir = Path(entry.get("scope_dir") or entry.get("output_dir") or "")
+        path = scope_dir / "sample_weight_audit.csv"
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame.insert(0, "fold_scope", str(entry.get("fold_scope", "")))
+        frame.insert(0, "profile", str(entry.get("profile", "")))
+        frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
+    for column in columns:
+        if column not in combined.columns:
+            combined[column] = np.nan
+    combined = combined[columns]
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(target / "sample_weight_audit.csv", index=False)
+    if combined.empty:
+        summary = pd.DataFrame(
+            columns=[
+                "profile",
+                "fold_scope",
+                "component",
+                "fold_count",
+                "mean_effective_sample_fraction",
+                "mean_weight",
+                "p90_weight",
+                "max_weight",
+                "selected_column_count_max",
+            ]
+        )
+    else:
+        working = combined.copy()
+        for column in (
+            "mean_weight",
+            "p90_weight",
+            "max_weight",
+            "effective_sample_fraction",
+            "selected_column_count",
+        ):
+            working[column] = pd.to_numeric(working[column], errors="coerce")
+        summary = (
+            working.groupby(["profile", "fold_scope", "component"], observed=True)
+            .agg(
+                fold_count=("fold", "nunique"),
+                mean_effective_sample_fraction=("effective_sample_fraction", "mean"),
+                mean_weight=("mean_weight", "mean"),
+                p90_weight=("p90_weight", "mean"),
+                max_weight=("max_weight", "max"),
+                selected_column_count_max=("selected_column_count", "max"),
+            )
+            .reset_index()
+        )
+    summary.to_csv(target / "sample_weight_audit_summary.csv", index=False)
+    summary.to_json(
+        target / "sample_weight_audit_summary.json",
+        orient="records",
+        indent=2,
+    )
+    markdown = "# Train-Fold Sample Weight Audit\n\n"
+    markdown += (
+        "No sample weighting decisions were recorded.\n"
+        if summary.empty
+        else summary.to_markdown(index=False) + "\n"
+    )
+    (target / "sample_weight_audit_summary.md").write_text(markdown, encoding="utf-8")
+    return combined
+
+
+def write_training_input_audits(
+    entries: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Write all train-fold input audits used by diagnostics bundles."""
+
+    preprocessing = write_preprocessing_audit(entries, output_dir)
+    sample_weights = write_sample_weight_audit(entries, output_dir)
+    return preprocessing, sample_weights

@@ -70,12 +70,16 @@ The current safe control profile is configured in `config.yaml`:
   worsened dispersion, positive-fold coverage, worst-fold behavior, official
   F1, and top-decile payoff. Do not search seed weights, add more seeds, or
   retry rank/probability seed ensembles without a new mechanism.
-- The current research state is diagnostics-first:
+- The current research state is sample-weighting-first:
   `experiments.research_focus.status` should be
-  `event_sample_information_diagnostics_preregistered`. Before adding another
-  training candidate, inspect `label_event_audit.csv`,
-  `event_conditioned_performance.csv`, `sample_information_audit.csv`, and
-  `overlap_uniqueness_audit.csv`.
+  `sample_uniqueness_event_weighting_preregistered`. The prerequisite
+  diagnostics showed that event-conditioned order-flow subsets improve payoff
+  or Rank IC, while overlapping 10-bar labels leave a very low effective sample
+  fraction. The next valid training candidates are train-fold-only label
+  uniqueness weighting and uniqueness plus bounded order-flow event weighting.
+  Do not replace this with another profile search, architecture search, seed
+  ensemble, or loss-only tweak unless these candidates fail and a new mechanism
+  is documented.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -197,6 +201,12 @@ Known lessons:
   not a new ensemble; it is event, label, and sample-information diagnostics to
   determine whether the training target itself needs event-aware weighting or a
   different durable mechanism.
+- The follow-up event/sample diagnostics from the same run showed a distinct
+  durable mechanism: event top-20 rows had stronger forward returns, mid-band
+  event rows had stronger Rank IC, and overlap uniqueness estimated an
+  effective sample fraction near `0.094`. This justifies train-fold-only sample
+  weighting; it does not justify hard masking, direct feature deletion, seed
+  blending, or another loss-only objective.
 - Diagnostics-time lifecycle state must come from the current config, not an
   old run manifest. Historical profile/fold selections remain source-run
   evidence, but retired frozen candidates, experiment memory, seed-audit
@@ -308,6 +318,8 @@ Required diagnostic artifacts include:
 - `profile_comparison.csv`
 - `profile_blend.csv`
 - `preprocessing_audit.csv`
+- `sample_weight_audit.csv`
+- `sample_weight_audit_summary.csv`
 - `performance_gap_analysis.csv`
 - `fold_stability_forensics.csv`
 - `fold_stability_summary.csv`

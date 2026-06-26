@@ -1,7 +1,5 @@
 """Top-level training matrix and diagnostics orchestration."""
-
 from __future__ import annotations
-
 import copy
 from pathlib import Path
 from typing import Any
@@ -144,7 +142,7 @@ from yenibot.experiment.payoff import (
     _write_payoff_alignment,
     _write_payoff_policy_robustness,
 )
-from yenibot.experiment.preprocessing_audit import write_preprocessing_audit
+from yenibot.experiment.preprocessing_audit import write_training_input_audits
 from yenibot.experiment.rank_ic import (
     _rank_ic_stability_evidence_frames,
     _rank_ic_uncertainty_frames,
@@ -190,14 +188,12 @@ from yenibot.experiment.training import (
     run_profile_experiment,
     summarize_profile_predictions,
 )
-
 __all__ = [
     '_evaluate_holdout_candidates',
     'run_experiment_matrix',
     '_profile_dirs',
     'write_experiment_diagnostics',
 ]
-
 def _evaluate_holdout_candidates(
     *,
     profile_entries: list[dict[str, Any]],
@@ -216,7 +212,6 @@ def _evaluate_holdout_candidates(
             "holdout_boundary_passed": bool(holdout_boundary_passed),
         }
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), holdout_decision, []
-
     full_entries = [
         entry
         for entry in profile_entries
@@ -232,7 +227,6 @@ def _evaluate_holdout_candidates(
         for entry in [*profile_entries, *(cv_blend_entries or [])]
         if str(entry.get("fold_scope", "")) == "full" or str(entry.get("fold_scope", "")).startswith("blend_")
     }
-
     for entry in full_entries:
         scope_dir = Path(entry["scope_dir"])
         manifest = _read_json(scope_dir / "training_manifest.json")
@@ -284,7 +278,6 @@ def _evaluate_holdout_candidates(
                 "config": entry.get("config", config),
             }
         )
-
     blend_source_entries = [{**entry, "fold_scope": "full"} for entry in holdout_entries]
     blend_entries = _profile_blend_entries(blend_source_entries, config)
     for entry in blend_entries:
@@ -319,7 +312,6 @@ def _evaluate_holdout_candidates(
         if not thresholds.empty:
             thresholds.insert(0, "candidate", row["candidate"])
             threshold_rows.append(thresholds)
-
     holdout_evaluation = pd.DataFrame(evaluation_rows)
     holdout_score_bands = pd.concat(score_band_rows, ignore_index=True) if score_band_rows else pd.DataFrame()
     holdout_thresholds = pd.concat(threshold_rows, ignore_index=True) if threshold_rows else pd.DataFrame()
@@ -331,7 +323,6 @@ def _evaluate_holdout_candidates(
             "holdout_boundary_passed": bool(holdout_boundary_passed),
         }
         return holdout_evaluation, holdout_score_bands, holdout_thresholds, holdout_decision, holdout_entries
-
     available_candidates = set(holdout_evaluation["candidate"].astype(str))
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     configured_frozen = str(policy_review.get("frozen_candidate", "")).strip()
@@ -575,7 +566,7 @@ def run_experiment_matrix(
     seed_ensemble_results = build_seed_ensemble_entries_or_legacy(
         profile_results, seed_results, config
     )
-    write_preprocessing_audit([*profile_results, *seed_results], run_dir)
+    write_training_input_audits([*profile_results, *seed_results], run_dir)
     profile_blend_results = _profile_blend_entries(profile_results, config)
     all_results = [*profile_results, *seed_results, *seed_ensemble_results, *profile_blend_results]
     executed_results = [result for result in [*profile_results, *seed_results] if not bool(result.get("skipped", False))]
@@ -1040,7 +1031,7 @@ def write_experiment_diagnostics(
     best_blend = _best_profile_blend(profile_blend)
     report_dir = Path(output_dir) / "experiments" / run_dir.name
     report_dir.mkdir(parents=True, exist_ok=True)
-    write_preprocessing_audit(profile_entries, report_dir)
+    write_training_input_audits(profile_entries, report_dir)
     experiment_selection = _write_experiment_selection(report_dir, settings)
     holdout_reservation = _write_holdout_reservation(report_dir, settings)
     missing_selected = _missing_selected_profiles(experiment_selection, comparison)

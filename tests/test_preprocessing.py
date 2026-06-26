@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
-from yenibot.experiment.preprocessing_audit import write_preprocessing_audit
+from yenibot.experiment.preprocessing_audit import write_preprocessing_audit, write_sample_weight_audit
 from yenibot.training.preprocessing import CausalFoldPreprocessor
 
 
@@ -114,3 +114,35 @@ def test_preprocessing_audit_collects_profile_scope_files(tmp_path) -> None:
     summary = pd.read_csv(tmp_path / "reports" / "preprocessing_audit_summary.csv")
     assert summary.iloc[0]["masked_decision_count"] == 1
     assert summary.iloc[0]["masked_fold_count"] == 1
+
+
+def test_sample_weight_audit_collects_profile_scope_files(tmp_path) -> None:
+    scope = tmp_path / "run" / "profile" / "triage"
+    scope.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "fold": 7,
+                "component": "combined",
+                "enabled": True,
+                "row_count": 80,
+                "mean_weight": 1.0,
+                "p90_weight": 1.2,
+                "max_weight": 1.4,
+                "effective_sample_fraction": 0.25,
+                "selected_column_count": 3,
+            }
+        ]
+    ).to_csv(scope / "sample_weight_audit.csv", index=False)
+
+    report = write_sample_weight_audit(
+        [{"profile": "candidate", "fold_scope": "triage", "output_dir": scope}],
+        tmp_path / "reports",
+    )
+
+    assert report.iloc[0]["profile"] == "candidate"
+    assert report.iloc[0]["fold_scope"] == "triage"
+    assert (tmp_path / "reports" / "sample_weight_audit.csv").exists()
+    summary = pd.read_csv(tmp_path / "reports" / "sample_weight_audit_summary.csv")
+    assert summary.iloc[0]["component"] == "combined"
+    assert summary.iloc[0]["mean_effective_sample_fraction"] == 0.25

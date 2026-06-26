@@ -272,6 +272,53 @@ features:
             return_pairwise_margin: 0.05
             return_pairwise_min_return_diff: 0.0005
             return_pairwise_return_scale: 0.005
+    baseline_stable_uniqueness_weighted_loss:
+      description: "Mechanism candidate from event/sample diagnostics: keep the control features, model, and loss, but weight train rows by label-event uniqueness so overlapping 10-bar labels do not dominate the objective."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        training:
+          sample_weighting:
+            enabled: true
+            normalize_mean: true
+            min_weight: 0.25
+            max_weight: 2.50
+            components:
+              uniqueness:
+                enabled: true
+                power: 1.0
+              event:
+                enabled: false
+    baseline_stable_uniqueness_orderflow_event_weighted_loss:
+      description: "Mechanism candidate from event/sample diagnostics: train-fold-only label uniqueness plus a bounded top-tail order-flow event emphasis; no feature deletion, masking, seed ensemble, or architecture change."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        training:
+          sample_weighting:
+            enabled: true
+            normalize_mean: true
+            min_weight: 0.25
+            max_weight: 2.75
+            components:
+              uniqueness:
+                enabled: true
+                power: 1.0
+              event:
+                enabled: true
+                include_patterns:
+                  - "*taker_imbalance*"
+                  - "*taker_buy_ratio_zscore"
+                  - "*taker_buy_ratio_delta"
+                  - "*cvd_cumulative_rate_norm"
+                  - "*true_cvd_zscore"
+                  - "*large_trade_ratio"
+                  - "*vpt_zscore"
+                  - "*vol_per_trade_log_zscore"
+                  - "*whale_buy_flag"
+                  - "*whale_sell_flag"
+                quantile: 0.80
+                strength: 0.35
+                power: 1.0
+                use_abs: true
     baseline_control_plus_futures_context:
       description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
@@ -1864,6 +1911,22 @@ training:
       min_abs_rank_ic: 0.01
       min_abs_label_gap: 0.05
       min_rank_ic_sign_agreement: 0.60
+  sample_weighting:
+    enabled: false
+    normalize_mean: true
+    min_weight: 0.25
+    max_weight: 3.0
+    components:
+      uniqueness:
+        enabled: true
+        power: 1.0
+      event:
+        enabled: false
+        include_patterns: []
+        quantile: 0.80
+        strength: 0.35
+        power: 1.0
+        use_abs: true
   loss:
     focal_gamma: 2.0
     focal_alpha: 0.6
@@ -2061,17 +2124,19 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles: []
+  candidate_profiles:
+    - baseline_stable_uniqueness_weighted_loss
+    - baseline_stable_uniqueness_orderflow_event_weighted_loss
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
     - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  max_auto_full_candidates: 0
+  max_auto_full_candidates: 1
   resume_existing: true
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: event_sample_information_diagnostics_preregistered
+    status: sample_uniqueness_event_weighting_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2087,8 +2152,8 @@ experiments:
       - gru64_only_model_capacity
       - fusion64_only_model_capacity
       - baseline_seed_rank_ensemble_v1
-    conclusion: "Bundle 20260626_122455 closed the equal-weight seed-rank ensemble. The ensemble raised mean IC but worsened dispersion, positive-fold coverage, worst-fold behavior, official F1, and top-decile payoff versus the unchanged control. Do not search seed weights, add more seeds, or retry rank/probability seed ensembles without a distinct mechanism."
-    next_step: "Do not add another profile, loss, architecture, mask, clipping rule, or ensemble yet. Run diagnostics-only event, label, sample-information, and overlap audits to determine whether specific event subsets or sample-concurrency structure explain score-ranking reversal and justify a future durable training hypothesis."
+    conclusion: "Bundle 20260626_122455 closed the equal-weight seed-rank ensemble and the follow-up event/sample diagnostics identified a new mechanism: high label overlap leaves an effective sample fraction near 0.094, while order-flow event subsets improve payoff or Rank IC without requiring direct feature deletion."
+    next_step: "Run a bounded train-fold-only sample-weighting sprint: first label uniqueness weights, then uniqueness plus order-flow event emphasis. Keep the control features, model architecture, labels, and base loss unchanged. Promote no candidate unless it improves stability without sacrificing official F1 or top-score payoff."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false

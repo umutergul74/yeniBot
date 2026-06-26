@@ -20,6 +20,8 @@ from yenibot.regime import OnlineGaussianHMM
 from yenibot.reproducibility import runtime_signature_payload, training_code_signature_payload
 from yenibot.training.dataset import SequenceDataset
 from yenibot.training.preprocessing import CausalFoldPreprocessor
+from yenibot.training.sample_weights import AUDIT_COLUMNS as SAMPLE_WEIGHT_AUDIT_COLUMNS
+from yenibot.training.sample_weights import build_sample_weights
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
 
 
@@ -81,7 +83,13 @@ def _build_model(n_features: int, config: Any) -> HybridEncoder:
     )
 
 
-def _make_dataset(part: pd.DataFrame, feature_columns: list[str], config: Any) -> SequenceDataset:
+def _make_dataset(
+    part: pd.DataFrame,
+    feature_columns: list[str],
+    config: Any,
+    *,
+    sample_weights: np.ndarray | None = None,
+) -> SequenceDataset:
     seq_len = int(_cfg(config, ["model", "seq_len"], 64))
     forward_column = f"fwd_return_{int(_cfg(config, ['labeling', 'max_holding_bars'], 10))}h"
     if forward_column not in part.columns:
@@ -91,7 +99,20 @@ def _make_dataset(part: pd.DataFrame, feature_columns: list[str], config: Any) -
         part["label"].to_numpy(dtype=np.float32),
         part[forward_column].to_numpy(dtype=np.float32),
         seq_len=seq_len,
+        sample_weights=sample_weights,
     )
+
+
+def _unpack_batch(
+    batch: tuple[torch.Tensor, ...],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if len(batch) == 5:
+        x, y, fwd, pos, weight = batch
+        return x, y, fwd, pos, weight
+    if len(batch) == 4:
+        x, y, fwd, pos = batch
+        return x, y, fwd, pos, torch.ones_like(y, dtype=torch.float32)
+    raise ValueError(f"Unexpected training batch shape: {len(batch)} items")
 
 
 def _forward_return_column(frame: pd.DataFrame, config: Any) -> str:
@@ -136,7 +157,8 @@ def _predict_dataset(
     positions: list[np.ndarray] = []
     model.eval()
     with torch.no_grad():
-        for x, y, fwd, pos in loader:
+        for batch in loader:
+            x, y, fwd, pos, _weight = _unpack_batch(batch)
             x = x.to(device)
             prob = model(x).detach().cpu().numpy()
             probs.append(prob)
@@ -211,14 +233,16 @@ def _evaluate(
     val_loss_count = 0
     model.eval()
     with torch.no_grad():
-        for x, y, fwd, _ in loader:
+        for batch in loader:
+            x, y, fwd, _pos, weight = _unpack_batch(batch)
             x = x.to(device)
             y = y.to(device)
             fwd = fwd.to(device)
+            weight = weight.to(device)
             logits = model(x, return_logits=True)
             probs = torch.sigmoid(logits)
             if focal is not None and rank_loss is not None:
-                loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
+                loss = focal(logits, y, weight) + rank_weight * rank_loss(probs, fwd, weight)
                 if margin_loss is not None and margin_weight > 0.0:
                     loss = loss + margin_weight * margin_loss(logits, y)
                 if return_order_loss is not None and return_order_weight > 0.0:
@@ -270,7 +294,16 @@ def train_one_fold(
     val_part = _add_regime_probs(val_part, hmm, config)
     test_part = _add_regime_probs(test_part, hmm, config)
 
-    train_dataset = _make_dataset(train_part, feature_columns, config)
+    train_sample_weights, sample_weight_audit = build_sample_weights(train_part, feature_columns, config)
+    if not sample_weight_audit.empty:
+        sample_weight_audit.loc[:, "fold"] = int(fold.fold)
+
+    train_dataset = _make_dataset(
+        train_part,
+        feature_columns,
+        config,
+        sample_weights=train_sample_weights,
+    )
     val_dataset = _make_dataset(val_part, feature_columns, config)
     test_dataset = _make_dataset(test_part, feature_columns, config)
 
@@ -327,14 +360,16 @@ def train_one_fold(
     for epoch in range(epochs):
         model.train()
         losses = []
-        for x, y, fwd, _ in loader:
+        for batch in loader:
+            x, y, fwd, _pos, weight = _unpack_batch(batch)
             x = x.to(torch_device)
             y = y.to(torch_device)
             fwd = fwd.to(torch_device)
+            weight = weight.to(torch_device)
             optimizer.zero_grad(set_to_none=True)
             logits = model(x, return_logits=True)
             probs = torch.sigmoid(logits)
-            loss = focal(logits, y) + rank_weight * rank_loss(probs, fwd)
+            loss = focal(logits, y, weight) + rank_weight * rank_loss(probs, fwd, weight)
             if margin_weight > 0.0:
                 loss = loss + margin_weight * margin_loss(logits, y)
             if return_order_weight > 0.0:
@@ -433,6 +468,7 @@ def train_one_fold(
         )
         joblib.dump(hmm, output_dir / f"hmm_fold_{fold.fold:03d}.pkl")
         predictions.to_parquet(output_dir / f"predictions_fold_{fold.fold:03d}.parquet", index=False)
+        sample_weight_audit.to_csv(output_dir / f"sample_weight_audit_fold_{fold.fold:03d}.csv", index=False)
 
     return {
         "fold": fold.fold,
@@ -441,6 +477,7 @@ def train_one_fold(
         "hmm": hmm,
         "history": pd.DataFrame(history),
         "preprocessing_audit": preprocessing_audit,
+        "sample_weight_audit": sample_weight_audit,
         "predictions": predictions,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -475,6 +512,7 @@ def run_walk_forward_training(
     fold_results = []
     predictions = []
     preprocessing_audits = []
+    sample_weight_audits = []
     selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
         if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
@@ -493,6 +531,8 @@ def run_walk_forward_training(
         predictions.append(result["predictions"])
         if not result["preprocessing_audit"].empty:
             preprocessing_audits.append(result["preprocessing_audit"])
+        if not result["sample_weight_audit"].empty:
+            sample_weight_audits.append(result["sample_weight_audit"])
 
     if not predictions:
         raise ValueError("No folds were produced; check dataset length and CV configuration")
@@ -503,15 +543,22 @@ def run_walk_forward_training(
         if preprocessing_audits
         else pd.DataFrame(columns=["fold", *CausalFoldPreprocessor.AUDIT_COLUMNS])
     )
+    sample_weight_audit = (
+        pd.concat(sample_weight_audits, ignore_index=True)
+        if sample_weight_audits
+        else pd.DataFrame(columns=SAMPLE_WEIGHT_AUDIT_COLUMNS)
+    )
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         all_predictions.to_parquet(output_dir / "predictions_all.parquet", index=False)
         preprocessing_audit.to_csv(output_dir / "preprocessing_audit.csv", index=False)
+        sample_weight_audit.to_csv(output_dir / "sample_weight_audit.csv", index=False)
     report = phase1_report(all_predictions[all_predictions["split"] == "test"], config)
     return {
         "fold_results": fold_results,
         "predictions": all_predictions,
         "preprocessing_audit": preprocessing_audit,
+        "sample_weight_audit": sample_weight_audit,
         "report": report,
     }

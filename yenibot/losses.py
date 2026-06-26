@@ -11,29 +11,59 @@ class FocalLossWithLogits(nn.Module):
         self.gamma = gamma
         self.alpha = alpha
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        sample_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         targets = targets.float()
         bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
         probs = torch.sigmoid(logits)
         p_t = probs * targets + (1.0 - probs) * (1.0 - targets)
         alpha_t = self.alpha * targets + (1.0 - self.alpha) * (1.0 - targets)
         loss = alpha_t * (1.0 - p_t).pow(self.gamma) * bce
-        return loss.mean()
+        if sample_weight is None:
+            return loss.mean()
+        weight = sample_weight.float().reshape_as(loss)
+        valid = torch.isfinite(weight) & (weight > 0)
+        if valid.sum() == 0:
+            return loss.mean()
+        return (loss[valid] * weight[valid]).sum() / (weight[valid].sum() + 1e-8)
 
 
 class RankICLoss(nn.Module):
     """Differentiable Pearson proxy for rank-IC alignment."""
 
-    def forward(self, probs: torch.Tensor, forward_returns: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        probs: torch.Tensor,
+        forward_returns: torch.Tensor,
+        sample_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         probs = probs.float()
         returns = forward_returns.float()
         valid = torch.isfinite(probs) & torch.isfinite(returns)
+        weights = None
+        if sample_weight is not None:
+            weights = sample_weight.float().reshape_as(probs)
+            valid = valid & torch.isfinite(weights) & (weights > 0)
         if valid.sum() < 3:
             return probs.new_tensor(0.0)
-        x = probs[valid] - probs[valid].mean()
-        y = returns[valid] - returns[valid].mean()
-        denom = torch.sqrt((x.square().sum() + 1e-8) * (y.square().sum() + 1e-8))
-        corr = (x * y).sum() / denom
+        x_raw = probs[valid]
+        y_raw = returns[valid]
+        if weights is None:
+            x = x_raw - x_raw.mean()
+            y = y_raw - y_raw.mean()
+            denom = torch.sqrt((x.square().sum() + 1e-8) * (y.square().sum() + 1e-8))
+            corr = (x * y).sum() / denom
+            return -corr
+        w = weights[valid]
+        w = w / (w.sum() + 1e-8)
+        x = x_raw - (w * x_raw).sum()
+        y = y_raw - (w * y_raw).sum()
+        denom = torch.sqrt(((w * x.square()).sum() + 1e-8) * ((w * y.square()).sum() + 1e-8))
+        corr = (w * x * y).sum() / denom
         return -corr
 
 

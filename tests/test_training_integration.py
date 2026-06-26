@@ -3,9 +3,11 @@ from __future__ import annotations
 import copy
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from yenibot.features import build_feature_matrix
+from yenibot.training.sample_weights import build_sample_weights, label_uniqueness_weights
 from yenibot.training import PurgedWalkForwardCV, run_walk_forward_training, train_one_fold
 
 
@@ -124,6 +126,59 @@ def test_train_one_fold_supports_pairwise_return_order_loss(synthetic_klines, ti
     assert result["history"]["train_loss"].notna().all()
 
 
+def test_label_uniqueness_weights_downweight_overlapping_events() -> None:
+    frame = pd.DataFrame({"label": np.zeros(12, dtype=int)})
+    weights = label_uniqueness_weights(
+        frame=frame,
+        horizon_bars=4,
+    )
+
+    assert len(weights) == 12
+    assert weights[4] < weights[0]
+
+
+def test_build_sample_weights_uses_train_fold_only_event_columns() -> None:
+    frame = np.arange(20, dtype=float)
+    train = {
+        "timestamp": np.arange(20),
+        "event_feature": frame,
+        "label": (frame % 3 == 0).astype(int),
+        "fwd_return_10h": frame / 1000.0,
+    }
+    config = {
+        "labeling": {"max_holding_bars": 4},
+        "training": {
+            "sample_weighting": {
+                "enabled": True,
+                "normalize_mean": True,
+                "min_weight": 0.25,
+                "max_weight": 2.5,
+                "components": {
+                    "uniqueness": {"enabled": True, "power": 1.0},
+                    "event": {
+                        "enabled": True,
+                        "include_patterns": ["event_*"],
+                        "quantile": 0.80,
+                        "strength": 0.5,
+                    },
+                },
+            }
+        },
+    }
+
+    weights, audit = build_sample_weights(
+        train_frame=pd.DataFrame(train),
+        feature_columns=["event_feature"],
+        config=config,
+    )
+
+    assert len(weights) == 20
+    assert np.isclose(weights.mean(), 1.0)
+    assert {"uniqueness", "event", "combined"}.issubset(set(audit["component"]))
+    event_row = audit.loc[audit["component"].eq("event")].iloc[0]
+    assert event_row["selected_column_count"] == 1
+
+
 def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["training"]["early_stop_metric"] = "not_a_real_metric"
@@ -176,3 +231,37 @@ def test_run_walk_forward_training_honors_selected_fold_ids(synthetic_klines, ti
     assert not (tmp_path / "model_fold_000.pt").exists()
     assert (tmp_path / "model_fold_001.pt").exists()
     assert (tmp_path / "preprocessing_audit.csv").exists()
+
+
+def test_train_one_fold_writes_sample_weight_audit_when_enabled(synthetic_klines, tiny_config, tmp_path) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["training"]["sample_weighting"] = {
+        "enabled": True,
+        "normalize_mean": True,
+        "min_weight": 0.25,
+        "max_weight": 2.5,
+        "components": {
+            "uniqueness": {"enabled": True, "power": 1.0},
+            "event": {"enabled": False},
+        },
+    }
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    result = train_one_fold(
+        frame,
+        fold,
+        features.feature_columns,
+        config,
+        checkpoint_dir=tmp_path,
+        device="cpu",
+    )
+
+    assert not result["sample_weight_audit"].empty
+    assert (tmp_path / "sample_weight_audit_fold_000.csv").exists()
