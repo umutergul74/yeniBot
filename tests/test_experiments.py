@@ -20,6 +20,7 @@ from yenibot.experiments import (
     _experiment_signature,
     _diagnostics_signature,
     _diagnostic_config_for_run,
+    _event_diagnostic_frames,
     _experiment_policy_guard_frame,
     _fold_reliability_gate_frame,
     _fold_reliability_gate_summary_frame,
@@ -1975,6 +1976,86 @@ def test_decision_ladder_routes_failed_future_oos_to_replacement_research() -> N
     )
 
 
+def test_event_diagnostics_identify_event_and_sample_information() -> None:
+    predictions = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=24, freq="h", tz="UTC"),
+            "fold": [0] * 12 + [1] * 12,
+            "split": ["test"] * 24,
+            "prob_long": np.linspace(0.1, 0.9, 24),
+            "label": [0, 1, 0, 1] * 6,
+            "forward_return": np.linspace(-0.01, 0.02, 24),
+            "tb_return": np.linspace(-0.02, 0.03, 24),
+            "taker_imbalance": np.linspace(-1.0, 1.0, 24),
+            "4h_large_trade_ratio": np.r_[np.repeat(0.1, 12), np.repeat(2.0, 12)],
+            "volume_log_zscore": np.linspace(0.0, 1.0, 24),
+            "gk_vol_14": np.linspace(0.5, 1.5, 24),
+        }
+    )
+    entries = [
+        {
+            "profile": "control",
+            "fold_scope": "full",
+            "feature_columns": [
+                "taker_imbalance",
+                "4h_large_trade_ratio",
+                "volume_log_zscore",
+                "gk_vol_14",
+            ],
+            "predictions": predictions,
+        }
+    ]
+    config = {
+        "labeling": {"max_holding_bars": 10},
+        "experiments": {
+            "experiment_memory": {
+                "rejected_profiles": {
+                    "baseline_seed_rank_ensemble_v1": {
+                        "reason": "seed ensemble failed confirmatory gates"
+                    }
+                },
+                "reference_notes": {"control": "current reference"},
+            }
+        },
+    }
+
+    frames = _event_diagnostic_frames(entries, config)
+
+    assert set(frames) == {
+        "label_event_audit",
+        "event_conditioned_performance",
+        "sample_information_audit",
+        "overlap_uniqueness_audit",
+        "hypothesis_registry_summary",
+    }
+    assert not frames["label_event_audit"].empty
+    assert {"event_band", "rank_ic", "top_score_forward_return"}.issubset(
+        frames["label_event_audit"].columns
+    )
+    assert not frames["event_conditioned_performance"].empty
+    assert set(frames["event_conditioned_performance"]["recommended_next_hypothesis"]).issubset(
+        {
+            "design_event_weighted_training_v1",
+            "do_not_add_event_weighting_without_stronger_evidence",
+        }
+    )
+    assert {"family", "information_signal", "recommended_action"}.issubset(
+        frames["sample_information_audit"].columns
+    )
+    assert {"effective_sample_fraction", "overlap_risk"}.issubset(
+        frames["overlap_uniqueness_audit"].columns
+    )
+    registry = frames["hypothesis_registry_summary"]
+    assert "seed_ensemble" in set(registry["hypothesis_family"])
+    assert (
+        registry.loc[
+            registry["hypothesis_family"].eq("seed_ensemble"),
+            "allowed_next_step",
+        ].iloc[0]
+        == "closed_no_weight_or_seed_search"
+    )
+
+
 def test_root_cause_uses_readiness_check_and_preserves_new_anchor_requirement() -> None:
     readiness = {
         "active_validation_charter": "v4_evidence",
@@ -3064,6 +3145,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["seed_audit"]["min_temporal_span_fraction"] == 0.90
     assert config["experiments"]["seed_audit"]["reference_full_seed"] == 42
     assert config["experiments"]["seed_audit"]["include_control_full_seed"] is True
+    assert config["experiments"]["seed_audit"]["ensemble"]["enabled"] is False
     assert config["experiments"]["seed_audit"]["ensemble"]["candidate_id"] == (
         "baseline_seed_rank_ensemble_v1"
     )
@@ -3083,6 +3165,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "future out-of-sample" in notes["blend_control_long_pressure_65_35"]
     assert "worsened mean IC" in notes["baseline_stable_score_margin_loss"]
     assert "failed versus control" in notes["baseline_stable_return_pairwise_loss_light"]
+    assert "Close seed-ensemble search" in notes["baseline_seed_rank_ensemble_v1"]
     assert "Split into narrower" in notes["baseline_control_plus_futures_context"]
     assert config["features"]["profiles"]["baseline_stable_return_pairwise_loss_light"]["config_overrides"]["training"][
         "loss"
@@ -3122,7 +3205,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "baseline_seed_rank_ensemble_confirmatory_preregistered"
+        "event_sample_information_diagnostics_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
@@ -3148,6 +3231,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "TCN32-only failed joint gates" in rejected["baseline_stable_model_tcn32_only"]["reason"]
     assert "GRU64-only lowered mean IC" in rejected["baseline_stable_model_gru64_only"]["reason"]
     assert "fusion64-only lowered mean IC" in rejected["baseline_stable_model_fusion64_only"]["reason"]
+    assert "seed-rank ensemble" in rejected["baseline_seed_rank_ensemble_v1"]["reason"]
     assert "non-promotable" in rejected["baseline_stable_train_clip_4h_large_trade"]["reason"]
     assert "hard train-fold masking" in rejected["baseline_stable_train_reliability_mask_4h_flow"]["reason"]
     assert "did not stabilize" in rejected["baseline_stable_train_clip_and_reliability_mask"]["reason"]
@@ -3973,7 +4057,7 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
     )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "baseline_seed_rank_ensemble_confirmatory_preregistered"
+        "event_sample_information_diagnostics_preregistered"
     )
     assert contract["seed_audit_mode"] == "in_run"
 
@@ -4429,6 +4513,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "payoff_policy_robustness_summary.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "label_event_audit.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "event_conditioned_performance.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "sample_information_audit.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "overlap_uniqueness_audit.csv").exists()
+    assert (tmp_path / "experiments" / "matrix" / "hypothesis_registry_summary.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -4471,6 +4560,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_alignment_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "payoff_policy_robustness_summary.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "label_event_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "event_conditioned_performance.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "sample_information_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "overlap_uniqueness_audit.csv").exists()
+    assert (tmp_path / "reports" / "experiments" / "matrix" / "hypothesis_registry_summary.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "experiment_selection.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "missing_selected_profiles.csv").exists()
     assert (tmp_path / "reports" / "experiments" / "matrix" / "holdout_reservation.csv").exists()
@@ -4539,6 +4633,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert not diagnostics["payoff_alignment_summary"].empty
     assert not diagnostics["payoff_policy_robustness"].empty
     assert not diagnostics["payoff_policy_robustness_summary"].empty
+    assert not diagnostics["label_event_audit"].empty
+    assert not diagnostics["event_conditioned_performance"].empty
+    assert not diagnostics["sample_information_audit"].empty
+    assert not diagnostics["overlap_uniqueness_audit"].empty
+    assert not diagnostics["hypothesis_registry_summary"].empty
     assert {
         "candidate",
         "candidate_type",
@@ -4609,6 +4708,8 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "threshold_transfer_review" in diagnostics["decision"]
     assert "fixed_top_50" in set(diagnostics["threshold_score_quantile_review"]["policy_name"])
     assert "threshold_score_quantile_review" in diagnostics["decision"]
+    assert "event_diagnostics" in diagnostics["decision"]
+    assert "label_event_audit" in diagnostics["decision"]["event_diagnostics"]
     assert "profile_calibrated_threshold_summary.csv" in {
         path.name for path in (tmp_path / "reports" / "experiments" / "matrix").iterdir()
     }
@@ -4736,6 +4837,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         assert "matrix/payoff_alignment_summary.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness.csv" in archive.namelist()
         assert "matrix/payoff_policy_robustness_summary.csv" in archive.namelist()
+        assert "matrix/label_event_audit.csv" in archive.namelist()
+        assert "matrix/event_conditioned_performance.csv" in archive.namelist()
+        assert "matrix/sample_information_audit.csv" in archive.namelist()
+        assert "matrix/overlap_uniqueness_audit.csv" in archive.namelist()
+        assert "matrix/hypothesis_registry_summary.csv" in archive.namelist()
         assert "matrix/profile_fold_metrics.csv" in archive.namelist()
         assert "matrix/experiment_selection.csv" in archive.namelist()
         assert "matrix/missing_selected_profiles.csv" in archive.namelist()
@@ -4797,6 +4903,11 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert "matrix/payoff_alignment_summary.csv" in names
     assert "matrix/payoff_policy_robustness.csv" in names
     assert "matrix/payoff_policy_robustness_summary.csv" in names
+    assert "matrix/label_event_audit.csv" in names
+    assert "matrix/event_conditioned_performance.csv" in names
+    assert "matrix/sample_information_audit.csv" in names
+    assert "matrix/overlap_uniqueness_audit.csv" in names
+    assert "matrix/hypothesis_registry_summary.csv" in names
     assert "matrix/profile_fold_metrics.csv" in names
     assert "matrix/missing_selected_profiles.csv" in names
     assert "matrix/holdout_reservation.csv" in names

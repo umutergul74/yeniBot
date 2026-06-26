@@ -2071,7 +2071,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: baseline_seed_rank_ensemble_confirmatory_preregistered
+    status: event_sample_information_diagnostics_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2086,8 +2086,9 @@ experiments:
       - tcn32_only_model_capacity
       - gru64_only_model_capacity
       - fusion64_only_model_capacity
-    conclusion: "Bundle 20260625_155006 closed component-level capacity tuning. TCN32 improved triage mean IC and positive-fold coverage but worsened dispersion and damaged official F1/top-10 lift; GRU64 and fusion64 also failed the joint ranking, classification, and payoff gates. The baseline TCN64/GRU128/fusion128 architecture remains fixed."
-    next_step: "Evaluate one pre-registered equal-weight three-seed ensemble of the unchanged baseline. Use seed 42 full-CV artifacts as the reference, train seeds 43 and 44 on every fold, transform each seed through its own validation empirical CDF, and decide only on folds outside the prior eight-fold exploratory audit."
+      - baseline_seed_rank_ensemble_v1
+    conclusion: "Bundle 20260626_122455 closed the equal-weight seed-rank ensemble. The ensemble raised mean IC but worsened dispersion, positive-fold coverage, worst-fold behavior, official F1, and top-decile payoff versus the unchanged control. Do not search seed weights, add more seeds, or retry rank/probability seed ensembles without a distinct mechanism."
+    next_step: "Do not add another profile, loss, architecture, mask, clipping rule, or ensemble yet. Run diagnostics-only event, label, sample-information, and overlap audits to determine whether specific event subsets or sample-concurrency structure explain score-ranking reversal and justify a future durable training hypothesis."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2288,6 +2289,7 @@ experiments:
       baseline_stable_model_tcn32_only: "Bundle 20260625_155006: TCN32-only improved triage mean IC from 0.0518 to 0.0643 and positive folds from 58.3% to 66.7%, but std worsened to 0.1044, official F1 fell to 0.4027, and top-10 lift fell below 1.0. Reject component shrinkage."
       baseline_stable_model_gru64_only: "Bundle 20260625_155006: GRU64-only slightly reduced triage std but lowered mean IC to 0.0380, official F1 to 0.4297, and top-10 lift to 1.1107. Reject component shrinkage."
       baseline_stable_model_fusion64_only: "Bundle 20260625_155006: fusion64-only retained top-10 lift but lowered mean IC to 0.0411, worsened std to 0.1213, and lowered official F1 to 0.4243. Reject component shrinkage."
+      baseline_seed_rank_ensemble_v1: "Bundle 20260626_122455: equal-weight validation-CDF seed-rank ensemble improved mean IC but failed the joint confirmatory gates: std worsened, positive-fold coverage dropped, worst-5 IC worsened, top-10 lift fell below control, and official F1 declined. Close seed-ensemble search."
       baseline_stable_model_medium_capacity: "Bundle 20260624_171150: uniform medium shrinkage raised triage mean IC but slightly worsened std, left positive-fold coverage at 58.3%, reduced official F1 to 0.4348, and collapsed top-10 lift to 0.9938. Reject as a combined-capacity configuration."
       baseline_stable_model_small_capacity: "Bundle 20260624_171150: uniform small shrinkage was diagnostically useful but non-promotable. It improved triage std from 0.0985 to 0.0834, positive folds to 75%, and worst-5 IC to -0.0085, but reduced official F1 to 0.4372, PRAUC, and top-10 lift to 1.0483. Use this only as evidence for component-level capacity isolation."
       baseline_stable_train_clip_4h_large_trade: "Bundle 20260614_054446: train-only clipping was controlled and improved triage mean IC by 0.0047 with a small std reduction, but official F1 was flat and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive/non-promotable; do not auto-rerun."
@@ -2321,6 +2323,8 @@ experiments:
         reason: "Bundle 20260625_155006: GRU64-only lowered mean IC from 0.0518 to 0.0380, official F1 to 0.4297, and top-10 lift to 1.1107. The small std change did not compensate for signal loss."
       baseline_stable_model_fusion64_only:
         reason: "Bundle 20260625_155006: fusion64-only lowered mean IC to 0.0411, worsened std to 0.1213, lowered official F1 to 0.4243, and deteriorated worst-fold behavior despite preserved tail lift."
+      baseline_seed_rank_ensemble_v1:
+        reason: "Bundle 20260626_122455: equal-weight seed-rank ensemble raised mean IC but failed confirmatory evidence. Std worsened, positive-fold coverage fell, worst-5 IC worsened, top-10 lift ratio was below control, official F1 declined, and the decision was close_seed_ensemble_hypothesis_without_weight_or_seed_search."
       baseline_stable_model_medium_capacity:
         reason: "Bundle 20260624_171150: uniform medium capacity was non-promotable. Triage std worsened from 0.0985 to 0.1017, positive-fold coverage stayed at 58.3%, official F1 fell from 0.4558 to 0.4348, and top-10 lift fell from 1.2276 to 0.9938."
       baseline_stable_model_small_capacity:
@@ -2459,7 +2463,7 @@ experiments:
     reference_full_seed: 42
     include_control_full_seed: true
     ensemble:
-      enabled: true
+      enabled: false
       candidate_id: baseline_seed_rank_ensemble_v1
       required_seed_count: 3
       exploratory_fold_ids: [0, 5, 10, 15, 21, 26, 31, 36]

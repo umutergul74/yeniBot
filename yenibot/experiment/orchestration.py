@@ -84,6 +84,10 @@ from yenibot.experiment.ensembles import (
     _write_profile_diagnostic_summaries,
     _write_seed_audit_files,
 )
+from yenibot.experiment.event_diagnostics import (
+    _event_diagnostic_frames,
+    _write_event_diagnostic_reports,
+)
 from yenibot.experiment.seed_ensemble_research import (
     build_seed_ensemble_entries_or_legacy,
     seed_ensemble_report_frames,
@@ -1148,6 +1152,7 @@ def write_experiment_diagnostics(
         causal_threshold_policy_by_fold,
         diagnostic_config,
     )
+    event_diagnostics = _event_diagnostic_frames(entries, diagnostic_config)
     workflow_checkpoint("compute_root_cause_diagnostics")
     validation_charter_review = _validation_charter_review_frame(
         control_profile=settings["control_profile"],
@@ -1328,6 +1333,10 @@ def write_experiment_diagnostics(
     decision["rank_ic_aggregate_evidence"] = rank_ic_aggregate_evidence.to_dict(orient="records")
     decision["causal_threshold_policy_summary"] = causal_threshold_policy_summary.to_dict(orient="records")
     decision["classification_skill_summary"] = classification_skill_summary.to_dict(orient="records")
+    decision["event_diagnostics"] = {
+        name: frame.to_dict(orient="records")
+        for name, frame in event_diagnostics.items()
+    }
     decision["validation_charter_review"] = validation_charter_review.to_dict(orient="records")
     decision["validation_charter_proposal"] = validation_charter_proposal.to_dict(orient="records")
     decision["seed_audit_coverage"] = seed_audit_coverage.to_dict(orient="records")
@@ -1404,6 +1413,7 @@ def write_experiment_diagnostics(
         classification_skill_summary,
         classification_skill_by_fold,
     )
+    _write_event_diagnostic_reports(report_dir, event_diagnostics)
     _write_validation_charter_review(report_dir, validation_charter_review)
     _write_validation_charter_proposal(report_dir, validation_charter_proposal)
     _write_payoff_alignment(report_dir, payoff_alignment, payoff_alignment_summary)
@@ -1658,6 +1668,7 @@ def write_experiment_diagnostics(
     _write_rank_ic_stability_evidence(run_dir, rank_ic_aggregate_evidence, rank_ic_block_sensitivity)
     _write_causal_threshold_policy(run_dir, causal_threshold_policy_summary, causal_threshold_policy_by_fold)
     _write_classification_skill(run_dir, classification_skill_summary, classification_skill_by_fold)
+    _write_event_diagnostic_reports(run_dir, event_diagnostics)
     _write_validation_charter_review(run_dir, validation_charter_review)
     _write_validation_charter_proposal(run_dir, validation_charter_proposal)
     _write_payoff_alignment(run_dir, payoff_alignment, payoff_alignment_summary)
@@ -1751,6 +1762,11 @@ def write_experiment_diagnostics(
         "causal_threshold_policy_by_fold": causal_threshold_policy_by_fold,
         "classification_skill_summary": classification_skill_summary,
         "classification_skill_by_fold": classification_skill_by_fold,
+        "label_event_audit": event_diagnostics["label_event_audit"],
+        "event_conditioned_performance": event_diagnostics["event_conditioned_performance"],
+        "sample_information_audit": event_diagnostics["sample_information_audit"],
+        "overlap_uniqueness_audit": event_diagnostics["overlap_uniqueness_audit"],
+        "hypothesis_registry_summary": event_diagnostics["hypothesis_registry_summary"],
         "validation_charter_review": validation_charter_review,
         "validation_charter_proposal": validation_charter_proposal,
         "validation_charter_status": validation_charter_status,

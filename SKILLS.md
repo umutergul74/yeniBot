@@ -62,8 +62,20 @@ The current safe control profile is configured in `config.yaml`:
   collapsed top-decile lift. Uniform small shrinkage improved triage std,
   positive-fold coverage, and worst-fold IC, but damaged official F1, PRAUC,
   and top-decile concentration. Do not rerun either combined configuration.
-  The next historical-CV sprint isolates TCN, GRU, and fusion width one at a
-  time while keeping features, labels, loss, and training policy fixed.
+  Bundle `20260625_155006` then closed component-only width search: isolated
+  TCN32, GRU64, and fusion64 all failed the joint stability, F1, and top-score
+  payoff gates. Keep the baseline TCN64/GRU128/fusion128 architecture fixed.
+- Bundle `20260626_122455` closed `baseline_seed_rank_ensemble_v1`.
+  The equal-weight validation-CDF seed-rank ensemble raised mean IC, but
+  worsened dispersion, positive-fold coverage, worst-fold behavior, official
+  F1, and top-decile payoff. Do not search seed weights, add more seeds, or
+  retry rank/probability seed ensembles without a new mechanism.
+- The current research state is diagnostics-first:
+  `experiments.research_focus.status` should be
+  `event_sample_information_diagnostics_preregistered`. Before adding another
+  training candidate, inspect `label_event_audit.csv`,
+  `event_conditioned_performance.csv`, `sample_information_audit.csv`, and
+  `overlap_uniqueness_audit.csv`.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -122,7 +134,8 @@ Forbidden feature behavior:
 - Do not blindly retry old training-stability experiments. The May 21 branch already tested val-loss/rolling-IC style training changes, stronger regularization, and longer validation windows, then restored baseline defaults. New training experiments must isolate one change at a time and be pre-registered.
 - The latest score-separation loss candidates are retired. `baseline_stable_score_margin_loss` and `baseline_stable_return_pairwise_loss_light` both failed versus the control on core CV gates. Do not retry loss-only score-separation tweaks unless a new diagnostic report identifies a distinct mechanism.
 - Uniform and component-only encoder shrinkage are retired. Medium/small combined encoders and isolated TCN32, GRU64, and fusion64 variants all failed to preserve ranking stability, official F1, and top-score payoff together. Keep the baseline TCN64/GRU128/fusion128 architecture fixed unless a future mechanism provides new evidence.
-- The current model research hypothesis is `baseline_seed_rank_ensemble_v1`: equal weights, exactly seeds 42/43/44, and validation-empirical-percentile aggregation. Do not search seed weights, add more seeds, or use test-score distributions to normalize predictions. The prior eight audit folds are exploratory; only the remaining historical folds may drive the confirmatory decision.
+- The seed-rank ensemble hypothesis is retired. `baseline_seed_rank_ensemble_v1` failed the joint confirmatory evidence even though mean IC rose. Do not search seed weights, add more seeds, or use rank/probability seed ensembles as the next answer.
+- Do not add another training candidate until the event/sample diagnostics show a clear, durable mechanism. A valid next training idea must explain why event-conditioned payoff, sample uniqueness, or label-event structure should improve ranking stability and top-score payoff together.
 
 ## Experiment Memory Discipline
 
@@ -176,8 +189,14 @@ Known lessons:
 - Bundle `20260625_155006` closed model-capacity search. TCN32 improved some
   triage ranking metrics but damaged official F1 and top-10 lift; GRU64 lost
   mean IC and classification skill; fusion64 worsened dispersion. The durable
-  next hypothesis is seed-variance reduction on the unchanged baseline, not
-  another architecture-width sweep.
+  next step was seed-variance reduction on the unchanged baseline, not another
+  architecture-width sweep.
+- Bundle `20260626_122455` closed seed-variance reduction as a training path.
+  The seed-rank ensemble improved mean IC but failed dispersion,
+  positive-fold, worst-fold, F1, and top-decile payoff gates. The next step is
+  not a new ensemble; it is event, label, and sample-information diagnostics to
+  determine whether the training target itself needs event-aware weighting or a
+  different durable mechanism.
 - Diagnostics-time lifecycle state must come from the current config, not an
   old run manifest. Historical profile/fold selections remain source-run
   evidence, but retired frozen candidates, experiment memory, seed-audit
@@ -306,6 +325,11 @@ Required diagnostic artifacts include:
 - `causal_threshold_policy_by_fold.csv`
 - `classification_skill_summary.csv`
 - `classification_skill_by_fold.csv`
+- `label_event_audit.csv`
+- `event_conditioned_performance.csv`
+- `sample_information_audit.csv`
+- `overlap_uniqueness_audit.csv`
+- `hypothesis_registry_summary.csv`
 - `seed_audit_coverage.csv`
 - `seed_reproducibility_audit.csv`
 - `seed_reproducibility_manifest_diff.csv`
