@@ -70,16 +70,27 @@ The current safe control profile is configured in `config.yaml`:
   worsened dispersion, positive-fold coverage, worst-fold behavior, official
   F1, and top-decile payoff. Do not search seed weights, add more seeds, or
   retry rank/probability seed ensembles without a new mechanism.
-- The current research state is sample-weighting-first:
+- Bundle `20260627_205102` showed that the first sample-weighting implementation
+  was mechanically inert. Static label-uniqueness weights had a normalized
+  Kish effective-sample fraction near `0.9983`, with p10, p50, and p90 almost
+  identical. The low overlap-information proxy near `0.094` describes target
+  dependence; it does not imply that static normalized loss weights can
+  distinguish rows. The v1 event component also averaged percentile ranks
+  across 20 columns, so almost no rows crossed its `0.80` threshold and the
+  event weights remained effectively one. Archive both v1 candidates and do
+  not interpret their nearly identical predictions as a valid event-weighting
+  test.
+- The current research state is corrected event-weighting-first:
   `experiments.research_focus.status` should be
-  `sample_uniqueness_event_weighting_preregistered`. The prerequisite
-  diagnostics showed that event-conditioned order-flow subsets improve payoff
-  or Rank IC, while overlapping 10-bar labels leave a very low effective sample
-  fraction. The next valid training candidates are train-fold-only label
-  uniqueness weighting and uniqueness plus bounded order-flow event weighting.
-  Do not replace this with another profile search, architecture search, seed
-  ensemble, or loss-only tweak unless these candidates fail and a new mechanism
-  is documented.
+  `corrected_orderflow_event_weighting_v2_preregistered`. The only valid
+  candidate reproduces the diagnostic order-flow family score inside each train
+  fold, ranks the combined absolute family score, and softly emphasizes its top
+  20 percent. Static uniqueness weighting is disabled. Weight-effectiveness
+  guardrails must stop training before fold 0 when active fraction, quantile
+  spread, or dominant-weight concentration shows another no-op. Do not replace
+  this with another profile search, architecture search, seed ensemble, or
+  loss-only tweak unless this isolated candidate fails and a new mechanism is
+  documented.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -204,9 +215,12 @@ Known lessons:
 - The follow-up event/sample diagnostics from the same run showed a distinct
   durable mechanism: event top-20 rows had stronger forward returns, mid-band
   event rows had stronger Rank IC, and overlap uniqueness estimated an
-  effective sample fraction near `0.094`. This justifies train-fold-only sample
-  weighting; it does not justify hard masking, direct feature deletion, seed
-  blending, or another loss-only objective.
+  overlap-information proxy near `0.094`. Bundle `20260627_205102` clarified
+  that this proxy is not the Kish effective sample fraction of normalized
+  static weights: the latter stayed near one and produced a no-op. This
+  justifies one corrected, audit-guarded event-weighting test; it does not
+  justify static uniqueness weights, hard masking, direct feature deletion,
+  seed blending, or another loss-only objective.
 - Diagnostics-time lifecycle state must come from the current config, not an
   old run manifest. Historical profile/fold selections remain source-run
   evidence, but retired frozen candidates, experiment memory, seed-audit

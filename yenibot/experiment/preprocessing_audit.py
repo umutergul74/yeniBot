@@ -130,7 +130,11 @@ def write_sample_weight_audit(
         "p10_weight",
         "p50_weight",
         "p90_weight",
+        "p99_weight",
         "max_weight",
+        "p90_p10_spread",
+        "dominant_weight_fraction",
+        "active_fraction",
         "effective_sample_size",
         "effective_sample_fraction",
         "selected_column_count",
@@ -138,6 +142,7 @@ def write_sample_weight_audit(
         "horizon_bars",
         "event_quantile",
         "event_strength",
+        "event_aggregation",
         "notes",
     ]
     frames: list[pd.DataFrame] = []
@@ -173,6 +178,9 @@ def write_sample_weight_audit(
                 "mean_weight",
                 "p90_weight",
                 "max_weight",
+                "mean_p90_p10_spread",
+                "max_dominant_weight_fraction",
+                "mean_active_fraction",
                 "selected_column_count_max",
             ]
         )
@@ -182,6 +190,9 @@ def write_sample_weight_audit(
             "mean_weight",
             "p90_weight",
             "max_weight",
+            "p90_p10_spread",
+            "dominant_weight_fraction",
+            "active_fraction",
             "effective_sample_fraction",
             "selected_column_count",
         ):
@@ -194,6 +205,9 @@ def write_sample_weight_audit(
                 mean_weight=("mean_weight", "mean"),
                 p90_weight=("p90_weight", "mean"),
                 max_weight=("max_weight", "max"),
+                mean_p90_p10_spread=("p90_p10_spread", "mean"),
+                max_dominant_weight_fraction=("dominant_weight_fraction", "max"),
+                mean_active_fraction=("active_fraction", "mean"),
                 selected_column_count_max=("selected_column_count", "max"),
             )
             .reset_index()

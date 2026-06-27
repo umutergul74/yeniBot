@@ -333,6 +333,15 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
             phase2_blockers[0] if phase2_blockers else ""
         ),
         "next_action": action or current.get("next_action") or phase2.get("next_action"),
+        "phase2_track_next_action": current.get("phase2_track_next_action")
+        or action
+        or current.get("next_action")
+        or phase2.get("next_action"),
+        "historical_research_status": current.get("historical_research_status"),
+        "historical_research_result": current.get("historical_research_result"),
+        "historical_research_next_action": current.get(
+            "historical_research_next_action"
+        ),
         "current_status": current.get("current_status"),
         "run_04_required_now": bool(current.get("run_04_required_now", False)),
         "run_05_first": bool(current.get("run_05_first", True)),
@@ -364,7 +373,10 @@ def _operator_markdown(payload: dict[str, Any]) -> str:
         f"- Current status: `{payload.get('current_status')}`",
         f"- Phase 2 ready: `{payload.get('phase2_ready')}`",
         f"- Active blocker: `{payload.get('active_blocker') or 'none'}`",
-        f"- Next action: `{payload.get('next_action')}`",
+        f"- Phase 2 track next action: `{payload.get('phase2_track_next_action')}`",
+        f"- Historical research status: `{payload.get('historical_research_status')}`",
+        f"- Historical research result: `{payload.get('historical_research_result')}`",
+        f"- Historical research next action: `{payload.get('historical_research_next_action')}`",
         f"- Run 04 required now: `{payload.get('run_04_required_now')}`",
         f"- Run 05 first: `{payload.get('run_05_first')}`",
         f"- Replacement candidate: `{payload.get('replacement_candidate_id') or 'none'}`",

@@ -19,14 +19,7 @@ from yenibot.experiment.classification import (
     _write_validation_charter_review,
 )
 from yenibot.experiment.charter import write_validation_charter_status
-from yenibot.experiment.common import (
-    _cfg,
-    _hash_payload,
-    _json_ready,
-    _read_json,
-    _slug,
-    _write_json,
-)
+from yenibot.experiment.common import _cfg, _hash_payload, _json_ready, _read_json, _slug, _write_json
 from yenibot.experiment.configuration import (
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
@@ -1580,6 +1573,9 @@ def write_experiment_diagnostics(
         future_oos_readiness=future_oos_readiness,
         seed_reproducibility_audit=seed_reproducibility_audit,
         training_execution=training_execution,
+        research_focus=diagnostic_config.get("experiments", {}).get("research_focus", {}) or {},
+        configured_candidate_profiles=list(settings.get("candidate_profiles") or []),
+        run_best_candidate=decision.get("best_candidate", {}) or {},
     )
     decision["phase1_current_status"] = phase1_current_status
     write_phase1_current_status(report_dir, phase1_current_status)

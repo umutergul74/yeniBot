@@ -1,125 +1,100 @@
 # Current Phase 1 Status
 
-Last reviewed: **June 15, 2026**
+Last reviewed: **June 28, 2026**
 
 ## Decision
 
-The current model passed the active `v4_evidence` walk-forward research
-charter, but the frozen primary candidate failed its pre-registered future
-unseen out-of-sample evaluation. Phase 2 remains blocked.
+The retained TCN+GRU control passes the active historical walk-forward evidence
+charter, but Phase 2 remains blocked. Historical research and frozen future-OOS
+confirmation are separate tracks:
 
-- **Model evidence passed** means the walk-forward research evidence is
-  credible enough to justify a frozen confirmation test.
-- **Phase 2 ready** requires the untouched frozen candidate to pass that
-  confirmation test with no refitting or policy changes.
+- Historical CV research may continue without changing a frozen candidate.
+- Frozen future-OOS candidates must remain prediction-only and immutable.
+- A historical candidate cannot be promoted from the rolling holdout.
 
-## Future-OOS Result
+## Retained Control
 
-The 737-row window from `2026-05-13 09:00 UTC` through
-`2026-06-13 01:00 UTC` was scored with zero fit operations and a verified
-manifest hash.
+Profile:
+`baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility`
 
-| Metric | Future-OOS result |
-|---|---:|
-| Rank IC | `-0.0075` |
-| PRAUC lift vs prevalence | `1.0267` |
-| Precision lift vs prevalence | `1.0609` |
-| F1 skill vs rate-matched random | `+0.0219` |
-| Prediction-long rate | `79.38%` |
-| Top-decile label lift | `0.9901` |
-| Top-decile forward return | `-0.00166` |
-| Selected forward return | `-0.00308` |
-
-The candidate failed ranking, payoff, PRAUC-lift, and prediction-rate gates.
-This is not a threshold-only miss. `control_fold_ensemble_v1` is retired.
-
-## Frozen Contract
-
-| Field | Frozen value |
-|---|---|
-| Candidate | `control_fold_ensemble_v1` |
-| Source run | `20260605_211102` |
-| Anchor | `2026-05-13 08:00:00+00:00` |
-| Manifest SHA-256 | `5c2acd94b3ea46a509b8a8c8b7327f6cc5ed34045a4e97e21a0b34b3313ae302` |
-| Threshold | `0.4236384365293715` |
-| Threshold source | `validation_constrained_threshold` |
-| Frozen models | `36` |
-| Future fitting allowed | `false` |
-
-The manifest hash has been independently recomputed from the latest reviewed
-bundle and matches the configured expected hash.
-
-## Latest Evidence
+Latest full-CV run: `20260627_205102`
 
 | Metric | Result |
 |---|---:|
-| Mean walk-forward Rank IC | `0.0734` |
-| Positive-IC folds | `86.1%` |
-| PRAUC lift vs prevalence | `1.124` |
-| Precision lift vs prevalence | `1.101` |
-| F1 skill vs rate-matched random | `+0.027` |
-| Positive-return folds | `69.4%` |
-| Top-decile OOS forward return | `0.00317` |
-| Legacy Rank IC std monitor | `0.0708` |
-| Legacy raw Long F1 monitor | `0.4313` |
+| Mean Rank IC | `0.0739` |
+| Rank IC std, monitor only | `0.0690` |
+| Positive-IC folds | `86.8%` |
+| Selected-threshold F1 | `0.4681` |
+| PRAUC lift vs prevalence | `1.1203` |
+| Precision lift vs prevalence | `1.0951` |
+| Top-decile label lift | `1.1219` |
+| Top-decile forward return | `0.00299` |
+| Worst-five mean Rank IC | `-0.0350` |
 
-Raw sigmoid scores are ranking scores, not deployment-ready probabilities.
-The reliability evidence does not support probability-sized positions.
+The model has useful ranking and payoff evidence. Its raw sigmoid output is not
+a calibrated probability: raw and validation-only calibrated Brier skill remain
+below climatology. Phase 2 must treat the output as a ranking score unless a
+future frozen evaluation proves probability quality.
 
-## What Is Allowed Now
+## Latest Mechanism Result
 
-- Improve diagnostics, tests, documentation, CI, and operator safety.
-- Use the failed OOS window for diagnosis only.
-- Repair the retained control on historical purged walk-forward folds.
-- Design a distinct pre-registered mechanism that addresses ranking reversal
-  without repeating global deletion, hard reliability masking, or simple
-  large-trade clipping.
-- Add the failed window to future training data only after preserving its
-  immutable evaluation record.
-- Pre-register the replacement before collecting a new future-OOS window.
+Bundle `20260627_205102` tested:
 
-## Latest Mechanism Cycle
+1. static label-uniqueness loss weighting, and
+2. uniqueness plus broad order-flow event weighting.
 
-Bundle `20260614_054446` completed the train-only preprocessing experiment:
+Neither is promotable. More importantly, the audit showed that neither
+mechanism was materially active:
 
-- Simple `4h_large_trade_ratio` clipping was controlled but not promotable:
-  mean IC improved slightly while official F1 stayed flat and top-10 lift fell.
-- Hard 4H-flow reliability masking changed 10 of 12 triage folds, increased
-  Rank IC dispersion, reduced positive-fold coverage, and weakened economic
-  concentration.
-- Adding clipping did not repair the masking instability.
+- Static normalized uniqueness weights had mean Kish effective-sample fraction
+  near `0.9983`; p10, p50, and p90 were effectively identical.
+- The earlier overlap value near `0.094` is an information-dependence proxy,
+  not the effective sample fraction of normalized loss weights.
+- Averaging percentile ranks across 20 event columns almost never crossed the
+  configured `0.80` threshold, leaving event weights effectively at one.
+- The two candidates therefore produced almost identical predictions.
 
-There is currently no active candidate profile and no active future-OOS
-primary candidate. Notebook `04` should not be rerun until a distinct
-pre-registered hypothesis is committed. Notebook `05` may be run for
-diagnostic/report verification without GPU.
+These v1 profiles are archived and cannot re-enter automatic training.
 
-The isolated seed-audit extension for source run `20260614_054446` is complete.
-Seeds `42, 43, 44` each cover folds `0, 5, 10, 15, 20, 25, 30, 35`; coverage
-spans the full walk-forward history and passes.
+## Active Historical Experiment
 
-The audit shows material initialization sensitivity, but the source full run
-and the new seed-42 scope also differ on their shared folds. That same-seed
-difference must be classified before all dispersion is attributed to random
-initialization. Notebook `05` now writes `seed_reproducibility_audit.csv`,
-which compares manifest hashes, aligned prediction rows, score correlation,
-and fold Rank IC deltas. Run `05` only; no new training is required for this
-diagnostic.
+The only active candidate is
+`baseline_stable_orderflow_event_weighted_loss_v2`.
 
-## What Is Frozen
+It keeps the control features, labels, architecture, and base loss unchanged.
+Inside each train fold it:
 
-- Candidate identity and source run
-- Ordered feature list
-- Model, scaler, and HMM artifacts
-- Threshold and threshold source
-- Fit cutoff and anchor
-- Future-OOS gates
+- uses only the diagnosed order-flow family,
+- computes mean absolute family strength and then its train-fold percentile,
+- softly emphasizes the top 20 percent,
+- disables static uniqueness weighting, and
+- fails before training if active fraction, weight spread, or dominant-weight
+  concentration indicates another no-op.
 
-Do not modify the retired candidate's profile, threshold, weights, model
-artifacts, or manifest hash. Do not choose replacement ensemble weights or
-thresholds from the failed OOS window.
+Seed audit remains enabled for seeds `42, 43, 44`, but every seed now uses the
+same eight temporally spaced folds instead of running all folds for seeds 43 and
+44.
 
-The retired manifest remains historical evidence in prior bundles and
-`frozen_candidate_outcomes`. It is intentionally absent from the active
-`frozen_candidates` slot. A new anchor and counter begin only after a
-replacement is selected and pre-registered.
+## Frozen Future-OOS Track
+
+`control_recent3_equal_v2` remains pinned as historical frozen-candidate
+evidence. The latest diagnostics counted `313 / 720` mature labeled rows after
+its anchor. Research changes must not refit, replace, or tune that frozen
+candidate against its accumulating window.
+
+The failed June 13 candidate remains immutable historical evidence and cannot
+be retested on the same window.
+
+## Next Operator Run
+
+No data, feature, or label formula changed. Run:
+
+1. `git pull`
+2. Colab `Runtime -> Restart session`
+3. `04_training_walk_forward.ipynb`
+4. `05_diagnostics_validation.ipynb`
+
+Notebook 04 should train the full control, one 12-fold v2 triage candidate, and
+three eight-fold seed-audit scopes. At most one candidate may advance to full
+CV. Notebook 05 must include the sample-weight effectiveness audit in the slim
+bundle.

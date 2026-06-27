@@ -1977,19 +1977,29 @@ def test_decision_ladder_routes_failed_future_oos_to_replacement_research() -> N
 
 
 def test_event_diagnostics_identify_event_and_sample_information() -> None:
+    row_count = 240
+    fold_size = row_count // 2
     predictions = pd.DataFrame(
         {
-            "timestamp": pd.date_range("2024-01-01", periods=24, freq="h", tz="UTC"),
-            "fold": [0] * 12 + [1] * 12,
-            "split": ["test"] * 24,
-            "prob_long": np.linspace(0.1, 0.9, 24),
-            "label": [0, 1, 0, 1] * 6,
-            "forward_return": np.linspace(-0.01, 0.02, 24),
-            "tb_return": np.linspace(-0.02, 0.03, 24),
-            "taker_imbalance": np.linspace(-1.0, 1.0, 24),
-            "4h_large_trade_ratio": np.r_[np.repeat(0.1, 12), np.repeat(2.0, 12)],
-            "volume_log_zscore": np.linspace(0.0, 1.0, 24),
-            "gk_vol_14": np.linspace(0.5, 1.5, 24),
+            "timestamp": pd.date_range(
+                "2024-01-01",
+                periods=row_count,
+                freq="h",
+                tz="UTC",
+            ),
+            "fold": [0] * fold_size + [1] * fold_size,
+            "split": ["test"] * row_count,
+            "prob_long": np.linspace(0.1, 0.9, row_count),
+            "label": [0, 1, 0, 1] * (row_count // 4),
+            "forward_return": np.linspace(-0.01, 0.02, row_count),
+            "tb_return": np.linspace(-0.02, 0.03, row_count),
+            "taker_imbalance": np.linspace(-1.0, 1.0, row_count),
+            "4h_large_trade_ratio": np.r_[
+                np.repeat(0.1, fold_size),
+                np.repeat(2.0, fold_size),
+            ],
+            "volume_log_zscore": np.linspace(0.0, 1.0, row_count),
+            "gk_vol_14": np.linspace(0.5, 1.5, row_count),
         }
     )
     entries = [
@@ -2055,9 +2065,20 @@ def test_event_diagnostics_identify_event_and_sample_information() -> None:
     assert {"family", "information_signal", "recommended_action"}.issubset(
         frames["sample_information_audit"].columns
     )
-    assert {"effective_sample_fraction", "overlap_risk"}.issubset(
+    assert {
+        "overlap_information_fraction_proxy",
+        "effective_sample_fraction",
+        "static_weight_p90_p10_spread",
+        "static_uniqueness_weighting_noop",
+        "overlap_risk",
+    }.issubset(
         frames["overlap_uniqueness_audit"].columns
     )
+    overlap = frames["overlap_uniqueness_audit"].iloc[0]
+    assert overlap["overlap_information_fraction_proxy"] < 0.25
+    assert bool(overlap["static_uniqueness_weighting_noop"]) is True
+    assert overlap["effective_sample_fraction"] > 0.90
+    assert overlap["static_weight_p90_p10_spread"] < 0.02
     registry = frames["hypothesis_registry_summary"]
     assert "seed_ensemble" in set(registry["hypothesis_family"])
     assert (
@@ -2299,12 +2320,26 @@ def test_current_status_reports_manifest_pinned_future_oos_wait() -> None:
         future_oos_readiness={"ready_for_evaluation": False},
         seed_reproducibility_audit=seed_audit,
         training_execution={"training_executed_count": 0},
+        research_focus={
+            "mode": "walk_forward_cv_repair",
+            "status": "corrected_orderflow_event_weighting_v2_preregistered",
+        },
+        configured_candidate_profiles=["event_v2"],
+        run_best_candidate={},
     )
 
     assert status["current_status"] == (
         "replacement_manifest_pinned_waiting_for_future_oos_rows"
     )
     assert status["next_action"] == "wait_for_new_future_oos_rows"
+    assert status["phase2_track_next_action"] == "wait_for_new_future_oos_rows"
+    assert status["historical_research_status"] == (
+        "corrected_orderflow_event_weighting_v2_preregistered"
+    )
+    assert status["historical_research_result"] == "candidates_evaluated_no_promotion"
+    assert status["historical_research_next_action"] == (
+        "review_candidate_audits_and_update_experiment_memory"
+    )
 
 
 def test_prediction_error_audit_samples_bad_and_good_fold_examples() -> None:
@@ -3055,8 +3090,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["experiments"]["always_full_profiles"] == [
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
-    assert config["experiments"]["max_auto_full_candidates"] == 0
-    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["max_auto_full_candidates"] == 1
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_stable_orderflow_event_weighted_loss_v2",
+    ]
+    event_weighted = config["features"]["profiles"][
+        "baseline_stable_orderflow_event_weighted_loss_v2"
+    ]
+    event_weighting = event_weighted["config_overrides"]["training"]["sample_weighting"]
+    assert event_weighted["inherit"] == config["experiments"]["control_profile"]
+    assert event_weighting["components"]["uniqueness"]["enabled"] is False
+    assert event_weighting["components"]["event"]["enabled"] is True
+    assert event_weighting["components"]["event"]["aggregation"] == "mean_abs_then_rank"
+    assert event_weighting["components"]["event"]["effectiveness_guard"]["enabled"] is True
     medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
     small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
     tcn_only = config["features"]["profiles"]["baseline_stable_model_tcn32_only"]
@@ -3148,11 +3194,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["seed_audit"]["seeds"] == [42, 43, 44]
     assert config["experiments"]["seed_audit"]["fold_ids"] == "auto"
-    assert config["experiments"]["seed_audit"]["fold_ids_by_seed"] == {
-        "42": "auto",
-        "43": "all",
-        "44": "all",
-    }
+    assert "fold_ids_by_seed" not in config["experiments"]["seed_audit"]
     assert config["experiments"]["seed_audit"]["fold_count"] == 8
     assert config["experiments"]["seed_audit"]["include_boundary_folds"] is True
     assert config["experiments"]["seed_audit"]["min_temporal_span_fraction"] == 0.90
@@ -3218,7 +3260,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "event_sample_information_diagnostics_preregistered"
+        "corrected_orderflow_event_weighting_v2_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"
@@ -3245,6 +3287,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert "GRU64-only lowered mean IC" in rejected["baseline_stable_model_gru64_only"]["reason"]
     assert "fusion64-only lowered mean IC" in rejected["baseline_stable_model_fusion64_only"]["reason"]
     assert "seed-rank ensemble" in rejected["baseline_seed_rank_ensemble_v1"]["reason"]
+    assert "nearly constant" in rejected["baseline_stable_uniqueness_weighted_loss"]["reason"]
+    assert "event component was a no-op" in rejected[
+        "baseline_stable_uniqueness_orderflow_event_weighted_loss"
+    ]["reason"]
     assert "non-promotable" in rejected["baseline_stable_train_clip_4h_large_trade"]["reason"]
     assert "hard train-fold masking" in rejected["baseline_stable_train_reliability_mask_4h_flow"]["reason"]
     assert "did not stabilize" in rejected["baseline_stable_train_clip_and_reliability_mask"]["reason"]

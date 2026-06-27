@@ -407,8 +407,13 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
         "label_horizon_bars",
         "mean_concurrency_at_label_start",
         "mean_uniqueness_weight",
+        "overlap_information_fraction_proxy",
         "effective_sample_size",
         "effective_sample_fraction",
+        "static_weight_cv",
+        "static_weight_p90_p10_spread",
+        "static_weight_dominant_fraction",
+        "static_uniqueness_weighting_noop",
         "top_event_effective_sample_fraction",
         "overlap_risk",
         "recommended_next_hypothesis",
@@ -430,22 +435,56 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
                 continue
             positions = np.arange(n)
             starts = positions
-            ends = positions + horizon
+            ends = np.minimum(positions + horizon, n - 1)
             concurrency = np.zeros(n, dtype=float)
             for idx in range(n):
                 concurrency[idx] = float(((starts <= idx) & (ends >= idx)).sum())
-            row_uniqueness = 1.0 / np.maximum(concurrency, 1.0)
-            uniqueness_values.extend(row_uniqueness.tolist())
+            inverse_concurrency = 1.0 / np.maximum(concurrency, 1.0)
+            prefix = np.concatenate([[0.0], np.cumsum(inverse_concurrency)])
+            label_uniqueness = np.asarray(
+                [
+                    (prefix[end + 1] - prefix[start]) / max(1, end - start + 1)
+                    for start, end in zip(starts, ends)
+                ],
+                dtype=float,
+            )
+            uniqueness_values.extend(label_uniqueness.tolist())
             concurrency_values.extend(concurrency.tolist())
             event_rank = _numeric_series(ordered, "event_rank_pct")
             top_mask = event_rank >= 0.80
             if top_mask.any():
-                top_event_uniqueness.extend(row_uniqueness[top_mask.to_numpy()].tolist())
+                top_event_uniqueness.extend(label_uniqueness[top_mask.to_numpy()].tolist())
         row_count = int(len(event_frame))
-        eff_n = float(np.nansum(uniqueness_values)) if uniqueness_values else np.nan
-        eff_frac = eff_n / row_count if row_count and np.isfinite(eff_n) else np.nan
+        uniqueness = np.asarray(uniqueness_values, dtype=float)
+        uniqueness = uniqueness[np.isfinite(uniqueness) & (uniqueness > 0)]
+        overlap_proxy = float(np.nanmean(uniqueness)) if uniqueness.size else np.nan
+        if uniqueness.size:
+            normalized = uniqueness / float(np.mean(uniqueness))
+            eff_n = float(normalized.sum() ** 2 / (np.square(normalized).sum() + 1e-12))
+            eff_frac = float(eff_n / normalized.size)
+            static_cv = float(normalized.std(ddof=0) / max(normalized.mean(), 1e-12))
+            static_spread = float(
+                np.quantile(normalized, 0.90) - np.quantile(normalized, 0.10)
+            )
+            _, counts = np.unique(np.round(normalized, 6), return_counts=True)
+            static_dominant = float(counts.max() / normalized.size)
+        else:
+            eff_n = np.nan
+            eff_frac = np.nan
+            static_cv = np.nan
+            static_spread = np.nan
+            static_dominant = np.nan
+        static_noop = bool(
+            np.isfinite(eff_frac)
+            and np.isfinite(static_spread)
+            and (eff_frac >= 0.98 or static_spread < 0.02)
+        )
         top_eff_frac = float(np.nanmean(top_event_uniqueness)) if top_event_uniqueness else np.nan
-        risk = "high_overlap" if np.isfinite(eff_frac) and eff_frac < 0.25 else "moderate_or_low_overlap"
+        risk = (
+            "high_overlap"
+            if np.isfinite(overlap_proxy) and overlap_proxy < 0.25
+            else "moderate_or_low_overlap"
+        )
         rows.append(
             {
                 "candidate": str(entry.get("profile", "")),
@@ -455,13 +494,20 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
                 "row_count": row_count,
                 "label_horizon_bars": horizon,
                 "mean_concurrency_at_label_start": float(np.nanmean(concurrency_values)) if concurrency_values else np.nan,
-                "mean_uniqueness_weight": float(np.nanmean(uniqueness_values)) if uniqueness_values else np.nan,
+                "mean_uniqueness_weight": overlap_proxy,
+                "overlap_information_fraction_proxy": overlap_proxy,
                 "effective_sample_size": eff_n,
                 "effective_sample_fraction": eff_frac,
+                "static_weight_cv": static_cv,
+                "static_weight_p90_p10_spread": static_spread,
+                "static_weight_dominant_fraction": static_dominant,
+                "static_uniqueness_weighting_noop": static_noop,
                 "top_event_effective_sample_fraction": top_eff_frac,
                 "overlap_risk": risk,
                 "recommended_next_hypothesis": (
-                    "design_uniqueness_or_event_weighted_training_v1"
+                    "do_not_use_static_uniqueness_weights_test_effective_event_weighting_or_sampling"
+                    if risk == "high_overlap" and static_noop
+                    else "design_overlap_aware_sampling_not_static_weighting"
                     if risk == "high_overlap"
                     else "monitor_overlap_before_changing_training"
                 ),

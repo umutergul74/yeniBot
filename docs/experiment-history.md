@@ -34,6 +34,25 @@ candidate is built from its pre-anchor fold ensemble.
 | Hard train-fold 4H-flow reliability masking | Altered 10/12 triage folds, increased dispersion, and reduced positive-fold coverage |
 | Simple train-only 4H large-trade clipping | Controlled but non-promotable; small IC gain came with lower top-10 lift |
 | Clipping plus hard reliability masking | Did not repair masking instability |
+| Uniform and component-only model shrinkage | Improved isolated stability measures but failed to preserve F1 and top-score payoff |
+| Equal-weight seed-rank ensemble | Raised mean IC while worsening dispersion, worst folds, F1, and top-decile payoff |
+| Static label-uniqueness loss weighting | Normalized weights were nearly constant; low overlap information was incorrectly assumed to imply useful row-level weights |
+| Broad v1 event weighting | Mean rank across 20 columns almost never crossed the event threshold, making the component a no-op |
+
+## Active Mechanism Experiment
+
+Bundle `20260627_205102` closed the first sample-weighting implementation. The
+result must not be read as evidence that order-flow event conditioning is
+useless: the event component did not materially activate. It is evidence that
+static uniqueness weights and broad mean-feature-rank aggregation are the wrong
+implementations for this dataset.
+
+The only active candidate is
+`baseline_stable_orderflow_event_weighted_loss_v2`. It reproduces the
+diagnostic order-flow family score inside each train fold using
+`mean_abs_then_rank`, emphasizes only the top 20 percent with bounded weights,
+and has fail-fast effectiveness checks. No other profile, architecture, seed
+ensemble, or loss search is active.
 
 ## Governance Rule
 

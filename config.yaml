@@ -319,6 +319,38 @@ features:
                 strength: 0.35
                 power: 1.0
                 use_abs: true
+    baseline_stable_orderflow_event_weighted_loss_v2:
+      description: "Corrected event-only candidate: reproduce the diagnostic order-flow family score inside each train fold, rank the combined absolute family score, and softly emphasize only its top 20 percent. Static uniqueness weights are disabled because bundle 20260627_205102 proved them nearly uniform."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        training:
+          sample_weighting:
+            enabled: true
+            normalize_mean: true
+            min_weight: 0.50
+            max_weight: 1.50
+            components:
+              uniqueness:
+                enabled: false
+              event:
+                enabled: true
+                include_patterns:
+                  - "*taker_imbalance*"
+                  - "*taker_buy_ratio*"
+                  - "*true_cvd*"
+                  - "*cvd_cumulative*"
+                  - "*buy_sell_imbalance*"
+                aggregation: mean_abs_then_rank
+                quantile: 0.80
+                strength: 0.35
+                power: 1.0
+                use_abs: true
+                effectiveness_guard:
+                  enabled: true
+                  min_active_fraction: 0.15
+                  max_active_fraction: 0.25
+                  min_p90_p10_spread: 0.05
+                  max_dominant_weight_fraction: 0.85
     baseline_control_plus_futures_context:
       description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
@@ -1923,6 +1955,7 @@ training:
       event:
         enabled: false
         include_patterns: []
+        aggregation: mean_feature_rank
         quantile: 0.80
         strength: 0.35
         power: 1.0
@@ -2125,8 +2158,7 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_stable_uniqueness_weighted_loss
-    - baseline_stable_uniqueness_orderflow_event_weighted_loss
+    - baseline_stable_orderflow_event_weighted_loss_v2
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2136,7 +2168,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: sample_uniqueness_event_weighting_preregistered
+    status: corrected_orderflow_event_weighting_v2_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2152,8 +2184,10 @@ experiments:
       - gru64_only_model_capacity
       - fusion64_only_model_capacity
       - baseline_seed_rank_ensemble_v1
-    conclusion: "Bundle 20260626_122455 closed the equal-weight seed-rank ensemble and the follow-up event/sample diagnostics identified a new mechanism: high label overlap leaves an effective sample fraction near 0.094, while order-flow event subsets improve payoff or Rank IC without requiring direct feature deletion."
-    next_step: "Run a bounded train-fold-only sample-weighting sprint: first label uniqueness weights, then uniqueness plus order-flow event emphasis. Keep the control features, model architecture, labels, and base loss unchanged. Promote no candidate unless it improves stability without sacrificing official F1 or top-score payoff."
+      - static_label_uniqueness_weighting_v1
+      - diluted_multifeature_event_weighting_v1
+    conclusion: "Bundle 20260627_205102 showed that the first sample-weighting sprint was mechanically ineffective. Normalized uniqueness weights had mean Kish ESS fraction 0.9983 and an almost constant p10/p50/p90, while averaging percentile ranks across 20 event columns left event weights effectively at one. The candidates produced nearly identical predictions, did not improve IC stability, and reduced top-10 lift."
+    next_step: "Run one corrected event-only candidate. Reproduce the diagnostic order-flow family score inside each train fold with mean_abs_then_rank aggregation, softly weight only the top 20 percent, and fail before training if the resulting weights are still inert. Keep features, architecture, labels, and base loss unchanged."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2355,6 +2389,8 @@ experiments:
       baseline_stable_model_gru64_only: "Bundle 20260625_155006: GRU64-only slightly reduced triage std but lowered mean IC to 0.0380, official F1 to 0.4297, and top-10 lift to 1.1107. Reject component shrinkage."
       baseline_stable_model_fusion64_only: "Bundle 20260625_155006: fusion64-only retained top-10 lift but lowered mean IC to 0.0411, worsened std to 0.1213, and lowered official F1 to 0.4243. Reject component shrinkage."
       baseline_seed_rank_ensemble_v1: "Bundle 20260626_122455: equal-weight validation-CDF seed-rank ensemble improved mean IC but failed the joint confirmatory gates: std worsened, positive-fold coverage dropped, worst-5 IC worsened, top-10 lift fell below control, and official F1 declined. Close seed-ensemble search."
+      baseline_stable_uniqueness_weighted_loss: "Bundle 20260627_205102: static uniqueness weighting was mechanically near-uniform after normalization (mean Kish ESS fraction 0.9983) and failed the stability gates. The low overlap-information proxy must not be interpreted as a useful static loss-weight distribution."
+      baseline_stable_uniqueness_orderflow_event_weighted_loss: "Bundle 20260627_205102: invalid as a test of event emphasis. Mean percentile rank across 20 columns almost never crossed the 0.80 threshold, so event weights stayed effectively at one and predictions matched the uniqueness-only candidate."
       baseline_stable_model_medium_capacity: "Bundle 20260624_171150: uniform medium shrinkage raised triage mean IC but slightly worsened std, left positive-fold coverage at 58.3%, reduced official F1 to 0.4348, and collapsed top-10 lift to 0.9938. Reject as a combined-capacity configuration."
       baseline_stable_model_small_capacity: "Bundle 20260624_171150: uniform small shrinkage was diagnostically useful but non-promotable. It improved triage std from 0.0985 to 0.0834, positive folds to 75%, and worst-5 IC to -0.0085, but reduced official F1 to 0.4372, PRAUC, and top-10 lift to 1.0483. Use this only as evidence for component-level capacity isolation."
       baseline_stable_train_clip_4h_large_trade: "Bundle 20260614_054446: train-only clipping was controlled and improved triage mean IC by 0.0047 with a small std reduction, but official F1 was flat and top-10 lift fell from 1.2276 to 1.1886. Archive as inconclusive/non-promotable; do not auto-rerun."
@@ -2390,6 +2426,10 @@ experiments:
         reason: "Bundle 20260625_155006: fusion64-only lowered mean IC to 0.0411, worsened std to 0.1213, lowered official F1 to 0.4243, and deteriorated worst-fold behavior despite preserved tail lift."
       baseline_seed_rank_ensemble_v1:
         reason: "Bundle 20260626_122455: equal-weight seed-rank ensemble raised mean IC but failed confirmatory evidence. Std worsened, positive-fold coverage fell, worst-5 IC worsened, top-10 lift ratio was below control, official F1 declined, and the decision was close_seed_ensemble_hypothesis_without_weight_or_seed_search."
+      baseline_stable_uniqueness_weighted_loss:
+        reason: "Bundle 20260627_205102: normalized static uniqueness weights were nearly constant (mean Kish ESS fraction 0.9983; p10, p50, and p90 effectively equal). Triage std worsened to 0.1013 and top-10 lift fell to 1.1964 versus 1.2276 for the paired control. Do not retry static uniqueness loss weights."
+      baseline_stable_uniqueness_orderflow_event_weighted_loss:
+        reason: "Bundle 20260627_205102: the v1 event component was a no-op because averaging percentile ranks across 20 features almost never exceeded the 0.80 threshold. Results matched uniqueness-only weighting. This exact aggregation is invalid and must not be retried."
       baseline_stable_model_medium_capacity:
         reason: "Bundle 20260624_171150: uniform medium capacity was non-promotable. Triage std worsened from 0.0985 to 0.1017, positive-fold coverage stayed at 58.3%, official F1 fell from 0.4558 to 0.4348, and top-10 lift fell from 1.2276 to 0.9938."
       baseline_stable_model_small_capacity:
@@ -2518,10 +2558,6 @@ experiments:
       - baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     seeds: [42, 43, 44]
     fold_ids: auto
-    fold_ids_by_seed:
-      "42": auto
-      "43": all
-      "44": all
     fold_count: 8
     include_boundary_folds: true
     min_temporal_span_fraction: 0.90

@@ -154,12 +154,20 @@ def test_build_sample_weights_uses_train_fold_only_event_columns() -> None:
                 "min_weight": 0.25,
                 "max_weight": 2.5,
                 "components": {
-                    "uniqueness": {"enabled": True, "power": 1.0},
+                    "uniqueness": {"enabled": False},
                     "event": {
                         "enabled": True,
                         "include_patterns": ["event_*"],
+                        "aggregation": "mean_abs_then_rank",
                         "quantile": 0.80,
                         "strength": 0.5,
+                        "effectiveness_guard": {
+                            "enabled": True,
+                            "min_active_fraction": 0.15,
+                            "max_active_fraction": 0.25,
+                            "min_p90_p10_spread": 0.05,
+                            "max_dominant_weight_fraction": 0.85,
+                        },
                     },
                 },
             }
@@ -177,6 +185,54 @@ def test_build_sample_weights_uses_train_fold_only_event_columns() -> None:
     assert {"uniqueness", "event", "combined"}.issubset(set(audit["component"]))
     event_row = audit.loc[audit["component"].eq("event")].iloc[0]
     assert event_row["selected_column_count"] == 1
+    assert 0.15 <= event_row["active_fraction"] <= 0.25
+    assert event_row["p90_p10_spread"] >= 0.05
+    assert event_row["event_aggregation"] == "mean_abs_then_rank"
+
+
+def test_build_sample_weights_rejects_inert_event_aggregation() -> None:
+    row_count = 100
+    frame = pd.DataFrame(
+        {
+            f"event_{idx:02d}": (
+                np.arange(row_count, dtype=float)
+                if idx % 2 == 0
+                else np.arange(row_count - 1, -1, -1, dtype=float)
+            )
+            for idx in range(20)
+        }
+    )
+    config = {
+        "training": {
+            "sample_weighting": {
+                "enabled": True,
+                "components": {
+                    "uniqueness": {"enabled": False},
+                    "event": {
+                        "enabled": True,
+                        "include_patterns": ["event_*"],
+                        "aggregation": "mean_feature_rank",
+                        "quantile": 0.80,
+                        "strength": 0.35,
+                        "effectiveness_guard": {
+                            "enabled": True,
+                            "min_active_fraction": 0.15,
+                            "max_active_fraction": 0.25,
+                            "min_p90_p10_spread": 0.05,
+                            "max_dominant_weight_fraction": 0.85,
+                        },
+                    },
+                },
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="effectively a no-op"):
+        build_sample_weights(
+            train_frame=frame,
+            feature_columns=list(frame.columns),
+            config=config,
+        )
 
 
 def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny_config) -> None:

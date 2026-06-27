@@ -51,6 +51,9 @@ def build_phase1_current_status(
     future_oos_readiness: dict[str, Any],
     seed_reproducibility_audit: pd.DataFrame,
     training_execution: dict[str, Any],
+    research_focus: dict[str, Any] | None = None,
+    configured_candidate_profiles: list[str] | None = None,
+    run_best_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the clearest current state, preferring generated artifacts over config text."""
 
@@ -105,6 +108,25 @@ def build_phase1_current_status(
             or "review_phase1_reports"
         )
 
+    research_focus = research_focus or {}
+    configured_candidate_profiles = [
+        str(profile) for profile in configured_candidate_profiles or []
+    ]
+    run_best_candidate = run_best_candidate or {}
+    if configured_candidate_profiles and run_best_candidate:
+        historical_research_result = "candidate_passed_historical_promotion_gates"
+        historical_research_next_action = (
+            "review_historical_candidate_without_using_seen_holdout"
+        )
+    elif configured_candidate_profiles:
+        historical_research_result = "candidates_evaluated_no_promotion"
+        historical_research_next_action = (
+            "review_candidate_audits_and_update_experiment_memory"
+        )
+    else:
+        historical_research_result = "no_active_candidate"
+        historical_research_next_action = "preregister_distinct_historical_mechanism"
+
     return {
         "run_id": run_id,
         "control_profile": control_profile,
@@ -113,7 +135,14 @@ def build_phase1_current_status(
         "phase2_blockers": blockers,
         "active_blocker": blockers[0] if blockers else "",
         "next_action": next_action,
+        "phase2_track_next_action": next_action,
         "next_action_source": "phase1_current_status_artifact_state",
+        "historical_research_mode": str(research_focus.get("mode") or ""),
+        "historical_research_status": str(research_focus.get("status") or ""),
+        "historical_research_result": historical_research_result,
+        "historical_research_next_action": historical_research_next_action,
+        "historical_candidate_profiles": configured_candidate_profiles,
+        "historical_best_candidate": run_best_candidate,
         "historical_walk_forward_evidence_passed": historical_evidence_passed,
         "model_evidence_passed": model_evidence_passed,
         "frozen_future_oos_evidence_passed": frozen_future_oos_passed,
@@ -154,7 +183,10 @@ def _current_status_markdown(status: dict[str, Any]) -> str:
         f"- Phase 2 ready: `{status.get('phase2_ready')}`",
         f"- Active blocker: `{status.get('active_blocker') or 'none'}`",
         f"- Blockers: `{', '.join(blockers) if blockers else 'none'}`",
-        f"- Next action: `{status.get('next_action')}`",
+        f"- Phase 2 track next action: `{status.get('phase2_track_next_action')}`",
+        f"- Historical research status: `{status.get('historical_research_status')}`",
+        f"- Historical research result: `{status.get('historical_research_result')}`",
+        f"- Historical research next action: `{status.get('historical_research_next_action')}`",
         "",
         "## Evidence",
         "",
