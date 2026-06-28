@@ -38,21 +38,22 @@ candidate is built from its pre-anchor fold ensemble.
 | Equal-weight seed-rank ensemble | Raised mean IC while worsening dispersion, worst folds, F1, and top-decile payoff |
 | Static label-uniqueness loss weighting | Normalized weights were nearly constant; low overlap information was incorrectly assumed to imply useful row-level weights |
 | Broad v1 event weighting | Mean rank across 20 columns almost never crossed the event threshold, making the component a no-op |
+| Corrected order-flow event weighting v2 | Weights were active, but paired triage IC wins occurred in only 4/12 folds while dispersion, PRAUC, worst folds, and top-decile lift worsened |
 
 ## Active Mechanism Experiment
 
-Bundle `20260627_205102` closed the first sample-weighting implementation. The
-result must not be read as evidence that order-flow event conditioning is
-useless: the event component did not materially activate. It is evidence that
-static uniqueness weights and broad mean-feature-rank aggregation are the wrong
-implementations for this dataset.
+Bundle `20260627_232543` closed the sample/event-weighting family. Corrected
+event weights were active, but the candidate improved paired triage mean IC by
+only `0.0012`, won Rank IC in only 4/12 folds, and damaged dispersion, PRAUC,
+worst-fold IC, and top-decile lift.
 
 The only active candidate is
-`baseline_stable_orderflow_event_weighted_loss_v2`. It reproduces the
-diagnostic order-flow family score inside each train fold using
-`mean_abs_then_rank`, emphasizes only the top 20 percent with bounded weights,
-and has fail-fast effectiveness checks. No other profile, architecture, seed
-ensemble, or loss search is active.
+`baseline_stable_multitask_return_head_light`. It adds one lightly weighted
+forward-return regression head to the shared encoder without changing the
+control features, labels, widths, P(Long) head, primary loss, or early-stopping
+metric. The auxiliary head is training-only and is evaluated through a
+dedicated audit. No adaptive task weighting or second auxiliary target is
+active.
 
 ## Governance Rule
 

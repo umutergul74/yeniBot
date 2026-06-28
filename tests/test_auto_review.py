@@ -163,6 +163,28 @@ def _write_minimal_report(path, *, missing_selected: bool = False, future_oos_re
     pd.DataFrame(
         [
             {
+                "profile": control,
+                "fold_scope": "full",
+                "fold": 0,
+                "enabled": False,
+                "weight": 0.0,
+                "target_scale": 0.01,
+            }
+        ]
+    ).to_csv(path / "auxiliary_task_audit.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "profile": control,
+                "fold_scope": "full",
+                "enabled": False,
+                "fold_count": 1,
+            }
+        ]
+    ).to_csv(path / "auxiliary_task_audit_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {
                 "blocker": "rank_ic_std_above_phase1_target",
                 "root_cause": "fold_score_reversal_or_compression",
                 "evidence": "synthetic fixture",

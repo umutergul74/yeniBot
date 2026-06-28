@@ -21,6 +21,8 @@ class HybridEncoder(nn.Module):
         gru_layers: int = 2,
         dropout: float = 0.2,
         fusion_hidden: int = 128,
+        auxiliary_return_head: bool = False,
+        auxiliary_return_scale: float = 0.01,
     ) -> None:
         super().__init__()
         self.seq_len = seq_len
@@ -48,6 +50,11 @@ class HybridEncoder(nn.Module):
             nn.Dropout(dropout),
         )
         self.output = nn.Linear(fusion_hidden, 1)
+        self.auxiliary_return_enabled = bool(auxiliary_return_head)
+        self.auxiliary_return_scale = max(float(auxiliary_return_scale), 1e-8)
+        self.auxiliary_return_output = (
+            nn.Linear(fusion_hidden, 1) if self.auxiliary_return_enabled else None
+        )
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 3:
@@ -58,8 +65,21 @@ class HybridEncoder(nn.Module):
         fused = self.fusion_norm(torch.cat([tcn_last, gru_last], dim=-1))
         return self.fusion_hidden(fused)
 
+    def forward_heads(
+        self,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        embedding = self.encode(x)
+        logits = self.output(embedding).squeeze(-1)
+        auxiliary_return = (
+            self.auxiliary_return_output(embedding).squeeze(-1)
+            if self.auxiliary_return_output is not None
+            else None
+        )
+        return logits, auxiliary_return
+
     def forward(self, x: torch.Tensor, *, return_logits: bool = False) -> torch.Tensor:
-        logits = self.output(self.encode(x)).squeeze(-1)
+        logits, _auxiliary_return = self.forward_heads(x)
         if return_logits:
             return logits
         return torch.sigmoid(logits)

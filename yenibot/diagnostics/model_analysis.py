@@ -34,6 +34,12 @@ def load_fold_model(checkpoint_path: str | Path, *, device: str | torch.device =
         gru_layers=int(_cfg(model_cfg, "gru_layers", 2)),
         dropout=float(_cfg(model_cfg, "dropout", 0.2)),
         fusion_hidden=int(_cfg(model_cfg, "fusion_hidden", 128)),
+        auxiliary_return_head=bool(
+            _cfg(model_cfg, "auxiliary_return_head", False)
+        ),
+        auxiliary_return_scale=float(
+            _cfg(model_cfg, "auxiliary_return_scale", 0.01)
+        ),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)

@@ -17,7 +17,7 @@ confirmation are separate tracks:
 Profile:
 `baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility`
 
-Latest full-CV run: `20260627_205102`
+Latest full-CV run: `20260627_232543`
 
 | Metric | Result |
 |---|---:|
@@ -38,38 +38,40 @@ future frozen evaluation proves probability quality.
 
 ## Latest Mechanism Result
 
-Bundle `20260627_205102` tested:
+Bundle `20260627_232543` completed corrected event weighting v2. Unlike the v1
+implementation, the audit proved that this mechanism was active:
 
-1. static label-uniqueness loss weighting, and
-2. uniqueness plus broad order-flow event weighting.
+- active-row fraction: `0.20`
+- p90-p10 weight spread: `0.1691`
+- Kish effective-sample fraction: `0.9936`
 
-Neither is promotable. More importantly, the audit showed that neither
-mechanism was materially active:
+It still failed. Against the same 12 triage folds:
 
-- Static normalized uniqueness weights had mean Kish effective-sample fraction
-  near `0.9983`; p10, p50, and p90 were effectively identical.
-- The earlier overlap value near `0.094` is an information-dependence proxy,
-  not the effective sample fraction of normalized loss weights.
-- Averaging percentile ranks across 20 event columns almost never crossed the
-  configured `0.80` threshold, leaving event weights effectively at one.
-- The two candidates therefore produced almost identical predictions.
+- mean Rank IC improved only `+0.0012`
+- Rank IC improved in only 4 of 12 folds
+- Rank IC std and worst-five IC worsened
+- PRAUC fell
+- global top-decile lift fell from `1.2276` to `1.1536`
 
-These v1 profiles are archived and cannot re-enter automatic training.
+The v1 and v2 sample/event-weighting profiles are archived and cannot re-enter
+automatic training.
 
 ## Active Historical Experiment
 
 The only active candidate is
-`baseline_stable_orderflow_event_weighted_loss_v2`.
+`baseline_stable_multitask_return_head_light`.
 
-It keeps the control features, labels, architecture, and base loss unchanged.
-Inside each train fold it:
+It keeps the control features, labels, encoder widths, P(Long) head, primary
+loss, and validation Rank-IC early stopping unchanged. It adds:
 
-- uses only the diagnosed order-flow family,
-- computes mean absolute family strength and then its train-fold percentile,
-- softly emphasizes the top 20 percent,
-- disables static uniqueness weighting, and
-- fails before training if active fraction, weight spread, or dominant-weight
-  concentration indicates another no-op.
+- one separate forward-return regression head on the shared representation,
+- clipped and scaled targets,
+- Huber loss with fixed weight `0.10`, and
+- per-fold auxiliary Rank IC, MAE, and head-agreement audits.
+
+Inference remains the original binary P(Long) output. This is not a retry of
+the rejected pairwise-return loss, which directly constrained the P(Long)
+scalar.
 
 Seed audit remains enabled for seeds `42, 43, 44`, but every seed now uses the
 same eight temporally spaced folds instead of running all folds for seeds 43 and
@@ -94,7 +96,7 @@ No data, feature, or label formula changed. Run:
 3. `04_training_walk_forward.ipynb`
 4. `05_diagnostics_validation.ipynb`
 
-Notebook 04 should train the full control, one 12-fold v2 triage candidate, and
-three eight-fold seed-audit scopes. At most one candidate may advance to full
-CV. Notebook 05 must include the sample-weight effectiveness audit in the slim
-bundle.
+Notebook 04 should train the full control, one 12-fold multitask triage
+candidate, and three eight-fold seed-audit scopes. At most one candidate may
+advance to full CV. Notebook 05 must include the auxiliary-task audit in the
+slim bundle.

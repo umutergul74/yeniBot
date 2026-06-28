@@ -67,6 +67,51 @@ class RankICLoss(nn.Module):
         return -corr
 
 
+class ScaledHuberReturnLoss(nn.Module):
+    """Robust auxiliary regression loss for dense forward-return supervision."""
+
+    def __init__(
+        self,
+        *,
+        target_scale: float = 0.01,
+        target_clip: float = 5.0,
+        beta: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.target_scale = max(float(target_scale), 1e-8)
+        self.target_clip = max(float(target_clip), 0.0)
+        self.beta = max(float(beta), 1e-8)
+
+    def forward(
+        self,
+        predictions: torch.Tensor,
+        forward_returns: torch.Tensor,
+        sample_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        predictions = predictions.float().flatten()
+        returns = forward_returns.float().flatten()
+        targets = returns / self.target_scale
+        if self.target_clip > 0:
+            targets = torch.clamp(targets, -self.target_clip, self.target_clip)
+        valid = torch.isfinite(predictions) & torch.isfinite(targets)
+        weights = None
+        if sample_weight is not None:
+            weights = sample_weight.float().flatten()
+            valid = valid & torch.isfinite(weights) & (weights > 0)
+        if valid.sum() == 0:
+            return predictions.new_tensor(0.0)
+        loss = F.smooth_l1_loss(
+            predictions[valid],
+            targets[valid],
+            reduction="none",
+            beta=self.beta,
+        )
+        if weights is None:
+            return loss.mean()
+        selected_weights = weights[valid]
+        return (loss * selected_weights).sum() / (selected_weights.sum() + 1e-8)
+
+
 class PairwiseLabelMarginLoss(nn.Module):
     """Push labeled-long logits above not-long logits inside each batch.
 

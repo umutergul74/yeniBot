@@ -228,12 +228,131 @@ def write_sample_weight_audit(
     return combined
 
 
+def write_auxiliary_task_audit(
+    entries: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> pd.DataFrame:
+    """Collect fold-level auxiliary-head evidence without changing primary metrics."""
+
+    metric_columns = [
+        "fold",
+        "enabled",
+        "weight",
+        "target_scale",
+        "target_clip",
+        "huber_beta",
+        "val_auxiliary_return_rank_ic",
+        "test_auxiliary_return_rank_ic",
+        "val_auxiliary_return_mae",
+        "test_auxiliary_return_mae",
+        "test_auxiliary_probability_rank_correlation",
+    ]
+    columns = ["profile", "fold_scope", *metric_columns]
+    frames: list[pd.DataFrame] = []
+    for entry in entries:
+        scope_dir = Path(entry.get("scope_dir") or entry.get("output_dir") or "")
+        path = scope_dir / "auxiliary_task_audit.csv"
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame.insert(0, "fold_scope", str(entry.get("fold_scope", "")))
+        frame.insert(0, "profile", str(entry.get("profile", "")))
+        frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
+    for column in columns:
+        if column not in combined.columns:
+            combined[column] = np.nan
+    combined = combined[columns]
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(target / "auxiliary_task_audit.csv", index=False)
+    if combined.empty:
+        summary = pd.DataFrame(
+            columns=[
+                "profile",
+                "fold_scope",
+                "enabled",
+                "fold_count",
+                "mean_test_auxiliary_return_rank_ic",
+                "positive_test_auxiliary_return_rank_ic_fraction",
+                "mean_test_auxiliary_return_mae",
+                "mean_test_auxiliary_probability_rank_correlation",
+            ]
+        )
+    else:
+        working = combined.copy()
+        working["enabled"] = working["enabled"].fillna(False).map(
+            lambda value: value
+            if isinstance(value, (bool, np.bool_))
+            else str(value).strip().lower() in {"1", "true", "yes"}
+        )
+        numeric = [
+            "test_auxiliary_return_rank_ic",
+            "test_auxiliary_return_mae",
+            "test_auxiliary_probability_rank_correlation",
+        ]
+        for column in numeric:
+            working[column] = pd.to_numeric(working[column], errors="coerce")
+        working["positive_aux_ic"] = (
+            working["test_auxiliary_return_rank_ic"] > 0
+        ).where(working["test_auxiliary_return_rank_ic"].notna())
+        summary = (
+            working.groupby(
+                ["profile", "fold_scope", "enabled"],
+                observed=True,
+                dropna=False,
+            )
+            .agg(
+                fold_count=("fold", "nunique"),
+                mean_test_auxiliary_return_rank_ic=(
+                    "test_auxiliary_return_rank_ic",
+                    "mean",
+                ),
+                positive_test_auxiliary_return_rank_ic_fraction=(
+                    "positive_aux_ic",
+                    "mean",
+                ),
+                mean_test_auxiliary_return_mae=(
+                    "test_auxiliary_return_mae",
+                    "mean",
+                ),
+                mean_test_auxiliary_probability_rank_correlation=(
+                    "test_auxiliary_probability_rank_correlation",
+                    "mean",
+                ),
+            )
+            .reset_index()
+        )
+    summary.to_csv(target / "auxiliary_task_audit_summary.csv", index=False)
+    summary.to_json(
+        target / "auxiliary_task_audit_summary.json",
+        orient="records",
+        indent=2,
+    )
+    markdown = "# Auxiliary Task Audit\n\n"
+    markdown += (
+        "No auxiliary-task decisions were recorded.\n"
+        if summary.empty
+        else summary.to_markdown(index=False) + "\n"
+    )
+    (target / "auxiliary_task_audit_summary.md").write_text(
+        markdown,
+        encoding="utf-8",
+    )
+    return combined
+
+
 def write_training_input_audits(
     entries: list[dict[str, Any]],
     output_dir: str | Path,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Write all train-fold input audits used by diagnostics bundles."""
 
     preprocessing = write_preprocessing_audit(entries, output_dir)
     sample_weights = write_sample_weight_audit(entries, output_dir)
-    return preprocessing, sample_weights
+    auxiliary_tasks = write_auxiliary_task_audit(entries, output_dir)
+    return preprocessing, sample_weights, auxiliary_tasks

@@ -204,6 +204,8 @@ def _missing_required_files(
         "training_execution_summary.json",
         "sample_weight_audit.csv",
         "sample_weight_audit_summary.csv",
+        "auxiliary_task_audit.csv",
+        "auxiliary_task_audit_summary.csv",
         "phase1_blocker_root_cause.csv",
         "threshold_oracle_gap.csv",
         "threshold_score_quantile_review.csv",

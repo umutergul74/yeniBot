@@ -351,6 +351,19 @@ features:
                   max_active_fraction: 0.25
                   min_p90_p10_spread: 0.05
                   max_dominant_weight_fraction: 0.85
+    baseline_stable_multitask_return_head_light:
+      description: "Isolated representation-learning candidate: keep the control features, labels, encoder widths, P(Long) head, primary loss, and Rank-IC early stopping unchanged while adding a small training-only auxiliary head for clipped forward-return regression."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          auxiliary_return_head: true
+          auxiliary_return_scale: 0.01
+        training:
+          auxiliary_return:
+            enabled: true
+            weight: 0.10
+            target_clip: 5.0
+            huber_beta: 1.0
     baseline_control_plus_futures_context:
       description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
@@ -1912,6 +1925,8 @@ model:
   gru_layers: 2
   dropout: 0.2
   fusion_hidden: 128
+  auxiliary_return_head: false
+  auxiliary_return_scale: 0.01
 
 training:
   early_stop_metric: rank_ic
@@ -1960,6 +1975,11 @@ training:
         strength: 0.35
         power: 1.0
         use_abs: true
+  auxiliary_return:
+    enabled: false
+    weight: 0.10
+    target_clip: 5.0
+    huber_beta: 1.0
   loss:
     focal_gamma: 2.0
     focal_alpha: 0.6
@@ -2158,7 +2178,7 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_stable_orderflow_event_weighted_loss_v2
+    - baseline_stable_multitask_return_head_light
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2168,7 +2188,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: corrected_orderflow_event_weighting_v2_preregistered
+    status: multitask_return_representation_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2186,8 +2206,9 @@ experiments:
       - baseline_seed_rank_ensemble_v1
       - static_label_uniqueness_weighting_v1
       - diluted_multifeature_event_weighting_v1
-    conclusion: "Bundle 20260627_205102 showed that the first sample-weighting sprint was mechanically ineffective. Normalized uniqueness weights had mean Kish ESS fraction 0.9983 and an almost constant p10/p50/p90, while averaging percentile ranks across 20 event columns left event weights effectively at one. The candidates produced nearly identical predictions, did not improve IC stability, and reduced top-10 lift."
-    next_step: "Run one corrected event-only candidate. Reproduce the diagnostic order-flow family score inside each train fold with mean_abs_then_rank aggregation, softly weight only the top 20 percent, and fail before training if the resulting weights are still inert. Keep features, architecture, labels, and base loss unchanged."
+      - effective_orderflow_event_weighting_v2
+    conclusion: "Bundle 20260627_232543 proved that corrected event weighting was active, but the mechanism failed. The candidate improved paired triage mean IC by only 0.0012 and selected-threshold F1 by 0.0016, while worsening std, worst-fold IC, PRAUC, and top-10 lift; Rank IC improved in only 4 of 12 paired folds. Sample emphasis is therefore closed rather than tuned further."
+    next_step: "Run one light multitask representation candidate. Add a separate clipped forward-return regression head to the shared encoder with fixed weight 0.10, while leaving the P(Long) head, primary loss, architecture widths, features, labels, and early stopping unchanged. The auxiliary head is training-only evidence and must not replace the P(Long) inference contract."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2385,6 +2406,7 @@ experiments:
     reject_retests: true
     allow_retest_profiles: []
     reference_notes:
+      baseline_stable_orderflow_event_weighted_loss_v2: "Bundle 20260627_232543: corrected order-flow event weights were demonstrably active (20% active rows, p90-p10 spread 0.1691, Kish ESS fraction 0.9936), but paired triage evidence failed. Mean IC improved only +0.0012, std and worst folds worsened, PRAUC fell, and top-10 lift dropped from 1.2276 to 1.1536. Close event-weight tuning."
       baseline_stable_model_tcn32_only: "Bundle 20260625_155006: TCN32-only improved triage mean IC from 0.0518 to 0.0643 and positive folds from 58.3% to 66.7%, but std worsened to 0.1044, official F1 fell to 0.4027, and top-10 lift fell below 1.0. Reject component shrinkage."
       baseline_stable_model_gru64_only: "Bundle 20260625_155006: GRU64-only slightly reduced triage std but lowered mean IC to 0.0380, official F1 to 0.4297, and top-10 lift to 1.1107. Reject component shrinkage."
       baseline_stable_model_fusion64_only: "Bundle 20260625_155006: fusion64-only retained top-10 lift but lowered mean IC to 0.0411, worsened std to 0.1213, and lowered official F1 to 0.4243. Reject component shrinkage."
@@ -2418,6 +2440,8 @@ experiments:
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
       training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
     rejected_profiles:
+      baseline_stable_orderflow_event_weighted_loss_v2:
+        reason: "Bundle 20260627_232543: the corrected event-weight mechanism was active but non-promotable. It improved paired triage Rank IC in only 4/12 folds, worsened std and worst-5 IC, reduced PRAUC, and lowered global top-10 lift by 0.0740 versus control. Do not retune event strength, quantile, or feature-family weights without a distinct mechanism."
       baseline_stable_model_tcn32_only:
         reason: "Bundle 20260625_155006: TCN32-only failed joint gates. Triage std worsened from 0.0985 to 0.1044, official F1 fell from 0.4558 to 0.4027, and top-10 lift fell from 1.2276 to 0.9860."
       baseline_stable_model_gru64_only:

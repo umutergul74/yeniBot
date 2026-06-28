@@ -126,6 +126,48 @@ def test_train_one_fold_supports_pairwise_return_order_loss(synthetic_klines, ti
     assert result["history"]["train_loss"].notna().all()
 
 
+def test_train_one_fold_supports_auxiliary_return_head(
+    synthetic_klines,
+    tiny_config,
+    tmp_path,
+) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["model"]["auxiliary_return_head"] = True
+    config["model"]["auxiliary_return_scale"] = 0.01
+    config["training"]["auxiliary_return"] = {
+        "enabled": True,
+        "weight": 0.10,
+        "target_clip": 5.0,
+        "huber_beta": 1.0,
+    }
+    config["training"]["epochs"] = 2
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    result = train_one_fold(
+        frame,
+        fold,
+        features.feature_columns,
+        config,
+        checkpoint_dir=tmp_path,
+        device="cpu",
+    )
+
+    assert "auxiliary_return_prediction" in result["predictions"]
+    assert result["predictions"]["auxiliary_return_prediction"].notna().all()
+    assert result["auxiliary_task_audit"]["enabled"].all()
+    assert result["auxiliary_task_audit"][
+        "test_auxiliary_return_rank_ic"
+    ].notna().all()
+    assert (tmp_path / "auxiliary_task_audit_fold_000.csv").exists()
+
+
 def test_label_uniqueness_weights_downweight_overlapping_events() -> None:
     frame = pd.DataFrame({"label": np.zeros(12, dtype=int)})
     weights = label_uniqueness_weights(

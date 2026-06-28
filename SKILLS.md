@@ -80,17 +80,23 @@ The current safe control profile is configured in `config.yaml`:
   event weights remained effectively one. Archive both v1 candidates and do
   not interpret their nearly identical predictions as a valid event-weighting
   test.
-- The current research state is corrected event-weighting-first:
+- Bundle `20260627_232543` completed the corrected event-weighting test. The
+  weights were mechanically active, so this was a valid test rather than
+  another no-op. It improved paired triage mean IC by only `0.0012`, improved
+  Rank IC in only 4 of 12 folds, and worsened dispersion, worst-fold IC,
+  PRAUC, and top-decile lift. Close the sample/event-weighting family; do not
+  tune its quantile, strength, or feature-family weights.
+- The current research state is auxiliary-return representation-first:
   `experiments.research_focus.status` should be
-  `corrected_orderflow_event_weighting_v2_preregistered`. The only valid
-  candidate reproduces the diagnostic order-flow family score inside each train
-  fold, ranks the combined absolute family score, and softly emphasizes its top
-  20 percent. Static uniqueness weighting is disabled. Weight-effectiveness
-  guardrails must stop training before fold 0 when active fraction, quantile
-  spread, or dominant-weight concentration shows another no-op. Do not replace
-  this with another profile search, architecture search, seed ensemble, or
-  loss-only tweak unless this isolated candidate fails and a new mechanism is
-  documented.
+  `multitask_return_representation_preregistered`. The only valid candidate
+  keeps the control features, labels, TCN/GRU/fusion widths, P(Long) head,
+  primary loss, and Rank-IC early stopping unchanged. It adds a separate,
+  lightly weighted, clipped forward-return regression head to the shared
+  representation. This differs from the rejected pairwise-return loss because
+  it does not force the P(Long) scalar itself to satisfy return pairs.
+  Inference remains one binary `P(Long)` output; the auxiliary head is training
+  evidence only. Do not add adaptive task weighting, a second auxiliary target,
+  or a wider profile search before this isolated mechanism is evaluated.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -150,7 +156,14 @@ Forbidden feature behavior:
 - The latest score-separation loss candidates are retired. `baseline_stable_score_margin_loss` and `baseline_stable_return_pairwise_loss_light` both failed versus the control on core CV gates. Do not retry loss-only score-separation tweaks unless a new diagnostic report identifies a distinct mechanism.
 - Uniform and component-only encoder shrinkage are retired. Medium/small combined encoders and isolated TCN32, GRU64, and fusion64 variants all failed to preserve ranking stability, official F1, and top-score payoff together. Keep the baseline TCN64/GRU128/fusion128 architecture fixed unless a future mechanism provides new evidence.
 - The seed-rank ensemble hypothesis is retired. `baseline_seed_rank_ensemble_v1` failed the joint confirmatory evidence even though mean IC rose. Do not search seed weights, add more seeds, or use rank/probability seed ensembles as the next answer.
-- Do not add another training candidate until the event/sample diagnostics show a clear, durable mechanism. A valid next training idea must explain why event-conditioned payoff, sample uniqueness, or label-event structure should improve ranking stability and top-score payoff together.
+- Static uniqueness weighting and both event-weighting variants are retired. The
+  first implementation was mechanically inert; the corrected implementation
+  was active but failed the joint IC-stability, classification, and top-score
+  payoff gates.
+- A multitask candidate may use a separate auxiliary return head only when the
+  output contract remains binary P(Long), the auxiliary target is train-fold
+  data only, its weight and scaling live in `config.yaml`, early stopping stays
+  on validation P(Long) Rank IC, and per-fold auxiliary metrics are persisted.
 
 ## Experiment Memory Discipline
 
@@ -334,6 +347,10 @@ Required diagnostic artifacts include:
 - `preprocessing_audit.csv`
 - `sample_weight_audit.csv`
 - `sample_weight_audit_summary.csv`
+- `auxiliary_task_audit.csv`
+- `auxiliary_task_audit_summary.csv`
+- `auxiliary_task_audit_summary.json`
+- `auxiliary_task_audit_summary.md`
 - `performance_gap_analysis.csv`
 - `fold_stability_forensics.csv`
 - `fold_stability_summary.csv`

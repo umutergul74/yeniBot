@@ -26,6 +26,31 @@ def test_hybrid_encoder_returns_binary_probability_shape() -> None:
     assert torch.all((out >= 0) & (out <= 1))
 
 
+def test_hybrid_encoder_auxiliary_head_preserves_binary_output_contract() -> None:
+    model = HybridEncoder(
+        5,
+        seq_len=8,
+        tcn_channels=8,
+        tcn_dilations=[1, 2],
+        gru_hidden=8,
+        gru_layers=1,
+        dropout=0.0,
+        fusion_hidden=8,
+        auxiliary_return_head=True,
+        auxiliary_return_scale=0.01,
+    )
+    inputs = torch.randn(4, 8, 5)
+
+    probabilities = model(inputs)
+    logits, auxiliary_return = model.forward_heads(inputs)
+
+    assert probabilities.shape == (4,)
+    assert logits.shape == (4,)
+    assert auxiliary_return is not None
+    assert auxiliary_return.shape == (4,)
+    torch.testing.assert_close(probabilities, torch.sigmoid(logits))
+
+
 def test_hmm_online_probability_is_forward_only() -> None:
     rng = np.random.default_rng(42)
     x = np.vstack(

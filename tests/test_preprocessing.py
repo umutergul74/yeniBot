@@ -5,7 +5,11 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
-from yenibot.experiment.preprocessing_audit import write_preprocessing_audit, write_sample_weight_audit
+from yenibot.experiment.preprocessing_audit import (
+    write_auxiliary_task_audit,
+    write_preprocessing_audit,
+    write_sample_weight_audit,
+)
 from yenibot.training.preprocessing import CausalFoldPreprocessor
 
 
@@ -146,3 +150,37 @@ def test_sample_weight_audit_collects_profile_scope_files(tmp_path) -> None:
     summary = pd.read_csv(tmp_path / "reports" / "sample_weight_audit_summary.csv")
     assert summary.iloc[0]["component"] == "combined"
     assert summary.iloc[0]["mean_effective_sample_fraction"] == 0.25
+
+
+def test_auxiliary_task_audit_collects_profile_scope_files(tmp_path) -> None:
+    scope = tmp_path / "run" / "profile" / "triage"
+    scope.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "fold": 7,
+                "enabled": True,
+                "weight": 0.10,
+                "target_scale": 0.01,
+                "target_clip": 5.0,
+                "huber_beta": 1.0,
+                "val_auxiliary_return_rank_ic": 0.04,
+                "test_auxiliary_return_rank_ic": 0.05,
+                "val_auxiliary_return_mae": 0.008,
+                "test_auxiliary_return_mae": 0.009,
+                "test_auxiliary_probability_rank_correlation": 0.30,
+            }
+        ]
+    ).to_csv(scope / "auxiliary_task_audit.csv", index=False)
+
+    report = write_auxiliary_task_audit(
+        [{"profile": "candidate", "fold_scope": "triage", "output_dir": scope}],
+        tmp_path / "reports",
+    )
+
+    assert report.iloc[0]["profile"] == "candidate"
+    assert report.iloc[0]["fold_scope"] == "triage"
+    assert (tmp_path / "reports" / "auxiliary_task_audit.csv").exists()
+    summary = pd.read_csv(tmp_path / "reports" / "auxiliary_task_audit_summary.csv")
+    assert summary.iloc[0]["fold_count"] == 1
+    assert summary.iloc[0]["mean_test_auxiliary_return_rank_ic"] == 0.05

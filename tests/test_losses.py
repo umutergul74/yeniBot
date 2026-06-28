@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import torch
 
-from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, PairwiseReturnOrderLoss, RankICLoss
+from yenibot.losses import (
+    FocalLossWithLogits,
+    PairwiseLabelMarginLoss,
+    PairwiseReturnOrderLoss,
+    RankICLoss,
+    ScaledHuberReturnLoss,
+)
 
 
 def test_pairwise_label_margin_loss_penalizes_reversed_score_order() -> None:
@@ -46,3 +52,21 @@ def test_focal_and_rank_ic_losses_accept_sample_weights() -> None:
 
     assert torch.isfinite(focal_loss)
     assert torch.isfinite(rank_loss)
+
+
+def test_scaled_huber_return_loss_scales_clips_and_weights_targets() -> None:
+    loss = ScaledHuberReturnLoss(
+        target_scale=0.01,
+        target_clip=2.0,
+        beta=1.0,
+    )
+    returns = torch.tensor([0.01, -0.01, 0.20])
+    exact_scaled_predictions = torch.tensor([1.0, -1.0, 2.0])
+    weights = torch.tensor([1.0, 2.0, 0.5])
+
+    exact = loss(exact_scaled_predictions, returns, weights)
+    shifted = loss(exact_scaled_predictions + 0.5, returns, weights)
+
+    assert float(exact) == 0.0
+    assert torch.isfinite(shifted)
+    assert shifted > exact

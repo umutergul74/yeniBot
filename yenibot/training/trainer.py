@@ -14,7 +14,13 @@ from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
 from yenibot.features.builder import filter_feature_columns, select_feature_columns
-from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, PairwiseReturnOrderLoss, RankICLoss
+from yenibot.losses import (
+    FocalLossWithLogits,
+    PairwiseLabelMarginLoss,
+    PairwiseReturnOrderLoss,
+    RankICLoss,
+    ScaledHuberReturnLoss,
+)
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
 from yenibot.reproducibility import runtime_signature_payload, training_code_signature_payload
@@ -23,6 +29,21 @@ from yenibot.training.preprocessing import CausalFoldPreprocessor
 from yenibot.training.sample_weights import AUDIT_COLUMNS as SAMPLE_WEIGHT_AUDIT_COLUMNS
 from yenibot.training.sample_weights import build_sample_weights
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
+
+
+AUXILIARY_TASK_AUDIT_COLUMNS = [
+    "fold",
+    "enabled",
+    "weight",
+    "target_scale",
+    "target_clip",
+    "huber_beta",
+    "val_auxiliary_return_rank_ic",
+    "test_auxiliary_return_rank_ic",
+    "val_auxiliary_return_mae",
+    "test_auxiliary_return_mae",
+    "test_auxiliary_probability_rank_correlation",
+]
 
 
 def _cfg(config: Any, path: list[str], default: Any = None) -> Any:
@@ -80,6 +101,12 @@ def _build_model(n_features: int, config: Any) -> HybridEncoder:
         gru_layers=int(_cfg(model_cfg, ["gru_layers"], 2)),
         dropout=float(_cfg(model_cfg, ["dropout"], 0.2)),
         fusion_hidden=int(_cfg(model_cfg, ["fusion_hidden"], 128)),
+        auxiliary_return_head=bool(
+            _cfg(model_cfg, ["auxiliary_return_head"], False)
+        ),
+        auxiliary_return_scale=float(
+            _cfg(model_cfg, ["auxiliary_return_scale"], 0.01)
+        ),
     )
 
 
@@ -155,13 +182,24 @@ def _predict_dataset(
     labels: list[np.ndarray] = []
     returns: list[np.ndarray] = []
     positions: list[np.ndarray] = []
+    auxiliary_returns: list[np.ndarray] = []
     model.eval()
     with torch.no_grad():
         for batch in loader:
             x, y, fwd, pos, _weight = _unpack_batch(batch)
             x = x.to(device)
-            prob = model(x).detach().cpu().numpy()
+            logits, auxiliary_return = model.forward_heads(x)
+            prob = torch.sigmoid(logits).detach().cpu().numpy()
             probs.append(prob)
+            if auxiliary_return is not None:
+                auxiliary_returns.append(
+                    (
+                        auxiliary_return * float(model.auxiliary_return_scale)
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
             labels.append(y.numpy())
             returns.append(fwd.numpy())
             positions.append(pos.numpy())
@@ -172,6 +210,8 @@ def _predict_dataset(
     rows["label"] = np.concatenate(labels).astype(int)
     rows["forward_return"] = np.concatenate(returns)
     rows["source_row_position"] = row_positions
+    if auxiliary_returns:
+        rows["auxiliary_return_prediction"] = np.concatenate(auxiliary_returns)
     return rows
 
 
@@ -223,9 +263,11 @@ def _evaluate(
     rank_loss: RankICLoss | None = None,
     margin_loss: PairwiseLabelMarginLoss | None = None,
     return_order_loss: PairwiseReturnOrderLoss | None = None,
+    auxiliary_return_loss: ScaledHuberReturnLoss | None = None,
     rank_weight: float = 0.2,
     margin_weight: float = 0.0,
     return_order_weight: float = 0.0,
+    auxiliary_return_weight: float = 0.0,
 ) -> dict[str, float]:
     batch_size = int(_cfg(config, ["training", "batch_size"], 256))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -239,7 +281,7 @@ def _evaluate(
             y = y.to(device)
             fwd = fwd.to(device)
             weight = weight.to(device)
-            logits = model(x, return_logits=True)
+            logits, auxiliary_return = model.forward_heads(x)
             probs = torch.sigmoid(logits)
             if focal is not None and rank_loss is not None:
                 loss = focal(logits, y, weight) + rank_weight * rank_loss(probs, fwd, weight)
@@ -247,6 +289,16 @@ def _evaluate(
                     loss = loss + margin_weight * margin_loss(logits, y)
                 if return_order_loss is not None and return_order_weight > 0.0:
                     loss = loss + return_order_weight * return_order_loss(logits, fwd)
+                if (
+                    auxiliary_return_loss is not None
+                    and auxiliary_return is not None
+                    and auxiliary_return_weight > 0.0
+                ):
+                    loss = loss + auxiliary_return_weight * auxiliary_return_loss(
+                        auxiliary_return,
+                        fwd,
+                        weight,
+                    )
                 batch_n = int(y.shape[0])
                 val_loss_sum += float(loss.detach().cpu()) * batch_n
                 val_loss_count += batch_n
@@ -254,6 +306,18 @@ def _evaluate(
     pred = _predict_dataset(model, dataset, source_part, batch_size=batch_size, device=device)
     metrics = classification_metrics(pred["label"], pred["prob_long"])
     metrics["rank_ic"] = rank_ic(pred["prob_long"], pred["forward_return"])
+    if "auxiliary_return_prediction" in pred:
+        metrics["auxiliary_return_rank_ic"] = rank_ic(
+            pred["auxiliary_return_prediction"],
+            pred["forward_return"],
+        )
+        metrics["auxiliary_return_mae"] = float(
+            (
+                pred["auxiliary_return_prediction"] - pred["forward_return"]
+            )
+            .abs()
+            .mean()
+        )
     if val_loss_count:
         metrics["val_loss"] = float(val_loss_sum / val_loss_count)
     return metrics
@@ -326,6 +390,27 @@ def train_one_fold(
         min_return_diff=float(_cfg(loss_cfg, ["return_pairwise_min_return_diff"], 0.0005)),
         return_scale=float(_cfg(loss_cfg, ["return_pairwise_return_scale"], 0.005)),
     )
+    auxiliary_cfg = _cfg(train_cfg, ["auxiliary_return"], {}) or {}
+    auxiliary_return_enabled = bool(
+        _cfg(auxiliary_cfg, ["enabled"], False)
+    )
+    auxiliary_return_weight = float(
+        _cfg(auxiliary_cfg, ["weight"], 0.0)
+    )
+    if auxiliary_return_enabled != bool(model.auxiliary_return_enabled):
+        raise ValueError(
+            "training.auxiliary_return.enabled must match "
+            "model.auxiliary_return_head"
+        )
+    auxiliary_return_loss = (
+        ScaledHuberReturnLoss(
+            target_scale=float(model.auxiliary_return_scale),
+            target_clip=float(_cfg(auxiliary_cfg, ["target_clip"], 5.0)),
+            beta=float(_cfg(auxiliary_cfg, ["huber_beta"], 1.0)),
+        )
+        if auxiliary_return_enabled
+        else None
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(_cfg(train_cfg, ["optimizer", "lr"], 1e-3)),
@@ -367,13 +452,23 @@ def train_one_fold(
             fwd = fwd.to(torch_device)
             weight = weight.to(torch_device)
             optimizer.zero_grad(set_to_none=True)
-            logits = model(x, return_logits=True)
+            logits, auxiliary_return = model.forward_heads(x)
             probs = torch.sigmoid(logits)
             loss = focal(logits, y, weight) + rank_weight * rank_loss(probs, fwd, weight)
             if margin_weight > 0.0:
                 loss = loss + margin_weight * margin_loss(logits, y)
             if return_order_weight > 0.0:
                 loss = loss + return_order_weight * return_order_loss(logits, fwd)
+            if (
+                auxiliary_return_loss is not None
+                and auxiliary_return is not None
+                and auxiliary_return_weight > 0.0
+            ):
+                loss = loss + auxiliary_return_weight * auxiliary_return_loss(
+                    auxiliary_return,
+                    fwd,
+                    weight,
+                )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
@@ -390,9 +485,11 @@ def train_one_fold(
             rank_loss=rank_loss,
             margin_loss=margin_loss,
             return_order_loss=return_order_loss,
+            auxiliary_return_loss=auxiliary_return_loss,
             rank_weight=rank_weight,
             margin_weight=margin_weight,
             return_order_weight=return_order_weight,
+            auxiliary_return_weight=auxiliary_return_weight,
         )
 
         smoothing_epochs = max(1, int(_cfg(train_cfg, ["rank_ic_smoothing_epochs"], 5)))
@@ -445,6 +542,61 @@ def train_one_fold(
     val_metrics["rank_ic"] = rank_ic(val_predictions["prob_long"], val_predictions["forward_return"])
     test_metrics = classification_metrics(test_predictions["label"], test_predictions["prob_long"])
     test_metrics["rank_ic"] = rank_ic(test_predictions["prob_long"], test_predictions["forward_return"])
+    for metric_target, prediction_frame in (
+        (val_metrics, val_predictions),
+        (test_metrics, test_predictions),
+    ):
+        if "auxiliary_return_prediction" in prediction_frame:
+            metric_target["auxiliary_return_rank_ic"] = rank_ic(
+                prediction_frame["auxiliary_return_prediction"],
+                prediction_frame["forward_return"],
+            )
+            metric_target["auxiliary_return_mae"] = float(
+                (
+                    prediction_frame["auxiliary_return_prediction"]
+                    - prediction_frame["forward_return"]
+                )
+                .abs()
+                .mean()
+            )
+            metric_target["auxiliary_probability_rank_correlation"] = rank_ic(
+                prediction_frame["auxiliary_return_prediction"],
+                prediction_frame["prob_long"],
+            )
+
+    auxiliary_task_audit = pd.DataFrame(
+        [
+            {
+                "fold": int(fold.fold),
+                "enabled": auxiliary_return_enabled,
+                "weight": auxiliary_return_weight if auxiliary_return_enabled else 0.0,
+                "target_scale": float(model.auxiliary_return_scale),
+                "target_clip": float(_cfg(auxiliary_cfg, ["target_clip"], 5.0)),
+                "huber_beta": float(_cfg(auxiliary_cfg, ["huber_beta"], 1.0)),
+                "val_auxiliary_return_rank_ic": val_metrics.get(
+                    "auxiliary_return_rank_ic",
+                    np.nan,
+                ),
+                "test_auxiliary_return_rank_ic": test_metrics.get(
+                    "auxiliary_return_rank_ic",
+                    np.nan,
+                ),
+                "val_auxiliary_return_mae": val_metrics.get(
+                    "auxiliary_return_mae",
+                    np.nan,
+                ),
+                "test_auxiliary_return_mae": test_metrics.get(
+                    "auxiliary_return_mae",
+                    np.nan,
+                ),
+                "test_auxiliary_probability_rank_correlation": test_metrics.get(
+                    "auxiliary_probability_rank_correlation",
+                    np.nan,
+                ),
+            }
+        ],
+        columns=AUXILIARY_TASK_AUDIT_COLUMNS,
+    )
 
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
@@ -469,6 +621,10 @@ def train_one_fold(
         joblib.dump(hmm, output_dir / f"hmm_fold_{fold.fold:03d}.pkl")
         predictions.to_parquet(output_dir / f"predictions_fold_{fold.fold:03d}.parquet", index=False)
         sample_weight_audit.to_csv(output_dir / f"sample_weight_audit_fold_{fold.fold:03d}.csv", index=False)
+        auxiliary_task_audit.to_csv(
+            output_dir / f"auxiliary_task_audit_fold_{fold.fold:03d}.csv",
+            index=False,
+        )
 
     return {
         "fold": fold.fold,
@@ -478,6 +634,7 @@ def train_one_fold(
         "history": pd.DataFrame(history),
         "preprocessing_audit": preprocessing_audit,
         "sample_weight_audit": sample_weight_audit,
+        "auxiliary_task_audit": auxiliary_task_audit,
         "predictions": predictions,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -513,6 +670,7 @@ def run_walk_forward_training(
     predictions = []
     preprocessing_audits = []
     sample_weight_audits = []
+    auxiliary_task_audits = []
     selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
         if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
@@ -533,6 +691,8 @@ def run_walk_forward_training(
             preprocessing_audits.append(result["preprocessing_audit"])
         if not result["sample_weight_audit"].empty:
             sample_weight_audits.append(result["sample_weight_audit"])
+        if not result["auxiliary_task_audit"].empty:
+            auxiliary_task_audits.append(result["auxiliary_task_audit"])
 
     if not predictions:
         raise ValueError("No folds were produced; check dataset length and CV configuration")
@@ -548,17 +708,24 @@ def run_walk_forward_training(
         if sample_weight_audits
         else pd.DataFrame(columns=SAMPLE_WEIGHT_AUDIT_COLUMNS)
     )
+    auxiliary_task_audit = (
+        pd.concat(auxiliary_task_audits, ignore_index=True)
+        if auxiliary_task_audits
+        else pd.DataFrame(columns=AUXILIARY_TASK_AUDIT_COLUMNS)
+    )
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         all_predictions.to_parquet(output_dir / "predictions_all.parquet", index=False)
         preprocessing_audit.to_csv(output_dir / "preprocessing_audit.csv", index=False)
         sample_weight_audit.to_csv(output_dir / "sample_weight_audit.csv", index=False)
+        auxiliary_task_audit.to_csv(output_dir / "auxiliary_task_audit.csv", index=False)
     report = phase1_report(all_predictions[all_predictions["split"] == "test"], config)
     return {
         "fold_results": fold_results,
         "predictions": all_predictions,
         "preprocessing_audit": preprocessing_audit,
         "sample_weight_audit": sample_weight_audit,
+        "auxiliary_task_audit": auxiliary_task_audit,
         "report": report,
     }
