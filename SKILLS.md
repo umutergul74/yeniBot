@@ -86,17 +86,23 @@ The current safe control profile is configured in `config.yaml`:
   Rank IC in only 4 of 12 folds, and worsened dispersion, worst-fold IC,
   PRAUC, and top-decile lift. Close the sample/event-weighting family; do not
   tune its quantile, strength, or feature-family weights.
-- The current research state is auxiliary-return representation-first:
+- Bundle `20260628_093830` completed the fixed-sum auxiliary-return test. It
+  produced real but incomplete transfer: paired triage mean IC improved by
+  `0.0084`, PRAUC by `0.0061`, and global top-decile lift from `1.2276` to
+  `1.2705`. It still failed because dispersion worsened, official F1 fell, and
+  bad-fold top-decile lift remained `0.6406`. The auxiliary and P(Long)
+  rankings were `0.921` correlated, so the target is not missing; naive
+  gradient summation is the unresolved mechanism.
+- The current research state is primary-preserving multitask projection:
   `experiments.research_focus.status` should be
-  `multitask_return_representation_preregistered`. The only valid candidate
-  keeps the control features, labels, TCN/GRU/fusion widths, P(Long) head,
-  primary loss, and Rank-IC early stopping unchanged. It adds a separate,
-  lightly weighted, clipped forward-return regression head to the shared
-  representation. This differs from the rejected pairwise-return loss because
-  it does not force the P(Long) scalar itself to satisfy return pairs.
-  Inference remains one binary `P(Long)` output; the auxiliary head is training
-  evidence only. Do not add adaptive task weighting, a second auxiliary target,
-  or a wider profile search before this isolated mechanism is evaluated.
+  `primary_preserving_multitask_gradient_projection_preregistered`. The only
+  valid candidate keeps the same auxiliary target, weight, features, labels,
+  architecture, primary loss, and early stopping as the completed fixed-sum
+  test. It leaves the primary gradient unchanged and removes only the component
+  of the shared auxiliary gradient that has a negative dot product with it.
+  Inference remains one binary `P(Long)` output. Do not tune auxiliary weight,
+  add another target, or introduce symmetric/adaptive gradient balancing before
+  this isolated conflict mechanism is evaluated.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -164,6 +170,11 @@ Forbidden feature behavior:
   output contract remains binary P(Long), the auxiliary target is train-fold
   data only, its weight and scaling live in `config.yaml`, early stopping stays
   on validation P(Long) Rank IC, and per-fold auxiliary metrics are persisted.
+- The fixed-sum auxiliary-return candidate is retired. Its next and only
+  permitted follow-up is primary-preserving conflict projection with the same
+  target and weight. The primary gradient must never be projected or weakened,
+  and gradient conflict frequency, cosine before/after projection, and relative
+  gradient norms must be persisted.
 
 ## Experiment Memory Discipline
 
@@ -351,6 +362,10 @@ Required diagnostic artifacts include:
 - `auxiliary_task_audit_summary.csv`
 - `auxiliary_task_audit_summary.json`
 - `auxiliary_task_audit_summary.md`
+- `multitask_gradient_audit.csv`
+- `multitask_gradient_audit_summary.csv`
+- `multitask_gradient_audit_summary.json`
+- `multitask_gradient_audit_summary.md`
 - `performance_gap_analysis.csv`
 - `fold_stability_forensics.csv`
 - `fold_stability_summary.csv`

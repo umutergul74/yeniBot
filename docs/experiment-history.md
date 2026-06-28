@@ -39,21 +39,20 @@ candidate is built from its pre-anchor fold ensemble.
 | Static label-uniqueness loss weighting | Normalized weights were nearly constant; low overlap information was incorrectly assumed to imply useful row-level weights |
 | Broad v1 event weighting | Mean rank across 20 columns almost never crossed the event threshold, making the component a no-op |
 | Corrected order-flow event weighting v2 | Weights were active, but paired triage IC wins occurred in only 4/12 folds while dispersion, PRAUC, worst folds, and top-decile lift worsened |
+| Fixed-sum auxiliary return head | Improved mean IC, PRAUC, and top-decile lift, but worsened dispersion and official F1; auxiliary and primary rankings were highly correlated |
 
 ## Active Mechanism Experiment
 
-Bundle `20260627_232543` closed the sample/event-weighting family. Corrected
-event weights were active, but the candidate improved paired triage mean IC by
-only `0.0012`, won Rank IC in only 4/12 folds, and damaged dispersion, PRAUC,
-worst-fold IC, and top-decile lift.
+Bundle `20260628_093830` closed fixed-sum auxiliary-return training. The target
+transferred useful ranking and top-score information, but naive gradient
+addition failed to protect F1 and bad-fold behavior.
 
 The only active candidate is
-`baseline_stable_multitask_return_head_light`. It adds one lightly weighted
-forward-return regression head to the shared encoder without changing the
-control features, labels, widths, P(Long) head, primary loss, or early-stopping
-metric. The auxiliary head is training-only and is evaluated through a
-dedicated audit. No adaptive task weighting or second auxiliary target is
-active.
+`baseline_stable_multitask_return_head_conflict_projected`. It uses the same
+return target and fixed weight as the completed experiment, leaves the primary
+gradient untouched, and projects only negatively aligned shared auxiliary
+gradients. No weight search, symmetric task balancing, or second auxiliary
+target is active.
 
 ## Governance Rule
 

@@ -20,6 +20,7 @@ TRAINING_CODE_RELATIVE_PATHS = (
     "yenibot/regime/hmm.py",
     "yenibot/training/__init__.py",
     "yenibot/training/dataset.py",
+    "yenibot/training/multitask.py",
     "yenibot/training/preprocessing.py",
     "yenibot/training/sample_weights.py",
     "yenibot/training/trainer.py",

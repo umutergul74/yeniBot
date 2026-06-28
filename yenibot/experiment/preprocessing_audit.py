@@ -346,13 +346,128 @@ def write_auxiliary_task_audit(
     return combined
 
 
+def write_multitask_gradient_audit(
+    entries: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> pd.DataFrame:
+    """Collect primary-vs-auxiliary shared-gradient conflict evidence."""
+
+    metric_columns = [
+        "fold",
+        "enabled",
+        "strategy",
+        "batch_count",
+        "conflict_batch_count",
+        "conflict_fraction",
+        "mean_cosine_before",
+        "mean_cosine_after",
+        "mean_primary_shared_grad_norm",
+        "mean_weighted_auxiliary_shared_grad_norm",
+        "mean_auxiliary_to_primary_grad_norm_ratio",
+    ]
+    columns = ["profile", "fold_scope", *metric_columns]
+    frames: list[pd.DataFrame] = []
+    for entry in entries:
+        scope_dir = Path(entry.get("scope_dir") or entry.get("output_dir") or "")
+        path = scope_dir / "multitask_gradient_audit.csv"
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame.insert(0, "fold_scope", str(entry.get("fold_scope", "")))
+        frame.insert(0, "profile", str(entry.get("profile", "")))
+        frames.append(frame)
+
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=columns)
+    )
+    for column in columns:
+        if column not in combined.columns:
+            combined[column] = np.nan
+    combined = combined[columns]
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(target / "multitask_gradient_audit.csv", index=False)
+    if combined.empty:
+        summary = pd.DataFrame(
+            columns=[
+                "profile",
+                "fold_scope",
+                "enabled",
+                "strategy",
+                "fold_count",
+                "batch_count",
+                "mean_conflict_fraction",
+                "mean_cosine_before",
+                "mean_cosine_after",
+                "mean_auxiliary_to_primary_grad_norm_ratio",
+            ]
+        )
+    else:
+        working = combined.copy()
+        working["enabled"] = working["enabled"].fillna(False).map(
+            lambda value: value
+            if isinstance(value, (bool, np.bool_))
+            else str(value).strip().lower() in {"1", "true", "yes"}
+        )
+        for column in (
+            "batch_count",
+            "conflict_fraction",
+            "mean_cosine_before",
+            "mean_cosine_after",
+            "mean_auxiliary_to_primary_grad_norm_ratio",
+        ):
+            working[column] = pd.to_numeric(working[column], errors="coerce")
+        summary = (
+            working.groupby(
+                ["profile", "fold_scope", "enabled", "strategy"],
+                observed=True,
+                dropna=False,
+            )
+            .agg(
+                fold_count=("fold", "nunique"),
+                batch_count=("batch_count", "sum"),
+                mean_conflict_fraction=("conflict_fraction", "mean"),
+                mean_cosine_before=("mean_cosine_before", "mean"),
+                mean_cosine_after=("mean_cosine_after", "mean"),
+                mean_auxiliary_to_primary_grad_norm_ratio=(
+                    "mean_auxiliary_to_primary_grad_norm_ratio",
+                    "mean",
+                ),
+            )
+            .reset_index()
+        )
+    summary.to_csv(target / "multitask_gradient_audit_summary.csv", index=False)
+    summary.to_json(
+        target / "multitask_gradient_audit_summary.json",
+        orient="records",
+        indent=2,
+    )
+    markdown = "# Multitask Gradient Audit\n\n"
+    markdown += (
+        "No multitask gradient decisions were recorded.\n"
+        if summary.empty
+        else summary.to_markdown(index=False) + "\n"
+    )
+    (target / "multitask_gradient_audit_summary.md").write_text(
+        markdown,
+        encoding="utf-8",
+    )
+    return combined
+
+
 def write_training_input_audits(
     entries: list[dict[str, Any]],
     output_dir: str | Path,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Write all train-fold input audits used by diagnostics bundles."""
 
     preprocessing = write_preprocessing_audit(entries, output_dir)
     sample_weights = write_sample_weight_audit(entries, output_dir)
     auxiliary_tasks = write_auxiliary_task_audit(entries, output_dir)
-    return preprocessing, sample_weights, auxiliary_tasks
+    multitask_gradients = write_multitask_gradient_audit(entries, output_dir)
+    return preprocessing, sample_weights, auxiliary_tasks, multitask_gradients

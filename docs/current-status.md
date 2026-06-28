@@ -17,7 +17,7 @@ confirmation are separate tracks:
 Profile:
 `baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility`
 
-Latest full-CV run: `20260627_232543`
+Latest full-CV run: `20260628_093830`
 
 | Metric | Result |
 |---|---:|
@@ -38,40 +38,40 @@ future frozen evaluation proves probability quality.
 
 ## Latest Mechanism Result
 
-Bundle `20260627_232543` completed corrected event weighting v2. Unlike the v1
-implementation, the audit proved that this mechanism was active:
+Bundle `20260628_093830` completed the fixed-sum auxiliary-return experiment.
+Against the paired 12-fold triage control it:
 
-- active-row fraction: `0.20`
-- p90-p10 weight spread: `0.1691`
-- Kish effective-sample fraction: `0.9936`
+- improved mean Rank IC from `0.0518` to `0.0602`
+- improved PRAUC from `0.3591` to `0.3652`
+- improved global top-decile lift from `1.2276` to `1.2705`
+- improved Rank IC in 7 of 12 folds
 
-It still failed. Against the same 12 triage folds:
+It still failed the pre-registered promotion gates:
 
-- mean Rank IC improved only `+0.0012`
-- Rank IC improved in only 4 of 12 folds
-- Rank IC std and worst-five IC worsened
-- PRAUC fell
-- global top-decile lift fell from `1.2276` to `1.1536`
+- Rank IC std worsened from `0.0985` to `0.1032`
+- official F1 fell from `0.4557` to `0.4497`
+- bad-fold top-decile lift was only `0.6406`
+- the auxiliary and P(Long) rankings were `0.921` correlated
 
-The v1 and v2 sample/event-weighting profiles are archived and cannot re-enter
-automatic training.
+The target carries useful information, but fixed gradient summation does not
+protect the primary task in unstable periods. The fixed-sum profile is archived.
 
 ## Active Historical Experiment
 
 The only active candidate is
-`baseline_stable_multitask_return_head_light`.
+`baseline_stable_multitask_return_head_conflict_projected`.
 
-It keeps the control features, labels, encoder widths, P(Long) head, primary
-loss, and validation Rank-IC early stopping unchanged. It adds:
+It keeps the same auxiliary target and fixed weight `0.10`. The only change is
+shared-gradient handling:
 
-- one separate forward-return regression head on the shared representation,
-- clipped and scaled targets,
-- Huber loss with fixed weight `0.10`, and
-- per-fold auxiliary Rank IC, MAE, and head-agreement audits.
+- the primary P(Long) gradient remains unchanged
+- aligned auxiliary gradients are retained
+- only a negatively aligned auxiliary component is projected away
+- conflict frequency, cosine before/after, and relative gradient norms are
+  persisted per fold
 
-Inference remains the original binary P(Long) output. This is not a retry of
-the rejected pairwise-return loss, which directly constrained the P(Long)
-scalar.
+Inference remains the original binary P(Long) output. No auxiliary-weight
+search or additional target is active.
 
 Seed audit remains enabled for seeds `42, 43, 44`, but every seed now uses the
 same eight temporally spaced folds instead of running all folds for seeds 43 and
@@ -96,7 +96,7 @@ No data, feature, or label formula changed. Run:
 3. `04_training_walk_forward.ipynb`
 4. `05_diagnostics_validation.ipynb`
 
-Notebook 04 should train the full control, one 12-fold multitask triage
-candidate, and three eight-fold seed-audit scopes. At most one candidate may
-advance to full CV. Notebook 05 must include the auxiliary-task audit in the
-slim bundle.
+Notebook 04 should train the full control, one 12-fold conflict-projected
+multitask triage candidate, and three eight-fold seed-audit scopes. At most one
+candidate may advance to full CV. Notebook 05 must include both auxiliary-task
+and multitask-gradient audits in the slim bundle.

@@ -2089,6 +2089,35 @@ def test_event_diagnostics_identify_event_and_sample_information() -> None:
         == "closed_no_weight_or_seed_search"
     )
 
+    closed_config = copy.deepcopy(config)
+    closed_config["experiments"]["research_focus"] = {
+        "completed_hypotheses": ["effective_orderflow_event_weighting_v2"]
+    }
+    closed_frames = _event_diagnostic_frames(entries, closed_config)
+    assert set(
+        closed_frames["event_conditioned_performance"][
+            "recommended_next_hypothesis"
+        ]
+    ).issubset(
+        {
+            "historical_signal_only_event_weighting_family_closed",
+            "do_not_add_event_weighting_without_stronger_evidence",
+        }
+    )
+    positive_sample_rows = closed_frames["sample_information_audit"].loc[
+        closed_frames["sample_information_audit"]["information_signal"].eq(
+            "positive"
+        )
+    ]
+    assert set(positive_sample_rows["recommended_action"]) == {
+        "historical_signal_only_event_weighting_family_closed"
+    }
+    assert set(
+        closed_frames["overlap_uniqueness_audit"][
+            "recommended_next_hypothesis"
+        ]
+    ) == {"static_and_event_weighting_families_closed"}
+
 
 def test_root_cause_uses_readiness_check_and_preserves_new_anchor_requirement() -> None:
     readiness = {
@@ -3092,10 +3121,10 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
     assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_multitask_return_head_light",
+        "baseline_stable_multitask_return_head_conflict_projected",
     ]
     multitask = config["features"]["profiles"][
-        "baseline_stable_multitask_return_head_light"
+        "baseline_stable_multitask_return_head_conflict_projected"
     ]
     assert multitask["inherit"] == config["experiments"]["control_profile"]
     assert multitask["config_overrides"]["model"] == {
@@ -3107,11 +3136,14 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "weight": 0.10,
         "target_clip": 5.0,
         "huber_beta": 1.0,
+        "gradient_strategy": "primary_preserving_projection",
     }
     assert config["model"]["auxiliary_return_head"] is False
     assert config["training"]["auxiliary_return"]["enabled"] is False
+    assert config["training"]["auxiliary_return"]["gradient_strategy"] == "sum"
     rejected = config["experiments"]["experiment_memory"]["rejected_profiles"]
     assert "baseline_stable_orderflow_event_weighted_loss_v2" in rejected
+    assert "baseline_stable_multitask_return_head_light" in rejected
     medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
     small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
     tcn_only = config["features"]["profiles"]["baseline_stable_model_tcn32_only"]
@@ -3269,7 +3301,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "multitask_return_representation_preregistered"
+        "primary_preserving_multitask_gradient_projection_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"

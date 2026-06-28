@@ -7,6 +7,7 @@ from sklearn.preprocessing import RobustScaler
 
 from yenibot.experiment.preprocessing_audit import (
     write_auxiliary_task_audit,
+    write_multitask_gradient_audit,
     write_preprocessing_audit,
     write_sample_weight_audit,
 )
@@ -184,3 +185,37 @@ def test_auxiliary_task_audit_collects_profile_scope_files(tmp_path) -> None:
     summary = pd.read_csv(tmp_path / "reports" / "auxiliary_task_audit_summary.csv")
     assert summary.iloc[0]["fold_count"] == 1
     assert summary.iloc[0]["mean_test_auxiliary_return_rank_ic"] == 0.05
+
+
+def test_multitask_gradient_audit_collects_conflict_evidence(tmp_path) -> None:
+    scope = tmp_path / "run" / "profile" / "triage"
+    scope.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "fold": 7,
+                "enabled": True,
+                "strategy": "primary_preserving_projection",
+                "batch_count": 20,
+                "conflict_batch_count": 8,
+                "conflict_fraction": 0.40,
+                "mean_cosine_before": -0.10,
+                "mean_cosine_after": 0.05,
+                "mean_primary_shared_grad_norm": 1.2,
+                "mean_weighted_auxiliary_shared_grad_norm": 0.3,
+                "mean_auxiliary_to_primary_grad_norm_ratio": 0.25,
+            }
+        ]
+    ).to_csv(scope / "multitask_gradient_audit.csv", index=False)
+
+    report = write_multitask_gradient_audit(
+        [{"profile": "candidate", "fold_scope": "triage", "output_dir": scope}],
+        tmp_path / "reports",
+    )
+
+    assert report.iloc[0]["profile"] == "candidate"
+    summary = pd.read_csv(
+        tmp_path / "reports" / "multitask_gradient_audit_summary.csv"
+    )
+    assert summary.iloc[0]["mean_conflict_fraction"] == 0.40
+    assert summary.iloc[0]["mean_auxiliary_to_primary_grad_norm_ratio"] == 0.25

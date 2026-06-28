@@ -266,7 +266,21 @@ def _label_event_audit_frame(entries: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def _event_conditioned_performance_frame(label_event_audit: pd.DataFrame) -> pd.DataFrame:
+def _event_weighting_family_closed(config: dict[str, Any]) -> bool:
+    completed = set(
+        str(item)
+        for item in list(
+            _cfg(config, ["experiments", "research_focus", "completed_hypotheses"], [])
+            or []
+        )
+    )
+    return "effective_orderflow_event_weighting_v2" in completed
+
+
+def _event_conditioned_performance_frame(
+    label_event_audit: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
     columns = [
         "candidate",
         "candidate_type",
@@ -284,6 +298,7 @@ def _event_conditioned_performance_frame(label_event_audit: pd.DataFrame) -> pd.
     ]
     if label_event_audit.empty:
         return pd.DataFrame(columns=columns)
+    weighting_closed = _event_weighting_family_closed(config)
     rows: list[dict[str, Any]] = []
     for keys, group in label_event_audit.groupby(["candidate", "candidate_type", "fold_scope"], dropna=False):
         candidate, candidate_type, fold_scope = [str(item) for item in keys]
@@ -301,6 +316,14 @@ def _event_conditioned_performance_frame(label_event_audit: pd.DataFrame) -> pd.
         return_delta = _float(best_return, "mean_forward_return") - _float(all_dict, "mean_forward_return")
         ic_delta = _float(best_ic, "rank_ic") - _float(all_dict, "rank_ic")
         has_signal = bool((np.isfinite(return_delta) and return_delta > 0.0) or (np.isfinite(ic_delta) and ic_delta > 0.02))
+        if has_signal:
+            recommendation = (
+                "historical_signal_only_event_weighting_family_closed"
+                if weighting_closed
+                else "design_event_weighted_training_v1"
+            )
+        else:
+            recommendation = "do_not_add_event_weighting_without_stronger_evidence"
         rows.append(
             {
                 "candidate": candidate,
@@ -315,11 +338,7 @@ def _event_conditioned_performance_frame(label_event_audit: pd.DataFrame) -> pd.
                 "all_rows_rank_ic": _float(all_dict, "rank_ic"),
                 "rank_ic_delta": ic_delta,
                 "event_conditioning_signal": "present" if has_signal else "weak_or_absent",
-                "recommended_next_hypothesis": (
-                    "design_event_weighted_training_v1"
-                    if has_signal
-                    else "do_not_add_event_weighting_without_stronger_evidence"
-                ),
+                "recommended_next_hypothesis": recommendation,
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -342,6 +361,7 @@ def _sample_information_audit_frame(entries: list[dict[str, Any]], config: dict[
         "information_signal",
         "recommended_action",
     ]
+    weighting_closed = _event_weighting_family_closed(config)
     rows: list[dict[str, Any]] = []
     for entry in _candidate_entries(entries):
         predictions = _test_predictions(entry["predictions"]).copy()
@@ -372,6 +392,14 @@ def _sample_information_audit_frame(entries: list[dict[str, Any]], config: dict[
             top_return = float(forward.mean()) if forward.notna().any() else np.nan
             all_return = float(all_forward.mean()) if all_forward.notna().any() else np.nan
             signal = "positive" if np.isfinite(top_return) and np.isfinite(all_return) and top_return > all_return else "monitor"
+            if signal == "positive":
+                recommendation = (
+                    "historical_signal_only_event_weighting_family_closed"
+                    if weighting_closed
+                    else "candidate_for_sample_weighting_or_event_filter_diagnostic"
+                )
+            else:
+                recommendation = "monitor_do_not_weight_without_payoff_evidence"
             rows.append(
                 {
                     "candidate": candidate,
@@ -387,11 +415,7 @@ def _sample_information_audit_frame(entries: list[dict[str, Any]], config: dict[
                     "event_top_20_label_rate": float(label.mean()) if label.notna().any() else np.nan,
                     "event_top_20_forward_return": top_return,
                     "information_signal": signal,
-                    "recommended_action": (
-                        "candidate_for_sample_weighting_or_event_filter_diagnostic"
-                        if signal == "positive"
-                        else "monitor_do_not_weight_without_payoff_evidence"
-                    ),
+                    "recommended_action": recommendation,
                 }
             )
     return pd.DataFrame(rows, columns=schema)
@@ -419,6 +443,7 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
         "recommended_next_hypothesis",
     ]
     horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
+    weighting_closed = _event_weighting_family_closed(config)
     rows: list[dict[str, Any]] = []
     for entry in _candidate_entries(entries):
         predictions = _test_predictions(entry["predictions"]).copy()
@@ -485,6 +510,17 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
             if np.isfinite(overlap_proxy) and overlap_proxy < 0.25
             else "moderate_or_low_overlap"
         )
+        if weighting_closed:
+            recommendation = "static_and_event_weighting_families_closed"
+        elif risk == "high_overlap" and static_noop:
+            recommendation = (
+                "do_not_use_static_uniqueness_weights_"
+                "test_effective_event_weighting_or_sampling"
+            )
+        elif risk == "high_overlap":
+            recommendation = "design_overlap_aware_sampling_not_static_weighting"
+        else:
+            recommendation = "monitor_overlap_before_changing_training"
         rows.append(
             {
                 "candidate": str(entry.get("profile", "")),
@@ -504,13 +540,7 @@ def _overlap_uniqueness_audit_frame(entries: list[dict[str, Any]], config: dict[
                 "static_uniqueness_weighting_noop": static_noop,
                 "top_event_effective_sample_fraction": top_eff_frac,
                 "overlap_risk": risk,
-                "recommended_next_hypothesis": (
-                    "do_not_use_static_uniqueness_weights_test_effective_event_weighting_or_sampling"
-                    if risk == "high_overlap" and static_noop
-                    else "design_overlap_aware_sampling_not_static_weighting"
-                    if risk == "high_overlap"
-                    else "monitor_overlap_before_changing_training"
-                ),
+                "recommended_next_hypothesis": recommendation,
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -603,7 +633,10 @@ def _event_diagnostic_frames(entries: list[dict[str, Any]], config: dict[str, An
     label_event = _label_event_audit_frame(entries)
     return {
         "label_event_audit": label_event,
-        "event_conditioned_performance": _event_conditioned_performance_frame(label_event),
+        "event_conditioned_performance": _event_conditioned_performance_frame(
+            label_event,
+            config,
+        ),
         "sample_information_audit": _sample_information_audit_frame(entries, config),
         "overlap_uniqueness_audit": _overlap_uniqueness_audit_frame(entries, config),
         "hypothesis_registry_summary": _hypothesis_registry_summary_frame(config),

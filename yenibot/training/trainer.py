@@ -25,6 +25,7 @@ from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
 from yenibot.reproducibility import runtime_signature_payload, training_code_signature_payload
 from yenibot.training.dataset import SequenceDataset
+from yenibot.training.multitask import apply_primary_preserving_projection
 from yenibot.training.preprocessing import CausalFoldPreprocessor
 from yenibot.training.sample_weights import AUDIT_COLUMNS as SAMPLE_WEIGHT_AUDIT_COLUMNS
 from yenibot.training.sample_weights import build_sample_weights
@@ -43,6 +44,20 @@ AUXILIARY_TASK_AUDIT_COLUMNS = [
     "val_auxiliary_return_mae",
     "test_auxiliary_return_mae",
     "test_auxiliary_probability_rank_correlation",
+]
+
+MULTITASK_GRADIENT_AUDIT_COLUMNS = [
+    "fold",
+    "enabled",
+    "strategy",
+    "batch_count",
+    "conflict_batch_count",
+    "conflict_fraction",
+    "mean_cosine_before",
+    "mean_cosine_after",
+    "mean_primary_shared_grad_norm",
+    "mean_weighted_auxiliary_shared_grad_norm",
+    "mean_auxiliary_to_primary_grad_norm_ratio",
 ]
 
 
@@ -397,6 +412,16 @@ def train_one_fold(
     auxiliary_return_weight = float(
         _cfg(auxiliary_cfg, ["weight"], 0.0)
     )
+    auxiliary_gradient_strategy = str(
+        _cfg(auxiliary_cfg, ["gradient_strategy"], "sum")
+    )
+    allowed_gradient_strategies = {"sum", "primary_preserving_projection"}
+    if auxiliary_gradient_strategy not in allowed_gradient_strategies:
+        raise ValueError(
+            "Unsupported training.auxiliary_return.gradient_strategy "
+            f"{auxiliary_gradient_strategy!r}; expected one of "
+            f"{sorted(allowed_gradient_strategies)}"
+        )
     if auxiliary_return_enabled != bool(model.auxiliary_return_enabled):
         raise ValueError(
             "training.auxiliary_return.enabled must match "
@@ -441,6 +466,7 @@ def train_one_fold(
     grad_clip = float(_cfg(train_cfg, ["grad_clip"], 1.0))
     stale_epochs = 0
     history: list[dict[str, float]] = []
+    gradient_audit_rows: list[dict[str, Any]] = []
 
     for epoch in range(epochs):
         model.train()
@@ -454,22 +480,50 @@ def train_one_fold(
             optimizer.zero_grad(set_to_none=True)
             logits, auxiliary_return = model.forward_heads(x)
             probs = torch.sigmoid(logits)
-            loss = focal(logits, y, weight) + rank_weight * rank_loss(probs, fwd, weight)
+            primary_loss = focal(logits, y, weight) + rank_weight * rank_loss(
+                probs,
+                fwd,
+                weight,
+            )
             if margin_weight > 0.0:
-                loss = loss + margin_weight * margin_loss(logits, y)
+                primary_loss = primary_loss + margin_weight * margin_loss(logits, y)
             if return_order_weight > 0.0:
-                loss = loss + return_order_weight * return_order_loss(logits, fwd)
+                primary_loss = primary_loss + return_order_weight * return_order_loss(
+                    logits,
+                    fwd,
+                )
+            weighted_auxiliary_loss = None
             if (
                 auxiliary_return_loss is not None
                 and auxiliary_return is not None
                 and auxiliary_return_weight > 0.0
             ):
-                loss = loss + auxiliary_return_weight * auxiliary_return_loss(
-                    auxiliary_return,
-                    fwd,
-                    weight,
+                weighted_auxiliary_loss = (
+                    auxiliary_return_weight
+                    * auxiliary_return_loss(
+                        auxiliary_return,
+                        fwd,
+                        weight,
+                    )
                 )
-            loss.backward()
+            loss = (
+                primary_loss + weighted_auxiliary_loss
+                if weighted_auxiliary_loss is not None
+                else primary_loss
+            )
+            if (
+                auxiliary_gradient_strategy == "primary_preserving_projection"
+                and weighted_auxiliary_loss is not None
+            ):
+                gradient_audit_rows.append(
+                    apply_primary_preserving_projection(
+                        model,
+                        primary_loss=primary_loss,
+                        weighted_auxiliary_loss=weighted_auxiliary_loss,
+                    )
+                )
+            else:
+                loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
@@ -597,6 +651,63 @@ def train_one_fold(
         ],
         columns=AUXILIARY_TASK_AUDIT_COLUMNS,
     )
+    if gradient_audit_rows:
+        gradient_frame = pd.DataFrame(gradient_audit_rows)
+        multitask_gradient_audit = pd.DataFrame(
+            [
+                {
+                    "fold": int(fold.fold),
+                    "enabled": True,
+                    "strategy": auxiliary_gradient_strategy,
+                    "batch_count": int(len(gradient_frame)),
+                    "conflict_batch_count": int(
+                        gradient_frame["conflict"].astype(bool).sum()
+                    ),
+                    "conflict_fraction": float(
+                        gradient_frame["conflict"].astype(bool).mean()
+                    ),
+                    "mean_cosine_before": float(
+                        gradient_frame["cosine_before"].mean()
+                    ),
+                    "mean_cosine_after": float(
+                        gradient_frame["cosine_after"].mean()
+                    ),
+                    "mean_primary_shared_grad_norm": float(
+                        gradient_frame["primary_shared_grad_norm"].mean()
+                    ),
+                    "mean_weighted_auxiliary_shared_grad_norm": float(
+                        gradient_frame[
+                            "weighted_auxiliary_shared_grad_norm"
+                        ].mean()
+                    ),
+                    "mean_auxiliary_to_primary_grad_norm_ratio": float(
+                        gradient_frame[
+                            "auxiliary_to_primary_grad_norm_ratio"
+                        ].mean()
+                    ),
+                }
+            ],
+            columns=MULTITASK_GRADIENT_AUDIT_COLUMNS,
+        )
+    else:
+        multitask_gradient_audit = pd.DataFrame(
+            [
+                {
+                    "fold": int(fold.fold),
+                    "enabled": False,
+                    "strategy": auxiliary_gradient_strategy,
+                    "batch_count": 0,
+                    "conflict_batch_count": 0,
+                    "conflict_fraction": np.nan,
+                    "mean_cosine_before": np.nan,
+                    "mean_cosine_after": np.nan,
+                    "mean_primary_shared_grad_norm": np.nan,
+                    "mean_weighted_auxiliary_shared_grad_norm": np.nan,
+                    "mean_auxiliary_to_primary_grad_norm_ratio": np.nan,
+                }
+            ],
+            columns=MULTITASK_GRADIENT_AUDIT_COLUMNS,
+        )
 
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
@@ -625,6 +736,10 @@ def train_one_fold(
             output_dir / f"auxiliary_task_audit_fold_{fold.fold:03d}.csv",
             index=False,
         )
+        multitask_gradient_audit.to_csv(
+            output_dir / f"multitask_gradient_audit_fold_{fold.fold:03d}.csv",
+            index=False,
+        )
 
     return {
         "fold": fold.fold,
@@ -635,6 +750,7 @@ def train_one_fold(
         "preprocessing_audit": preprocessing_audit,
         "sample_weight_audit": sample_weight_audit,
         "auxiliary_task_audit": auxiliary_task_audit,
+        "multitask_gradient_audit": multitask_gradient_audit,
         "predictions": predictions,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -671,6 +787,7 @@ def run_walk_forward_training(
     preprocessing_audits = []
     sample_weight_audits = []
     auxiliary_task_audits = []
+    multitask_gradient_audits = []
     selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
         if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
@@ -693,6 +810,8 @@ def run_walk_forward_training(
             sample_weight_audits.append(result["sample_weight_audit"])
         if not result["auxiliary_task_audit"].empty:
             auxiliary_task_audits.append(result["auxiliary_task_audit"])
+        if not result["multitask_gradient_audit"].empty:
+            multitask_gradient_audits.append(result["multitask_gradient_audit"])
 
     if not predictions:
         raise ValueError("No folds were produced; check dataset length and CV configuration")
@@ -713,6 +832,11 @@ def run_walk_forward_training(
         if auxiliary_task_audits
         else pd.DataFrame(columns=AUXILIARY_TASK_AUDIT_COLUMNS)
     )
+    multitask_gradient_audit = (
+        pd.concat(multitask_gradient_audits, ignore_index=True)
+        if multitask_gradient_audits
+        else pd.DataFrame(columns=MULTITASK_GRADIENT_AUDIT_COLUMNS)
+    )
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -720,6 +844,10 @@ def run_walk_forward_training(
         preprocessing_audit.to_csv(output_dir / "preprocessing_audit.csv", index=False)
         sample_weight_audit.to_csv(output_dir / "sample_weight_audit.csv", index=False)
         auxiliary_task_audit.to_csv(output_dir / "auxiliary_task_audit.csv", index=False)
+        multitask_gradient_audit.to_csv(
+            output_dir / "multitask_gradient_audit.csv",
+            index=False,
+        )
     report = phase1_report(all_predictions[all_predictions["split"] == "test"], config)
     return {
         "fold_results": fold_results,
@@ -727,5 +855,6 @@ def run_walk_forward_training(
         "preprocessing_audit": preprocessing_audit,
         "sample_weight_audit": sample_weight_audit,
         "auxiliary_task_audit": auxiliary_task_audit,
+        "multitask_gradient_audit": multitask_gradient_audit,
         "report": report,
     }

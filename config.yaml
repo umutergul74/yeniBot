@@ -364,6 +364,21 @@ features:
             weight: 0.10
             target_clip: 5.0
             huber_beta: 1.0
+            gradient_strategy: sum
+    baseline_stable_multitask_return_head_conflict_projected:
+      description: "Primary-preserving follow-up to the fixed-sum auxiliary return head: keep the same target, weight, architecture, and losses, but remove only the shared auxiliary gradient component that conflicts with the primary P(Long) gradient."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        model:
+          auxiliary_return_head: true
+          auxiliary_return_scale: 0.01
+        training:
+          auxiliary_return:
+            enabled: true
+            weight: 0.10
+            target_clip: 5.0
+            huber_beta: 1.0
+            gradient_strategy: primary_preserving_projection
     baseline_control_plus_futures_context:
       description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
@@ -1980,6 +1995,7 @@ training:
     weight: 0.10
     target_clip: 5.0
     huber_beta: 1.0
+    gradient_strategy: sum
   loss:
     focal_gamma: 2.0
     focal_alpha: 0.6
@@ -2178,7 +2194,7 @@ experiments:
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
   candidate_profiles:
-    - baseline_stable_multitask_return_head_light
+    - baseline_stable_multitask_return_head_conflict_projected
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2188,7 +2204,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: multitask_return_representation_preregistered
+    status: primary_preserving_multitask_gradient_projection_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2207,8 +2223,9 @@ experiments:
       - static_label_uniqueness_weighting_v1
       - diluted_multifeature_event_weighting_v1
       - effective_orderflow_event_weighting_v2
-    conclusion: "Bundle 20260627_232543 proved that corrected event weighting was active, but the mechanism failed. The candidate improved paired triage mean IC by only 0.0012 and selected-threshold F1 by 0.0016, while worsening std, worst-fold IC, PRAUC, and top-10 lift; Rank IC improved in only 4 of 12 paired folds. Sample emphasis is therefore closed rather than tuned further."
-    next_step: "Run one light multitask representation candidate. Add a separate clipped forward-return regression head to the shared encoder with fixed weight 0.10, while leaving the P(Long) head, primary loss, architecture widths, features, labels, and early stopping unchanged. The auxiliary head is training-only evidence and must not replace the P(Long) inference contract."
+      - multitask_return_head_fixed_sum_v1
+    conclusion: "Bundle 20260628_093830 showed useful but non-promotable transfer from the fixed-sum auxiliary return head. Paired triage mean IC improved by 0.0084, PRAUC by 0.0061, and global top-10 lift from 1.2276 to 1.2705, but std worsened, official F1 fell by 0.0061, and bad-fold top-10 lift remained only 0.6406. The auxiliary and P(Long) rankings were 0.921 correlated, indicating strong shared signal with possible task-gradient interference rather than a missing auxiliary target."
+    next_step: "Run one primary-preserving gradient-projection candidate with the same auxiliary target and fixed weight 0.10. Leave the primary gradient untouched and project only a negatively aligned shared auxiliary gradient. Persist batch-level conflict frequency, gradient cosine, and auxiliary-to-primary norm ratio. Do not tune the auxiliary weight or add another target in this cycle."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2406,6 +2423,7 @@ experiments:
     reject_retests: true
     allow_retest_profiles: []
     reference_notes:
+      baseline_stable_multitask_return_head_light: "Bundle 20260628_093830: fixed-sum auxiliary return supervision was directionally useful but non-promotable. Paired triage mean IC improved +0.0084, PRAUC +0.0061, and top-10 lift +0.0429, but std worsened to 0.1032, official F1 fell from 0.4557 to 0.4497, and bad-fold top-10 lift remained 0.6406. Auxiliary-vs-P(Long) rank correlation was 0.921."
       baseline_stable_orderflow_event_weighted_loss_v2: "Bundle 20260627_232543: corrected order-flow event weights were demonstrably active (20% active rows, p90-p10 spread 0.1691, Kish ESS fraction 0.9936), but paired triage evidence failed. Mean IC improved only +0.0012, std and worst folds worsened, PRAUC fell, and top-10 lift dropped from 1.2276 to 1.1536. Close event-weight tuning."
       baseline_stable_model_tcn32_only: "Bundle 20260625_155006: TCN32-only improved triage mean IC from 0.0518 to 0.0643 and positive folds from 58.3% to 66.7%, but std worsened to 0.1044, official F1 fell to 0.4027, and top-10 lift fell below 1.0. Reject component shrinkage."
       baseline_stable_model_gru64_only: "Bundle 20260625_155006: GRU64-only slightly reduced triage std but lowered mean IC to 0.0380, official F1 to 0.4297, and top-10 lift to 1.1107. Reject component shrinkage."
@@ -2440,6 +2458,8 @@ experiments:
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
       training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
     rejected_profiles:
+      baseline_stable_multitask_return_head_light:
+        reason: "Bundle 20260628_093830: fixed-sum multitask training failed the joint gates despite improving mean IC, PRAUC, and top-decile lift. It did not reduce dispersion or negative-fold frequency, official F1 fell, and bad-fold top-decile lift remained below one. Do not tune its weight; only the preregistered primary-preserving gradient-conflict mechanism may follow."
       baseline_stable_orderflow_event_weighted_loss_v2:
         reason: "Bundle 20260627_232543: the corrected event-weight mechanism was active but non-promotable. It improved paired triage Rank IC in only 4/12 folds, worsened std and worst-5 IC, reduced PRAUC, and lowered global top-10 lift by 0.0740 versus control. Do not retune event strength, quantile, or feature-family weights without a distinct mechanism."
       baseline_stable_model_tcn32_only:

@@ -126,7 +126,7 @@ def test_train_one_fold_supports_pairwise_return_order_loss(synthetic_klines, ti
     assert result["history"]["train_loss"].notna().all()
 
 
-def test_train_one_fold_supports_auxiliary_return_head(
+def test_train_one_fold_supports_conflict_projected_auxiliary_return_head(
     synthetic_klines,
     tiny_config,
     tmp_path,
@@ -139,6 +139,7 @@ def test_train_one_fold_supports_auxiliary_return_head(
         "weight": 0.10,
         "target_clip": 5.0,
         "huber_beta": 1.0,
+        "gradient_strategy": "primary_preserving_projection",
     }
     config["training"]["epochs"] = 2
     primary = synthetic_klines(190, "1h")
@@ -165,7 +166,13 @@ def test_train_one_fold_supports_auxiliary_return_head(
     assert result["auxiliary_task_audit"][
         "test_auxiliary_return_rank_ic"
     ].notna().all()
+    assert result["multitask_gradient_audit"]["enabled"].all()
+    assert set(result["multitask_gradient_audit"]["strategy"]) == {
+        "primary_preserving_projection"
+    }
+    assert result["multitask_gradient_audit"]["batch_count"].gt(0).all()
     assert (tmp_path / "auxiliary_task_audit_fold_000.csv").exists()
+    assert (tmp_path / "multitask_gradient_audit_fold_000.csv").exists()
 
 
 def test_label_uniqueness_weights_downweight_overlapping_events() -> None:
