@@ -12,7 +12,10 @@ import pandas as pd
 
 from yenibot.experiment.common import _cfg
 from yenibot.experiment.configuration import experiment_root
-from yenibot.experiment.frozen import verify_frozen_manifest_artifacts
+from yenibot.experiment.frozen import (
+    frozen_manifest_activation_state,
+    verify_frozen_manifest_artifacts,
+)
 
 __all__ = [
     "future_oos_preflight",
@@ -194,6 +197,7 @@ def future_oos_preflight(
         config=config,
         manifests=manifests,
     )
+    activation = frozen_manifest_activation_state(manifest, config)
 
     data_dir = Path(str(_cfg(config, ["paths", "data_dir"], "data")))
     labeled_path = data_dir / "processed" / "labeled_1h.parquet"
@@ -293,6 +297,7 @@ def future_oos_preflight(
             bool(manifest)
             and str(manifest.get("manifest_hash", "")) == expected_hash
         ),
+        "candidate_activation_valid": bool(activation["activated"]),
         "manifest_declared_available": bool(manifest.get("available", False)),
         "future_fit_forbidden": manifest.get("future_oos_fit_allowed") is False,
         "threshold_matches_config": (
@@ -370,6 +375,11 @@ def future_oos_preflight(
             "expected_manifest_hash": expected_hash,
             "manifest_path": str(manifest_path),
             "manifest_hash": str(manifest.get("manifest_hash", "")),
+            "configured_status": activation["configured_status"],
+            "immutable_manifest_status": activation["immutable_manifest_status"],
+            "activation_status_source": activation["status_source"],
+            "activation_valid": bool(activation["activated"]),
+            "activation_reasons": list(activation["reasons"]),
             "threshold_expected": expected_threshold,
             "threshold_manifest": manifest_threshold,
             "threshold_source": str((manifest.get("threshold", {}) or {}).get("source", "")),
@@ -408,6 +418,9 @@ def future_oos_preflight_markdown(preflight: dict[str, Any]) -> str:
             f"- Primary candidate: `{candidate.get('candidate_id')}`",
             f"- Source run: `{candidate.get('source_run_id')}`",
             f"- Manifest hash: `{candidate.get('manifest_hash')}`",
+            f"- Configured lifecycle status: `{candidate.get('configured_status')}`",
+            f"- Immutable manifest status: `{candidate.get('immutable_manifest_status')}`",
+            f"- Candidate activated: `{candidate.get('activation_valid')}`",
             f"- Frozen threshold: `{candidate.get('threshold_manifest')}`",
             f"- Fresh labeled rows: `{data.get('fresh_labeled_rows')}` / `{data.get('min_rows')}`",
             f"- Rows remaining: `{data.get('min_rows_remaining')}`",

@@ -93,6 +93,7 @@ __all__ = [
     '_missing_selected_markdown',
     '_write_missing_selected_profiles',
     '_holdout_latest_available_data_end',
+    '_active_future_oos_state',
     '_future_oos_monitor_state',
     '_future_oos_ready_at_fields',
 ]
@@ -244,11 +245,25 @@ def _future_oos_allowed_benchmark_profiles(config: dict[str, Any], control_profi
                 allowed.append(profile)
     return allowed
 
-def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def _experiment_policy_guard(
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    future_oos_readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     holdout = settings.get("holdout", {}) or _cfg(config, ["experiments", "holdout"], {}) or {}
     latest_data_end = _holdout_latest_available_data_end(holdout)
-    monitor_state = _future_oos_monitor_state(config, latest_data_end)
+    legacy_monitor_state = _future_oos_monitor_state(config, latest_data_end)
+    active_monitor_state = _active_future_oos_state(
+        config,
+        latest_data_end,
+        readiness=future_oos_readiness,
+    )
+    monitor_state = (
+        active_monitor_state
+        if active_monitor_state["active_frozen_candidate"]
+        else legacy_monitor_state
+    )
     control = str(settings.get("control_profile") or _cfg(config, ["experiments", "control_profile"], ""))
     status = str(policy_review.get("status", ""))
     enabled = bool(policy_review.get("enabled", False))
@@ -263,17 +278,47 @@ def _experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -
         or {}
     )
     failed_future_oos = "failed" in str(outcome.get("status", "")).lower()
+    active_candidate = bool(active_monitor_state["active_frozen_candidate"])
+    evaluation_completed = bool(monitor_state.get("evaluation_completed", False))
+    primary_passed = monitor_state.get("primary_candidate_passed")
     locked = bool(
-        enabled
-        and _policy_status_is_retired_or_failed(status)
-        and monitor_state["holdout_roll_forward_locked"]
-        and not monitor_state["future_oos_ready"]
-        and not failed_future_oos
+        not failed_future_oos
+        and (
+            (active_candidate and not evaluation_completed)
+            or (
+                enabled
+                and _policy_status_is_retired_or_failed(status)
+                and legacy_monitor_state["holdout_roll_forward_locked"]
+                and not legacy_monitor_state["future_oos_ready"]
+            )
+        )
     )
     allowed = _future_oos_allowed_benchmark_profiles(config, control)
     if failed_future_oos:
         action = "retire_failed_frozen_candidate_and_open_new_research_anchor"
         reason = "primary_frozen_candidate_failed_future_oos"
+    elif active_candidate and not bool(monitor_state.get("candidate_activation_valid", False)):
+        action = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+        reason = "active_frozen_candidate_manifest_not_activated"
+    elif active_candidate and evaluation_completed and primary_passed is True:
+        action = "future_oos_candidate_passed_review_phase2_readiness"
+        reason = "primary_frozen_candidate_passed_future_oos"
+    elif active_candidate and evaluation_completed:
+        action = "retire_failed_frozen_candidate_and_open_new_research_anchor"
+        reason = "primary_frozen_candidate_failed_future_oos"
+    elif active_candidate and monitor_state["future_oos_ready"]:
+        if (
+            future_oos_readiness is not None
+            and not bool(monitor_state.get("ready_for_evaluation", False))
+        ):
+            action = "repair_future_oos_preflight_without_refit"
+            reason = "future_oos_window_available_but_preflight_blocked"
+        else:
+            action = "run_no_refit_future_oos_evaluator"
+            reason = "future_oos_minimum_window_available"
+    elif active_candidate:
+        action = "wait_for_new_future_oos_rows"
+        reason = "active_hash_pinned_candidate_waiting_for_mature_labeled_rows"
     elif locked:
         action = "wait_for_new_unseen_bars_keep_control_profile"
         reason = (
@@ -1266,6 +1311,154 @@ def _holdout_latest_available_data_end(holdout: dict[str, Any]) -> str:
             return value
     return ""
 
+def _active_future_oos_state(
+    config: dict[str, Any],
+    latest_data_end: Any,
+    *,
+    readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return live state for the active frozen Future-OOS candidate."""
+
+    frozen = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
+    future = _cfg(config, ["experiments", "future_oos_validation"], {}) or {}
+    primary_id = str(frozen.get("primary_candidate_id", "") or "")
+    spec = next(
+        (
+            item
+            for item in frozen.get("candidates", []) or []
+            if isinstance(item, dict)
+            and str(item.get("candidate_id", "") or "") == primary_id
+        ),
+        {},
+    )
+    configured_status = str(
+        spec.get("status")
+        or spec.get("manifest_candidate_status")
+        or ""
+    )
+    status_lower = configured_status.lower()
+    anchor_data_end = str(
+        spec.get("anchor_data_end")
+        or frozen.get("anchor_data_end")
+        or ""
+    )
+    inactive_status = any(
+        token in status_lower
+        for token in ("retired", "failed", "rejected", "disabled", "invalidated")
+    )
+    active_candidate = bool(
+        frozen.get("enabled", False)
+        and future.get("enabled", False)
+        and primary_id
+        and spec
+        and anchor_data_end
+        and not inactive_status
+    )
+    expected_hash = str(spec.get("expected_manifest_hash", "") or "")
+    pin_pending = any(
+        token in status_lower
+        for token in ("pin_pending", "pin_required", "awaiting_manifest")
+    )
+    candidate_activation_valid = bool(
+        active_candidate
+        and not pin_pending
+        and (
+            not status_lower.startswith("manifest_pinned")
+            or bool(expected_hash)
+        )
+    )
+    min_rows = int(future.get("min_rows", 720) or 0)
+    preferred_rows = int(future.get("preferred_rows", 2160) or 0)
+    label_maturity_horizon = int(
+        _cfg(config, ["labeling", "max_holding_bars"], 0) or 0
+    )
+    latest_text = str(latest_data_end or "")
+    actual_readiness = readiness is not None
+    if readiness is not None:
+        latest_text = str(
+            readiness.get("latest_available_data_end")
+            or latest_text
+            or ""
+        )
+        observed_rows = int(readiness.get("new_labeled_rows", 0) or 0)
+        evaluation_completed = bool(readiness.get("evaluation_completed", False))
+        primary_passed = readiness.get("primary_candidate_passed")
+        ready_for_evaluation = bool(readiness.get("ready_for_evaluation", False))
+    else:
+        observed_rows = 0
+        if anchor_data_end and latest_text:
+            try:
+                anchor_ts = pd.to_datetime(anchor_data_end, utc=True)
+                latest_ts = pd.to_datetime(latest_text, utc=True)
+                if pd.notna(anchor_ts) and pd.notna(latest_ts) and latest_ts > anchor_ts:
+                    observed_rows = int(
+                        (latest_ts - anchor_ts).total_seconds() // 3600
+                    )
+            except (TypeError, ValueError):
+                observed_rows = 0
+        evaluation_completed = False
+        primary_passed = None
+        ready_for_evaluation = False
+    estimated_window_data_available = bool(
+        min_rows > 0 and observed_rows >= min_rows
+    )
+    estimated_preferred_window_data_available = bool(
+        preferred_rows > 0 and observed_rows >= preferred_rows
+    )
+    window_data_available = bool(
+        actual_readiness and estimated_window_data_available
+    )
+    preferred_window_data_available = bool(
+        actual_readiness and estimated_preferred_window_data_available
+    )
+    return {
+        "monitor_enabled": active_candidate,
+        "active_frozen_candidate": active_candidate,
+        "candidate_activation_valid": candidate_activation_valid,
+        "configured_candidate_status": configured_status,
+        "expected_manifest_hash": expected_hash,
+        "state_source": (
+            "active_frozen_candidate"
+            if active_candidate
+            else "no_active_frozen_candidate"
+        ),
+        "readiness_basis": (
+            "actual_mature_labeled_rows"
+            if actual_readiness
+            else "elapsed_hours_estimate"
+        ),
+        "anchor_run_id": str(frozen.get("anchor_run_id", "") or ""),
+        "anchor_data_end": anchor_data_end,
+        "latest_available_data_end": latest_text,
+        "new_bars_since_anchor": observed_rows,
+        "min_new_bars": min_rows,
+        "preferred_new_bars": preferred_rows,
+        "label_maturity_horizon_bars": label_maturity_horizon,
+        "min_new_bars_remaining": max(0, min_rows - observed_rows),
+        "preferred_new_bars_remaining": max(0, preferred_rows - observed_rows),
+        "future_oos_ready": bool(active_candidate and window_data_available),
+        "future_oos_preferred_ready": bool(
+            active_candidate and preferred_window_data_available
+        ),
+        "window_data_available": window_data_available,
+        "preferred_window_data_available": preferred_window_data_available,
+        "estimated_window_data_available": estimated_window_data_available,
+        "estimated_preferred_window_data_available": (
+            estimated_preferred_window_data_available
+        ),
+        "ready_for_evaluation": ready_for_evaluation,
+        "evaluation_completed": evaluation_completed,
+        "primary_candidate_passed": primary_passed,
+        "allow_holdout_roll_forward": False,
+        "holdout_roll_forward_locked": bool(active_candidate),
+        "next_action": (
+            "run_no_refit_future_oos_evaluator"
+            if window_data_available
+            else "wait_for_new_future_oos_rows"
+        ),
+    }
+
+
 def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> dict[str, Any]:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
     monitor = policy_review.get("future_oos_monitor", {}) or {}
@@ -1326,7 +1519,12 @@ def _future_oos_monitor_state(config: dict[str, Any], latest_data_end: Any) -> d
 
 def _future_oos_ready_at_fields(monitor_state: dict[str, Any]) -> dict[str, str]:
     anchor = str(monitor_state.get("anchor_data_end", "") or "")
-    fields = {"min_ready_at": "", "preferred_ready_at": ""}
+    fields = {
+        "min_ready_at": "",
+        "preferred_ready_at": "",
+        "min_raw_data_ready_at": "",
+        "preferred_raw_data_ready_at": "",
+    }
     if not anchor:
         return fields
     try:
@@ -1337,8 +1535,18 @@ def _future_oos_ready_at_fields(monitor_state: dict[str, Any]) -> dict[str, str]
         return fields
     min_new_bars = int(monitor_state.get("min_new_bars", 0) or 0)
     preferred_new_bars = int(monitor_state.get("preferred_new_bars", 0) or 0)
+    maturity_horizon = int(
+        monitor_state.get("label_maturity_horizon_bars", 0) or 0
+    )
     if min_new_bars > 0:
         fields["min_ready_at"] = str(anchor_ts + pd.Timedelta(hours=min_new_bars))
+        fields["min_raw_data_ready_at"] = str(
+            anchor_ts + pd.Timedelta(hours=min_new_bars + maturity_horizon)
+        )
     if preferred_new_bars > 0:
         fields["preferred_ready_at"] = str(anchor_ts + pd.Timedelta(hours=preferred_new_bars))
+        fields["preferred_raw_data_ready_at"] = str(
+            anchor_ts
+            + pd.Timedelta(hours=preferred_new_bars + maturity_horizon)
+        )
     return fields

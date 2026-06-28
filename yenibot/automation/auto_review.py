@@ -544,6 +544,21 @@ def _experiment_memory_registry_summary(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _future_oos_window_ready(
+    future_oos: dict[str, Any],
+    policy: dict[str, Any],
+) -> bool:
+    """Use actual mature labeled-row counts before any policy estimate."""
+
+    if "new_labeled_rows" in future_oos and "min_rows" in future_oos:
+        return int(future_oos.get("new_labeled_rows", 0) or 0) >= int(
+            future_oos.get("min_rows", 0) or 0
+        )
+    if "ready_for_evaluation" in future_oos:
+        return bool(future_oos.get("ready_for_evaluation", False))
+    return bool(policy.get("future_oos_ready", False))
+
+
 def _next_action(
     *,
     missing_files: list[str],
@@ -584,7 +599,7 @@ def _next_action(
             return "freeze_runtime_and_rerun_same_seed_audit_only", reasons
         reasons.append("seed_reproducibility_same_seed_not_classified")
         return "run_05_seed_reproducibility_review_before_new_candidate", reasons
-    window_data_ready = bool(policy.get("future_oos_ready", False))
+    window_data_ready = _future_oos_window_ready(future_oos, policy)
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
     replacement = replacement_candidate_fit or {}
@@ -620,13 +635,19 @@ def _next_action(
             )
         reasons.append("frozen_primary_candidate_failed_future_oos")
         return "retire_failed_frozen_candidate_and_open_new_research_anchor", reasons
+    if (
+        bool(future_oos.get("evaluation_completed", False))
+        and future_oos.get("primary_candidate_passed") is True
+    ):
+        reasons.append("frozen_primary_candidate_passed_future_oos")
+        return "future_oos_candidate_passed_review_phase2_readiness", reasons
     if cv_promotable:
         reasons.append("candidate_passed_cv_gates")
-        if not bool(policy.get("future_oos_ready", False)):
+        if not window_data_ready:
             reasons.append("future_oos_not_ready_do_not_promote_from_current_holdout")
             return "wait_for_new_future_oos_rows", reasons
         return "review_cv_promotable_candidate_on_future_oos", reasons
-    if not bool(policy.get("future_oos_ready", False)):
+    if not window_data_ready:
         reasons.append("future_oos_not_ready")
         return "wait_for_new_future_oos_rows", reasons
     reasons.append("no_candidate_beats_control_cv_gates")
@@ -650,7 +671,7 @@ def _phase2_readiness(review: dict[str, Any]) -> dict[str, Any]:
     future_oos = review.get("future_oos", {}).get("readiness", {}) or {}
     frozen_candidate = review.get("frozen_candidate", {}) or {}
     charter = review.get("validation_charter_status", {}) or {}
-    future_window_data_ready = bool(policy.get("future_oos_ready", False))
+    future_window_data_ready = _future_oos_window_ready(future_oos, policy)
     future_evaluation_ready = bool(future_oos.get("ready_for_evaluation", False))
     frozen_candidate_available = bool(frozen_candidate.get("available", False))
     future_evaluated = bool(future_oos.get("evaluation_completed", False))
@@ -1108,8 +1129,30 @@ def _phase1_transition_plan(review: dict[str, Any]) -> dict[str, Any]:
             "primary_candidate_passed": bool(
                 future_evaluation.get("primary_candidate_passed", False)
             ),
-            "min_ready_at": policy.get("min_ready_at"),
-            "preferred_ready_at": policy.get("preferred_ready_at"),
+            "anchor_data_end": future_evaluation.get(
+                "anchor_data_end",
+                policy.get("anchor_data_end"),
+            ),
+            "min_ready_at": future_evaluation.get(
+                "min_ready_at",
+                policy.get("min_ready_at"),
+            ),
+            "preferred_ready_at": future_evaluation.get(
+                "preferred_ready_at",
+                policy.get("preferred_ready_at"),
+            ),
+            "min_raw_data_ready_at": future_evaluation.get(
+                "min_raw_data_ready_at",
+                policy.get("min_raw_data_ready_at"),
+            ),
+            "preferred_raw_data_ready_at": future_evaluation.get(
+                "preferred_raw_data_ready_at",
+                policy.get("preferred_raw_data_ready_at"),
+            ),
+            "state_source": future_evaluation.get(
+                "state_source",
+                policy.get("state_source"),
+            ),
             "new_bars_since_anchor": future_evaluation.get(
                 "new_labeled_rows",
                 policy.get("new_bars_since_anchor"),

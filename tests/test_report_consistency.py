@@ -227,3 +227,61 @@ def test_write_report_consistency_outputs_operator_files(tmp_path: Path) -> None
     assert (tmp_path / "report_consistency_audit.md").exists()
     assert (tmp_path / "operator_next_step.json").exists()
     assert (tmp_path / "operator_next_step.md").exists()
+
+
+def test_report_consistency_detects_stale_future_oos_state_sources(
+    tmp_path: Path,
+) -> None:
+    _write_base_report(tmp_path)
+    _write_json(
+        tmp_path / "frozen_candidate_manifest.json",
+        {
+            "available": True,
+            "anchor_data_end": "2026-06-13T01:00:00+00:00",
+        },
+    )
+    _write_json(
+        tmp_path / "future_oos_preflight.json",
+        {
+            "state": "waiting_for_mature_labeled_rows",
+            "next_action": PIN_MANIFEST_ACTION,
+            "primary_candidate": {
+                "anchor_data_end": "2026-05-13T08:00:00+00:00",
+            },
+        },
+    )
+    _write_json(
+        tmp_path / "future_oos_readiness.json",
+        {
+            "anchor_data_end": "2026-06-13T01:00:00+00:00",
+            "new_labeled_rows": 313,
+            "min_rows": 720,
+            "min_rows_remaining": 0,
+            "min_ready_at": "2026-06-12T08:00:00+00:00",
+            "ready_for_evaluation": False,
+            "evaluation_completed": False,
+            "primary_candidate_activation": {"activated": True},
+        },
+    )
+    _write_json(
+        tmp_path / "future_oos_failure_summary.json",
+        {
+            "note": (
+                "Future-OOS prediction reports are placeholders because no active "
+                "hash-pinned frozen candidate was available."
+            )
+        },
+    )
+    pd.DataFrame([{"min_new_bars_remaining": 0}]).to_csv(
+        tmp_path / "future_oos_candidate_plan.csv",
+        index=False,
+    )
+
+    frame, operator = build_report_consistency_audit(tmp_path)
+    failed = set(frame.loc[frame["status"].eq("failed"), "check"])
+
+    assert "future_oos_anchor_consistency" in failed
+    assert "future_oos_remaining_rows_arithmetic" in failed
+    assert "future_oos_min_ready_date_arithmetic" in failed
+    assert "active_candidate_placeholder_wording" in failed
+    assert operator["consistency_status"] == "failed"

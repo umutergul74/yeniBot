@@ -449,20 +449,49 @@ def _phase1_blocker_action_plan_frame(
     )
 
     future_ready = bool(guard.get("future_oos_ready", False))
+    if (
+        not future_oos_candidate_plan.empty
+        and "future_oos_ready" in future_oos_candidate_plan.columns
+    ):
+        future_ready = future_oos_candidate_plan["future_oos_ready"].map(
+            lambda value: (
+                bool(value)
+                if isinstance(value, (bool, np.bool_))
+                else str(value).strip().lower() in {"1", "true", "yes"}
+            )
+        ).any()
+    future_evaluation_passed = False
+    if (
+        not future_oos_candidate_plan.empty
+        and "promotion_allowed_now" in future_oos_candidate_plan.columns
+    ):
+        future_evaluation_passed = future_oos_candidate_plan[
+            "promotion_allowed_now"
+        ].map(
+            lambda value: (
+                bool(value)
+                if isinstance(value, (bool, np.bool_))
+                else str(value).strip().lower() in {"1", "true", "yes"}
+            )
+        ).any()
     future_plan = _first_frame_row(future_oos_candidate_plan)
     min_remaining = guard.get("min_new_bars_remaining", future_plan.get("min_new_bars_remaining", "NA"))
     min_ready_at = future_plan.get("min_ready_at") or guard.get("min_ready_at") or ""
     preferred_ready_at = future_plan.get("preferred_ready_at") or guard.get("preferred_ready_at") or ""
-    future_blocked = "future_unseen_oos_not_ready" in blockers or not future_ready
+    future_blocked = (
+        "future_unseen_oos_not_ready" in blockers
+        or not future_evaluation_passed
+    )
     add_row(
         priority=7,
         blocker="future_unseen_oos",
         severity="critical" if future_blocked else "ok",
         metric_value=0 if future_blocked else 1,
-        target="future_oos_ready=True before promotion",
+        target="future_oos_evaluation_completed_and_passed=True before promotion",
         passed=not future_blocked,
         evidence=(
-            f"future_oos_ready={future_ready}; min bars remaining={min_remaining}; "
+            f"future_oos_ready={future_ready}; evaluation passed={future_evaluation_passed}; "
+            f"min bars remaining={min_remaining}; "
             f"min_ready_at={min_ready_at}; preferred_ready_at={preferred_ready_at}."
         ),
         recommended_action=(
@@ -473,7 +502,7 @@ def _phase1_blocker_action_plan_frame(
         requires_02_03=False,
         requires_04=False,
         next_notebook="none_until_future_oos_ready",
-        promotion_allowed_now=future_ready,
+        promotion_allowed_now=future_evaluation_passed,
         source_files="future_oos_candidate_plan.csv;experiment_policy_guard.csv;phase2_readiness.json",
         notes="This is a governance gate, not a model-performance tweak.",
     )

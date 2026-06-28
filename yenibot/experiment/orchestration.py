@@ -1224,6 +1224,12 @@ def write_experiment_diagnostics(
         diagnostic_config,
         payoff_policy_robustness_summary,
         replacement_candidate_fit=replacement_candidate_fit,
+        future_oos_readiness=future_oos_readiness,
+    )
+    experiment_policy_guard = _experiment_policy_guard_frame(
+        settings,
+        diagnostic_config,
+        future_oos_readiness=future_oos_readiness,
     )
     next_research_protocol = research_protocol_payload(
         diagnostic_config,

@@ -15,6 +15,7 @@ from yenibot.experiment.common import _cfg, _hash_payload, _slug, _table_markdow
 
 __all__ = [
     "freeze_candidate_manifests",
+    "frozen_manifest_activation_state",
     "frozen_manifest_content_hash",
     "frozen_manifest_source_run_dir",
     "verify_frozen_manifest_artifacts",
@@ -143,6 +144,76 @@ def _manifest_candidate_status(spec: dict[str, Any]) -> str:
         or spec.get("status")
         or "preregistered"
     )
+
+
+def frozen_manifest_activation_state(
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve mutable activation without mutating immutable manifest content."""
+
+    frozen = _cfg(config, ["experiments", "frozen_candidates"], {}) or {}
+    future = _cfg(config, ["experiments", "future_oos_validation"], {}) or {}
+    candidate_id = str(manifest.get("candidate_id", "") or "")
+    primary_id = str(frozen.get("primary_candidate_id", "") or "")
+    spec = next(
+        (
+            item
+            for item in frozen.get("candidates", []) or []
+            if isinstance(item, dict)
+            and str(item.get("candidate_id", "") or "") == candidate_id
+        ),
+        {},
+    )
+    immutable_status = str(manifest.get("candidate_status", "") or "")
+    configured_status = str(
+        spec.get("status")
+        or spec.get("manifest_candidate_status")
+        or immutable_status
+    )
+    expected_hash = str(spec.get("expected_manifest_hash", "") or "")
+    manifest_hash = str(manifest.get("manifest_hash", "") or "")
+    status_lower = configured_status.lower()
+    reasons: list[str] = []
+
+    if not bool(frozen.get("enabled", False)):
+        reasons.append("frozen_candidate_protocol_disabled")
+    if not bool(future.get("enabled", False)):
+        reasons.append("future_oos_protocol_disabled")
+    if not candidate_id or not spec:
+        reasons.append("candidate_not_present_in_active_config")
+    if not primary_id:
+        reasons.append("primary_candidate_not_configured")
+    if any(
+        token in status_lower
+        for token in ("retired", "failed", "rejected", "disabled", "invalidated")
+    ):
+        reasons.append(f"configured_candidate_inactive:{configured_status}")
+    if any(
+        token in status_lower
+        for token in ("pin_pending", "pin_required", "awaiting_manifest")
+    ):
+        reasons.append(f"configured_candidate_not_hash_pinned:{configured_status}")
+    if status_lower.startswith("manifest_pinned") and not expected_hash:
+        reasons.append("configured_manifest_hash_missing")
+    if expected_hash and manifest_hash != expected_hash:
+        reasons.append(
+            f"configured_manifest_hash_mismatch:{expected_hash}:{manifest_hash}"
+        )
+
+    return {
+        "candidate_id": candidate_id,
+        "activated": not reasons,
+        "configured_status": configured_status,
+        "immutable_manifest_status": immutable_status,
+        "status_source": "experiments.frozen_candidates.candidates[].status",
+        "expected_manifest_hash": expected_hash,
+        "manifest_hash": manifest_hash,
+        "manifest_hash_matches_config": bool(
+            not expected_hash or manifest_hash == expected_hash
+        ),
+        "reasons": reasons,
+    }
 
 
 def _profile_component(

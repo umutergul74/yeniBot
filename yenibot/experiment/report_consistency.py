@@ -141,6 +141,8 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
     readiness = _read_json(path / "future_oos_readiness.json")
     replacement = _read_json(path / "replacement_candidate_fit.json")
     frozen = _read_json(path / "frozen_candidate_manifest.json")
+    failure_summary = _read_json(path / "future_oos_failure_summary.json")
+    candidate_plan = _read_csv(path / "future_oos_candidate_plan.csv")
     scorecard = _read_csv(path / "model_performance_scorecard.csv")
     missing_selected = _read_csv(path / "missing_selected_profiles.csv")
     selection = _read_csv(path / "experiment_selection.csv")
@@ -244,6 +246,201 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
             observed=f"blocker={frozen_missing}; manifest_available={frozen.get('available')}",
         )
     )
+
+    anchor_values = {
+        "frozen_manifest": str(frozen.get("anchor_data_end") or ""),
+        "preflight": str(
+            (preflight.get("primary_candidate", {}) or {}).get("anchor_data_end")
+            or ""
+        ),
+        "readiness": str(readiness.get("anchor_data_end") or ""),
+    }
+    unique_anchors = _unique_nonempty(anchor_values)
+    if len(unique_anchors) >= 1 and sum(bool(value) for value in anchor_values.values()) >= 2:
+        rows.append(
+            _row(
+                check="future_oos_anchor_consistency",
+                passed=len(unique_anchors) == 1,
+                severity="error",
+                expected="manifest, preflight, and readiness use one active anchor",
+                observed=json.dumps(anchor_values, sort_keys=True),
+            )
+        )
+
+    if {"new_labeled_rows", "min_rows", "min_rows_remaining"}.issubset(readiness):
+        observed_rows = int(readiness.get("new_labeled_rows", 0) or 0)
+        min_rows = int(readiness.get("min_rows", 0) or 0)
+        remaining = int(readiness.get("min_rows_remaining", 0) or 0)
+        expected_remaining = max(0, min_rows - observed_rows)
+        rows.append(
+            _row(
+                check="future_oos_remaining_rows_arithmetic",
+                passed=remaining == expected_remaining,
+                severity="error",
+                expected=f"min_rows_remaining={expected_remaining}",
+                observed=(
+                    f"new_labeled_rows={observed_rows}; min_rows={min_rows}; "
+                    f"min_rows_remaining={remaining}"
+                ),
+            )
+        )
+
+    if (
+        not candidate_plan.empty
+        and "min_new_bars_remaining" in candidate_plan.columns
+        and "min_rows_remaining" in readiness
+    ):
+        plan_remaining = set(
+            pd.to_numeric(
+                candidate_plan["min_new_bars_remaining"],
+                errors="coerce",
+            ).dropna().astype(int)
+        )
+        expected_remaining = int(readiness.get("min_rows_remaining", 0) or 0)
+        rows.append(
+            _row(
+                check="candidate_plan_matches_future_oos_readiness",
+                passed=plan_remaining == {expected_remaining},
+                severity="error",
+                expected=f"all plan rows show {expected_remaining} rows remaining",
+                observed=str(sorted(plan_remaining)),
+            )
+        )
+
+    if (
+        not candidate_plan.empty
+        and readiness.get("anchor_data_end")
+        and readiness.get("min_rows") is not None
+    ):
+        expected_anchor = pd.to_datetime(
+            readiness["anchor_data_end"],
+            utc=True,
+        )
+        expected_plan_ready = expected_anchor + pd.Timedelta(
+            hours=int(readiness.get("min_rows", 0) or 0)
+        )
+        if "anchor_data_end" in candidate_plan.columns:
+            plan_anchors = pd.to_datetime(
+                candidate_plan["anchor_data_end"],
+                utc=True,
+                errors="coerce",
+            ).dropna()
+            anchor_passed = bool(
+                len(plan_anchors) == len(candidate_plan)
+                and plan_anchors.eq(expected_anchor).all()
+            )
+            observed_plan_anchors = sorted(
+                {value.isoformat() for value in plan_anchors}
+            )
+        else:
+            anchor_passed = False
+            observed_plan_anchors = ["missing_anchor_data_end_column"]
+        rows.append(
+            _row(
+                check="candidate_plan_active_anchor_consistency",
+                passed=anchor_passed,
+                severity="error",
+                expected=expected_anchor.isoformat(),
+                observed=str(observed_plan_anchors),
+            )
+        )
+
+        if "min_ready_at" in candidate_plan.columns:
+            plan_ready_dates = pd.to_datetime(
+                candidate_plan["min_ready_at"],
+                utc=True,
+                errors="coerce",
+            ).dropna()
+            ready_date_passed = bool(
+                len(plan_ready_dates) == len(candidate_plan)
+                and plan_ready_dates.eq(expected_plan_ready).all()
+            )
+            observed_plan_ready = sorted(
+                {value.isoformat() for value in plan_ready_dates}
+            )
+        else:
+            ready_date_passed = False
+            observed_plan_ready = ["missing_min_ready_at_column"]
+        rows.append(
+            _row(
+                check="candidate_plan_min_ready_date_consistency",
+                passed=ready_date_passed,
+                severity="error",
+                expected=expected_plan_ready.isoformat(),
+                observed=str(observed_plan_ready),
+            )
+        )
+
+    if readiness.get("anchor_data_end") and readiness.get("min_ready_at"):
+        try:
+            anchor_ts = pd.to_datetime(readiness["anchor_data_end"], utc=True)
+            expected_min_ready = anchor_ts + pd.Timedelta(
+                hours=int(readiness.get("min_rows", 0) or 0)
+            )
+            reported_min_ready = pd.to_datetime(
+                readiness["min_ready_at"],
+                utc=True,
+            )
+            date_passed = expected_min_ready == reported_min_ready
+        except (TypeError, ValueError):
+            expected_min_ready = "valid timestamp"
+            reported_min_ready = readiness.get("min_ready_at")
+            date_passed = False
+        rows.append(
+            _row(
+                check="future_oos_min_ready_date_arithmetic",
+                passed=date_passed,
+                severity="error",
+                expected=str(expected_min_ready),
+                observed=str(reported_min_ready),
+            )
+        )
+
+    if readiness.get("anchor_data_end") and readiness.get("min_raw_data_ready_at"):
+        try:
+            anchor_ts = pd.to_datetime(readiness["anchor_data_end"], utc=True)
+            expected_raw_ready = anchor_ts + pd.Timedelta(
+                hours=(
+                    int(readiness.get("min_rows", 0) or 0)
+                    + int(readiness.get("label_maturity_horizon_bars", 0) or 0)
+                )
+            )
+            reported_raw_ready = pd.to_datetime(
+                readiness["min_raw_data_ready_at"],
+                utc=True,
+            )
+            raw_date_passed = expected_raw_ready == reported_raw_ready
+        except (TypeError, ValueError):
+            expected_raw_ready = "valid timestamp"
+            reported_raw_ready = readiness.get("min_raw_data_ready_at")
+            raw_date_passed = False
+        rows.append(
+            _row(
+                check="future_oos_raw_data_ready_date_arithmetic",
+                passed=raw_date_passed,
+                severity="error",
+                expected=str(expected_raw_ready),
+                observed=str(reported_raw_ready),
+            )
+        )
+
+    activation = readiness.get("primary_candidate_activation", {}) or {}
+    placeholder_note = str(failure_summary.get("note") or "").lower()
+    activation_valid = bool(activation.get("activated", False)) or bool(
+        frozen_available and preflight.get("invariants_passed", False)
+    )
+    if activation_valid and not bool(
+        readiness.get("evaluation_completed", False)
+    ):
+        rows.append(
+            _row(
+                check="active_candidate_placeholder_wording",
+                passed="no active hash-pinned" not in placeholder_note,
+                severity="error",
+                expected="placeholder acknowledges active candidate waiting state",
+                observed=str(failure_summary.get("note") or ""),
+            )
+        )
 
     rows.append(
         _row(

@@ -11,6 +11,7 @@ from sklearn.metrics import average_precision_score, f1_score, precision_score, 
 
 from yenibot.experiment.common import _cfg, _rank_ic_for_frame, _table_markdown, _write_json
 from yenibot.experiment.frozen import (
+    frozen_manifest_activation_state,
     frozen_manifest_source_run_dir,
     verify_frozen_manifest_artifacts,
 )
@@ -283,6 +284,22 @@ _FUTURE_OOS_PREDICTION_COLUMNS = [
 def _future_oos_placeholder_summary(status: dict[str, Any]) -> dict[str, Any]:
     """Return an explicit non-evaluation summary for paused or unavailable OOS."""
 
+    activation = status.get("primary_candidate_activation", {}) or {}
+    if bool(activation.get("activated", False)):
+        note = (
+            "The hash-pinned frozen candidate has a valid activation state. "
+            "Prediction-only scoring has not run because the Future-OOS window "
+            "is still waiting for mature labeled rows or a preflight/integrity "
+            "invariant is blocking it."
+        )
+    else:
+        reasons = list(activation.get("reasons", []) or [])
+        note = (
+            "Future-OOS prediction reports are placeholders because the configured "
+            "frozen candidate is not active or did not pass activation/integrity checks."
+        )
+        if reasons:
+            note += f" Activation reasons: {reasons}."
     return {
         "status": str(status.get("evaluation_state", "not_applicable")),
         "candidate_id": str(status.get("primary_candidate_id", "")),
@@ -295,10 +312,8 @@ def _future_oos_placeholder_summary(status: dict[str, Any]) -> dict[str, Any]:
         "required_candidate_errors": list(status.get("required_candidate_errors", []) or []),
         "optional_candidate_warnings": list(status.get("optional_candidate_warnings", []) or []),
         "artifact_integrity_errors": list(status.get("artifact_integrity_errors", []) or []),
-        "note": (
-            "Future-OOS prediction reports are placeholders because no active "
-            "hash-pinned frozen candidate was available for prediction-only scoring."
-        ),
+        "primary_candidate_activation": activation,
+        "note": note,
     }
 
 
@@ -354,6 +369,9 @@ def evaluate_future_oos(
     primary_id = str(frozen_cfg.get("primary_candidate_id", ""))
     min_rows = int(future_cfg.get("min_rows", 720))
     preferred_rows = int(future_cfg.get("preferred_rows", 2160))
+    label_maturity_horizon = int(
+        _cfg(config, ["labeling", "max_holding_bars"], 0) or 0
+    )
     if not bool(future_cfg.get("enabled", False)) or not anchor_value:
         evaluation = pd.DataFrame(
             columns=["candidate_id", "rank_ic", "evidence_passed"]
@@ -361,12 +379,17 @@ def evaluate_future_oos(
         status = {
             "enabled": bool(future_cfg.get("enabled", False)),
             "anchor_data_end": None,
+            "min_ready_at": None,
+            "preferred_ready_at": None,
+            "min_raw_data_ready_at": None,
+            "preferred_raw_data_ready_at": None,
             "latest_available_data_end": None,
             "new_labeled_rows": 0,
             "min_rows": min_rows,
             "preferred_rows": preferred_rows,
             "min_rows_remaining": None,
             "preferred_rows_remaining": None,
+            "window_data_ready": False,
             "ready_for_evaluation": False,
             "evaluation_completed": False,
             "evaluation_state": "protocol_disabled",
@@ -389,6 +412,11 @@ def evaluate_future_oos(
             "artifact_integrity_errors": [],
             "required_candidate_errors": [],
             "optional_candidate_warnings": [],
+            "primary_candidate_activation": {
+                "candidate_id": primary_id,
+                "activated": False,
+                "reasons": ["future_oos_protocol_disabled_or_missing_anchor"],
+            },
         }
         evaluation.to_csv(report_path / "future_oos_evaluation.csv", index=False)
         (report_path / "future_oos_evaluation.md").write_text(
@@ -432,6 +460,21 @@ def evaluate_future_oos(
             if str(manifest.get("candidate_id", "")) == primary_id
         ),
         None,
+    )
+    primary_activation = (
+        frozen_manifest_activation_state(primary_manifest, config)
+        if primary_manifest is not None
+        else {
+            "candidate_id": primary_id,
+            "activated": False,
+            "configured_status": "",
+            "immutable_manifest_status": "",
+            "status_source": "experiments.frozen_candidates.candidates[].status",
+            "expected_manifest_hash": "",
+            "manifest_hash": "",
+            "manifest_hash_matches_config": False,
+            "reasons": [f"missing_primary_candidate_manifest:{primary_id}"],
+        }
     )
     if primary_manifest is None:
         required_candidate_errors.append(f"missing_primary_candidate_manifest:{primary_id}")
@@ -480,11 +523,16 @@ def evaluate_future_oos(
             required = bool(
                 manifest.get("required_for_evaluation", candidate_id == primary_id)
             )
-            candidate_status = str(manifest.get("candidate_status", "")).lower()
-            if "pending" in candidate_status:
-                optional_candidate_warnings.append(
-                    f"{candidate_id}:candidate_not_activated_for_future_oos"
-                )
+            activation = frozen_manifest_activation_state(manifest, config)
+            if not bool(activation["activated"]):
+                messages = [
+                    f"{candidate_id}:candidate_not_activated_for_future_oos:{reason}"
+                    for reason in activation["reasons"]
+                ] or [f"{candidate_id}:candidate_not_activated_for_future_oos"]
+                if required:
+                    required_candidate_errors.extend(messages)
+                else:
+                    optional_candidate_warnings.extend(messages)
                 continue
             integrity_errors = verify_frozen_manifest_artifacts(manifest, run_dir=run_path)
             if integrity_errors:
@@ -600,19 +648,42 @@ def evaluate_future_oos(
     status = {
         "enabled": bool(future_cfg.get("enabled", False)),
         "anchor_data_end": anchor.isoformat(),
+        "min_ready_at": (
+            anchor + pd.Timedelta(hours=min_rows)
+        ).isoformat(),
+        "preferred_ready_at": (
+            anchor + pd.Timedelta(hours=preferred_rows)
+        ).isoformat(),
+        "min_raw_data_ready_at": (
+            anchor + pd.Timedelta(hours=min_rows + label_maturity_horizon)
+        ).isoformat(),
+        "preferred_raw_data_ready_at": (
+            anchor + pd.Timedelta(hours=preferred_rows + label_maturity_horizon)
+        ).isoformat(),
+        "label_maturity_horizon_bars": label_maturity_horizon,
         "latest_available_data_end": latest.isoformat() if latest is not None else None,
         "new_labeled_rows": future_count,
         "min_rows": min_rows,
         "preferred_rows": preferred_rows,
         "min_rows_remaining": max(0, min_rows - future_count),
         "preferred_rows_remaining": max(0, preferred_rows - future_count),
-        "ready_for_evaluation": ready,
+        "window_data_ready": ready,
+        "ready_for_evaluation": bool(
+            ready
+            and not preflight_errors
+            and bool(primary_activation.get("activated", False))
+            and not required_candidate_errors
+        ),
         "evaluation_completed": evaluation_completed,
         "evaluation_state": evaluation_state,
         "primary_candidate_id": primary_id,
         "primary_candidate_passed": primary_passed,
         "active_charter_version": charter_active,
-        "promotion_allowed": bool(primary_passed),
+        "promotion_allowed": bool(
+            evaluation_state == "evaluated_passed"
+            and primary_passed is True
+            and not required_candidate_errors
+        ),
         "promotion_block_reason": promotion_block_reason,
         "fit_operations_performed": 0,
         "preflight_state": (
@@ -626,6 +697,8 @@ def evaluate_future_oos(
         "artifact_integrity_errors": artifact_integrity_errors,
         "required_candidate_errors": required_candidate_errors,
         "optional_candidate_warnings": optional_candidate_warnings,
+        "primary_candidate_activation": primary_activation,
+        "state_source": "active_frozen_candidate_and_mature_labeled_rows",
     }
     evaluation.to_csv(report_path / "future_oos_evaluation.csv", index=False)
     markdown = _table_markdown("Future OOS Evaluation", evaluation)

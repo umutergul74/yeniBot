@@ -303,6 +303,21 @@ def test_publish_replacement_reports_uses_pinned_config_when_run_fit_is_historic
     source = tmp_path / "run"
     target = tmp_path / "reports"
     source.mkdir()
+    historical_run = tmp_path / "source-run"
+    historical_run.mkdir()
+    (historical_run / "replacement_candidate_fit.json").write_text(
+        json.dumps(
+            {
+                "candidate_id": "control_recent3_equal_v2",
+                "policy": "equal_recent_k",
+                "policy_name": "recent_3_equal",
+                "selection_track": "balanced_noninferiority",
+                "selected_model_folds": [7, 8, 9],
+                "selection_evidence_hash": "historical-evidence",
+            }
+        ),
+        encoding="utf-8",
+    )
     config = {
         "experiments": {
             "frozen_candidates": {
@@ -335,6 +350,10 @@ def test_publish_replacement_reports_uses_pinned_config_when_run_fit_is_historic
     assert payload["candidate_id"] == "control_recent3_equal_v2"
     assert payload["source_run_id"] == "source-run"
     assert payload["manifest_pin_required"] is False
+    assert payload["historical_fit_metadata_recovered"] is True
+    assert payload["policy_name"] == "recent_3_equal"
+    assert payload["selected_model_folds"] == [7, 8, 9]
+    assert payload["selection_evidence_hash"] == "historical-evidence"
     patch = json.loads(
         (target / "replacement_preregistration_patch.json").read_text(
             encoding="utf-8"

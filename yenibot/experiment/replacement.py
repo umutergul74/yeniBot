@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from yenibot.experiment.common import _cfg, _hash_payload, _write_json
+from yenibot.experiment.common import _cfg, _hash_payload, _slug, _write_json
 from yenibot.experiment.configuration import profile_config
 from yenibot.experiment.holdout import _predict_holdout_for_profile
 from yenibot.experiment.rolling_research import (
@@ -438,7 +438,29 @@ def publish_replacement_candidate_reports(
             and str(primary.get("status") or "").startswith("manifest_pinned")
         )
         if pinned:
+            historical: dict[str, Any] = {}
+            source_run_id = str(primary.get("source_run_id") or "").strip()
+            historical_paths = [
+                source.parent / source_run_id / "replacement_candidate_fit.json",
+                (
+                    source.parent
+                    / source_run_id
+                    / _slug(str(primary.get("profile") or ""))
+                    / str(primary.get("fold_scope") or "full")
+                    / "replacement_candidate_fit.json"
+                ),
+            ]
+            for historical_path in historical_paths:
+                if not historical_path.exists():
+                    continue
+                candidate_payload = json.loads(
+                    historical_path.read_text(encoding="utf-8")
+                )
+                if str(candidate_payload.get("candidate_id") or "") == primary_id:
+                    historical = candidate_payload
+                    break
             payload = {
+                **historical,
                 "available": True,
                 "enabled": False,
                 "status": "manifest_pinned_existing_candidate",
@@ -454,6 +476,7 @@ def publish_replacement_candidate_reports(
                 "promotion_allowed": False,
                 "future_oos_fit_operations_performed": 0,
                 "next_action": "wait_for_future_oos_preflight_and_mature_labeled_rows",
+                "historical_fit_metadata_recovered": bool(historical),
             }
             patch = {
                 "status": "manifest_already_pinned",

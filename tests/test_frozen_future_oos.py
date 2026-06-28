@@ -12,6 +12,7 @@ from yenibot.experiment.charter import write_validation_charter_status
 from yenibot.experiment.common import _hash_payload
 from yenibot.experiment.frozen import (
     freeze_candidate_manifests,
+    frozen_manifest_activation_state,
     verify_frozen_manifest_artifacts,
 )
 from yenibot.experiment.future_oos import evaluate_future_oos
@@ -549,11 +550,12 @@ def _preflight_fixture(
     *,
     fresh_rows: int,
     include_feature: bool = True,
+    min_rows: int = 20,
 ) -> tuple[dict, Path, list[dict]]:
     checkpoint_dir = tmp_path / "checkpoints"
     source_run = checkpoint_dir / "experiments" / "source_run"
     _, entry = _fake_scope(source_run)
-    config = _config(tmp_path, min_rows=20)
+    config = _config(tmp_path, min_rows=min_rows)
     candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
     candidate["source_run_id"] = "source_run"
     candidate["threshold"] = {
@@ -662,6 +664,117 @@ def test_future_oos_preflight_reports_ready_without_refitting(tmp_path: Path) ->
     assert result["fit_operations_performed"] == 0
 
 
+@pytest.mark.parametrize(
+    ("fresh_rows", "expected_ready", "expected_remaining"),
+    [
+        (719, False, 1),
+        (720, True, 0),
+        (721, True, 0),
+    ],
+)
+def test_future_oos_preflight_uses_exact_720_row_boundary(
+    tmp_path: Path,
+    fresh_rows: int,
+    expected_ready: bool,
+    expected_remaining: int,
+) -> None:
+    config, checkpoint_dir, manifests = _preflight_fixture(
+        tmp_path,
+        fresh_rows=fresh_rows,
+        min_rows=720,
+    )
+
+    result = future_oos_preflight(
+        checkpoint_dir=checkpoint_dir,
+        config=config,
+        manifests=manifests,
+    )
+
+    assert result["data"]["fresh_labeled_rows"] == fresh_rows
+    assert result["data"]["min_rows_remaining"] == expected_remaining
+    assert result["ready_for_evaluation"] is expected_ready
+    assert result["state"] == (
+        "ready_prediction_only"
+        if expected_ready
+        else "waiting_for_mature_labeled_rows"
+    )
+
+
+def test_immutable_pending_status_does_not_override_pinned_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path, min_rows=20)
+    candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
+    candidate["manifest_candidate_status"] = "preregistered_manifest_pin_pending"
+    candidate["status"] = "manifest_pinned_awaiting_future_oos"
+    candidate["expected_manifest_hash"] = "frozen"
+    data_dir = Path(config["paths"]["data_dir"]) / "processed"
+    data_dir.mkdir(parents=True)
+    timestamps = pd.date_range("2024-01-01", periods=80, freq="h", tz="UTC")
+    pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "feature": np.arange(80, dtype=float),
+            "label": np.arange(80) % 2,
+            "fwd_return_10h": np.where(np.arange(80) % 2, 0.01, -0.01),
+        }
+    ).to_parquet(data_dir / "labeled_1h.parquet", index=False)
+    future_timestamps = timestamps[timestamps > pd.Timestamp("2024-01-02", tz="UTC")]
+    predictions = pd.DataFrame(
+        {
+            "timestamp": future_timestamps,
+            "prob_long": np.where(
+                np.arange(len(future_timestamps)) % 2,
+                0.9,
+                0.1,
+            ),
+            "label": np.arange(len(future_timestamps)) % 2,
+            "forward_return": np.where(
+                np.arange(len(future_timestamps)) % 2,
+                0.01,
+                -0.01,
+            ),
+        }
+    )
+    manifest = {
+        "candidate_id": "control_v1",
+        "candidate_type": "profile",
+        "candidate_status": "preregistered_manifest_pin_pending",
+        "profiles": ["control"],
+        "components": [{}],
+        "available": True,
+        "required_for_evaluation": True,
+        "threshold": {"value": 0.55, "source": "validation_threshold"},
+        "manifest_hash": "frozen",
+    }
+    monkeypatch.setattr(
+        future_oos_module,
+        "verify_frozen_manifest_artifacts",
+        lambda *_, **__: [],
+    )
+    monkeypatch.setattr(
+        future_oos_module,
+        "_profile_predictions",
+        lambda **_: {"control": predictions.copy()},
+    )
+
+    activation = frozen_manifest_activation_state(manifest, config)
+    evaluation, status = evaluate_future_oos(
+        run_dir=tmp_path / "run",
+        report_dir=tmp_path / "report",
+        config=config,
+        manifests=[manifest],
+    )
+
+    assert activation["activated"] is True
+    assert activation["immutable_manifest_status"].endswith("pin_pending")
+    assert activation["configured_status"] == "manifest_pinned_awaiting_future_oos"
+    assert status["evaluation_completed"] is True
+    assert status["required_candidate_errors"] == []
+    assert evaluation["candidate_id"].tolist() == ["control_v1"]
+
+
 def test_future_oos_preflight_fails_closed_on_missing_frozen_feature(tmp_path: Path) -> None:
     config, checkpoint_dir, manifests = _preflight_fixture(
         tmp_path,
@@ -728,6 +841,8 @@ def test_future_oos_evaluator_does_not_load_models_when_preflight_fails(
 
     assert evaluation.empty
     assert status["evaluation_state"] == "blocked_required_candidate"
+    assert status["ready_for_evaluation"] is False
+    assert status["promotion_allowed"] is False
     assert status["preflight_invariants_passed"] is False
     assert status["fit_operations_performed"] == 0
     assert "preflight:artifact_integrity" in status["required_candidate_errors"]

@@ -686,6 +686,115 @@ def test_future_oos_candidate_plan_marks_active_frozen_candidate_as_preregistere
     assert candidate["evaluation_status"] == "wait_for_future_oos"
 
 
+def test_active_frozen_candidate_overrides_stale_legacy_monitor_state() -> None:
+    config = {
+        "features": {
+            "active_profile": "control",
+            "profiles": {"control": {"include_patterns": ["*"], "exclude_patterns": []}},
+        },
+        "labeling": {"max_holding_bars": 10},
+        "experiments": {
+            "control_profile": "control",
+            "candidate_profiles": [],
+            "always_full_profiles": ["control"],
+            "holdout": {
+                "holdout_data_end": "2026-05-13 08:00:00+00:00",
+                "latest_available_data_end": "2026-06-26 02:00:00+00:00",
+            },
+            "policy_review": {
+                "enabled": True,
+                "status": "failed_clean_holdout_review",
+                "future_oos_candidates": ["control"],
+                "future_oos_monitor": {
+                    "enabled": False,
+                    "anchor_run_id": "old_anchor",
+                    "anchor_data_end": "2026-05-13 08:00:00+00:00",
+                    "min_new_bars": 720,
+                    "preferred_new_bars": 2160,
+                },
+            },
+            "frozen_candidates": {
+                "enabled": True,
+                "anchor_run_id": "new_anchor",
+                "anchor_data_end": "2026-06-13T01:00:00+00:00",
+                "primary_candidate_id": "control",
+                "candidates": [
+                    {
+                        "candidate_id": "control",
+                        "status": "manifest_pinned_awaiting_future_oos",
+                        "manifest_candidate_status": "preregistered_manifest_pin_pending",
+                        "expected_manifest_hash": "a" * 64,
+                        "anchor_data_end": "2026-06-13T01:00:00+00:00",
+                    }
+                ],
+            },
+            "future_oos_validation": {
+                "enabled": True,
+                "min_rows": 720,
+                "preferred_rows": 2160,
+            },
+        },
+    }
+    readiness = {
+        "anchor_data_end": "2026-06-13T01:00:00+00:00",
+        "latest_available_data_end": "2026-06-26T02:00:00+00:00",
+        "new_labeled_rows": 313,
+        "min_rows": 720,
+        "preferred_rows": 2160,
+        "min_rows_remaining": 407,
+        "preferred_rows_remaining": 1847,
+        "ready_for_evaluation": False,
+        "evaluation_completed": False,
+        "primary_candidate_passed": None,
+    }
+    settings = experiment_settings(config)
+
+    guard = _experiment_policy_guard_frame(
+        settings,
+        config,
+        future_oos_readiness=readiness,
+    ).iloc[0]
+    plan = _future_oos_candidate_plan_frame(
+        settings,
+        config,
+        future_oos_readiness=readiness,
+    )
+    candidate = plan.loc[plan["stage"].eq("future_oos_candidate")].iloc[0]
+
+    assert guard["state_source"] == "active_frozen_candidate"
+    assert guard["anchor_run_id"] == "new_anchor"
+    assert guard["anchor_data_end"] == "2026-06-13T01:00:00+00:00"
+    assert guard["min_new_bars_remaining"] == 407
+    assert guard["min_ready_at"] == "2026-07-13 01:00:00+00:00"
+    assert guard["preferred_ready_at"] == "2026-09-11 01:00:00+00:00"
+    assert guard["min_raw_data_ready_at"] == "2026-07-13 11:00:00+00:00"
+    assert (
+        guard["preferred_raw_data_ready_at"]
+        == "2026-09-11 11:00:00+00:00"
+    )
+    assert candidate["min_new_bars_remaining"] == 407
+    assert candidate["evaluation_status"] == "wait_for_future_oos"
+    assert bool(candidate["promotion_allowed_now"]) is False
+
+    passed_plan = _future_oos_candidate_plan_frame(
+        settings,
+        config,
+        future_oos_readiness={
+            **readiness,
+            "new_labeled_rows": 720,
+            "min_rows_remaining": 0,
+            "ready_for_evaluation": True,
+            "evaluation_completed": True,
+            "primary_candidate_passed": True,
+        },
+    )
+    passed_candidate = passed_plan.loc[
+        passed_plan["stage"].eq("future_oos_candidate")
+    ].iloc[0]
+    assert passed_candidate["evaluation_status"] == "evaluated_passed"
+    assert bool(passed_candidate["promotion_allowed_now"]) is True
+
+
 def test_future_oos_candidate_plan_includes_replacement_fit_manifest_pin_candidate() -> None:
     config = {
         "features": {

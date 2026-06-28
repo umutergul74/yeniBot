@@ -1093,8 +1093,16 @@ def _write_frozen_policy_monitoring_plan(path: Path, frame: pd.DataFrame) -> Non
     )
     _write_json(path / "frozen_policy_monitoring_plan.json", {"rows": frame.to_dict(orient="records")})
 
-def _experiment_policy_guard_frame(settings: dict[str, Any], config: dict[str, Any]) -> pd.DataFrame:
-    guard = copy.deepcopy(settings.get("experiment_policy_guard") or _experiment_policy_guard(settings, config))
+def _experiment_policy_guard_frame(
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    future_oos_readiness: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    guard = _experiment_policy_guard(
+        settings,
+        config,
+        future_oos_readiness=future_oos_readiness,
+    )
     ready_at = _future_oos_ready_at_fields(guard)
     row = {
         "enabled": bool(guard.get("enabled", False)),
@@ -1113,11 +1121,23 @@ def _experiment_policy_guard_frame(settings: dict[str, Any], config: dict[str, A
         "preferred_new_bars_remaining": int(guard.get("preferred_new_bars_remaining", 0) or 0),
         "min_ready_at": ready_at["min_ready_at"],
         "preferred_ready_at": ready_at["preferred_ready_at"],
+        "min_raw_data_ready_at": ready_at["min_raw_data_ready_at"],
+        "preferred_raw_data_ready_at": ready_at["preferred_raw_data_ready_at"],
         "holdout_roll_forward_locked": bool(guard.get("holdout_roll_forward_locked", False)),
         "next_action": str(guard.get("next_action", "")),
         "anchor_run_id": str(guard.get("anchor_run_id", "")),
         "anchor_data_end": str(guard.get("anchor_data_end", "")),
         "latest_available_data_end": str(guard.get("latest_available_data_end", "")),
+        "state_source": str(guard.get("state_source", "")),
+        "readiness_basis": str(guard.get("readiness_basis", "")),
+        "candidate_activation_valid": bool(
+            guard.get("candidate_activation_valid", False)
+        ),
+        "configured_candidate_status": str(
+            guard.get("configured_candidate_status", "")
+        ),
+        "evaluation_completed": bool(guard.get("evaluation_completed", False)),
+        "primary_candidate_passed": guard.get("primary_candidate_passed"),
     }
     return pd.DataFrame([row])
 
@@ -1144,9 +1164,14 @@ def _future_oos_candidate_plan_frame(
     config: dict[str, Any],
     payoff_policy_robustness_summary: pd.DataFrame | None = None,
     replacement_candidate_fit: dict[str, Any] | None = None,
+    future_oos_readiness: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     policy_review = _cfg(config, ["experiments", "policy_review"], {}) or {}
-    guard = settings.get("experiment_policy_guard", {}) or _experiment_policy_guard(settings, config)
+    guard = _experiment_policy_guard(
+        settings,
+        config,
+        future_oos_readiness=future_oos_readiness,
+    )
     ready_at = _future_oos_ready_at_fields(guard)
     profiles_cfg = _cfg(config, ["features", "profiles"], {}) or {}
     weighted_blends = _cfg(config, ["experiments", "profile_blends", "weighted"], []) or []
@@ -1260,17 +1285,24 @@ def _future_oos_candidate_plan_frame(
             evaluation_status = "retired_do_not_evaluate"
         elif stage.startswith("future_oos") and not active_preregistration:
             evaluation_status = "not_preregistered"
+        elif bool(guard.get("evaluation_completed", False)):
+            evaluation_status = (
+                "evaluated_passed"
+                if guard.get("primary_candidate_passed") is True
+                else "evaluated_failed"
+            )
         elif not bool(guard.get("future_oos_ready", False)):
             evaluation_status = "wait_for_future_oos"
         else:
-            evaluation_status = "ready_for_future_oos_review"
+            evaluation_status = "ready_for_prediction_only_evaluation"
         if candidate_status_override:
             candidate_status = candidate_status_override
         if evaluation_status_override:
             evaluation_status = evaluation_status_override
         promotion_allowed = (
             row_preregistered
-            and bool(guard.get("future_oos_ready", False))
+            and bool(guard.get("evaluation_completed", False))
+            and guard.get("primary_candidate_passed") is True
             and bool(all_required_allowed)
             and not is_retired
         )
@@ -1292,6 +1324,14 @@ def _future_oos_candidate_plan_frame(
                 "min_new_bars_remaining": int(guard.get("min_new_bars_remaining", 0) or 0),
                 "min_ready_at": ready_at["min_ready_at"],
                 "preferred_ready_at": ready_at["preferred_ready_at"],
+                "min_raw_data_ready_at": ready_at["min_raw_data_ready_at"],
+                "preferred_raw_data_ready_at": ready_at[
+                    "preferred_raw_data_ready_at"
+                ],
+                "anchor_run_id": str(guard.get("anchor_run_id", "")),
+                "anchor_data_end": str(guard.get("anchor_data_end", "")),
+                "state_source": str(guard.get("state_source", "")),
+                "readiness_basis": str(guard.get("readiness_basis", "")),
                 "action": str(guard.get("action", "")),
                 "evaluation_status": evaluation_status,
                 "promotion_allowed_now": promotion_allowed,
@@ -1357,11 +1397,18 @@ def _future_oos_candidate_plan_frame(
                 eval_override = "manifest_hash_pin_required"
             elif active_preregistration:
                 status_override = "pre_registered_future_oos_candidate"
-                eval_override = (
-                    "wait_for_future_oos"
-                    if not bool(guard.get("future_oos_ready", False))
-                    else "ready_for_future_oos_review"
-                )
+                if bool(guard.get("evaluation_completed", False)):
+                    eval_override = (
+                        "evaluated_passed"
+                        if guard.get("primary_candidate_passed") is True
+                        else "evaluated_failed"
+                    )
+                else:
+                    eval_override = (
+                        "wait_for_future_oos"
+                        if not bool(guard.get("future_oos_ready", False))
+                        else "ready_for_prediction_only_evaluation"
+                    )
             elif fit_status == "fit_complete_manifest_pin_required":
                 status_override = "replacement_fit_complete_manifest_pin_required"
                 eval_override = "manifest_hash_pin_required"
@@ -1379,7 +1426,13 @@ def _future_oos_candidate_plan_frame(
                 required_profiles=[replacement_profile],
                 note=(
                     "Replacement candidate selected from historical walk-forward CV. "
-                    "It requires an explicit frozen manifest hash pin before future-OOS evaluation."
+                    + (
+                        "Its manifest hash is pinned and it is waiting for the "
+                        "pre-registered future-OOS window."
+                        if active_preregistration
+                        and "pin_pending" not in frozen_spec_status
+                        else "It requires an explicit frozen manifest hash pin before future-OOS evaluation."
+                    )
                 ),
                 policy_name=str(
                     replacement_fit.get("policy_name")
@@ -1398,7 +1451,9 @@ def _future_oos_candidate_plan_frame(
                 selection_source="historical_walk_forward_recency_research",
                 candidate_status_override=status_override,
                 evaluation_status_override=eval_override,
-                promotion_allowed_override=False,
+                promotion_allowed_override=(
+                    None if active_preregistration else False
+                ),
             )
 
     future_items = [str(item) for item in policy_review.get("future_oos_candidates", []) or []]
