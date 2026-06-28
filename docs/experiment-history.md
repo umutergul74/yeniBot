@@ -40,19 +40,18 @@ candidate is built from its pre-anchor fold ensemble.
 | Broad v1 event weighting | Mean rank across 20 columns almost never crossed the event threshold, making the component a no-op |
 | Corrected order-flow event weighting v2 | Weights were active, but paired triage IC wins occurred in only 4/12 folds while dispersion, PRAUC, worst folds, and top-decile lift worsened |
 | Fixed-sum auxiliary return head | Improved mean IC, PRAUC, and top-decile lift, but worsened dispersion and official F1; auxiliary and primary rankings were highly correlated |
+| Primary-preserving multitask projection | Only 1.8% of batches conflicted; projection did not improve dispersion, F1, or bad-fold payoff |
 
-## Active Mechanism Experiment
+## Research Freeze
 
-Bundle `20260628_093830` closed fixed-sum auxiliary-return training. The target
-transferred useful ranking and top-score information, but naive gradient
-addition failed to protect F1 and bad-fold behavior.
+Bundle `20260628_155057` closed the final preregistered multitask follow-up.
+Gradient conflict was rare and projection remained non-promotable.
 
-The only active candidate is
-`baseline_stable_multitask_return_head_conflict_projected`. It uses the same
-return target and fixed weight as the completed experiment, leaves the primary
-gradient untouched, and projects only negatively aligned shared auxiliary
-gradients. No weight search, symmetric task balancing, or second auxiliary
-target is active.
+No active historical profile candidate remains. The retained control passes
+the active historical evidence charter. Model research stays frozen until the
+pinned `control_recent3_equal_v2` candidate completes its fresh, no-refit
+future-OOS evaluation. A failed outcome may reopen research with a new
+mechanism; a passed outcome opens Phase 2 implementation.
 
 ## Governance Rule
 

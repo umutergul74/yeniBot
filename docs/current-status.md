@@ -8,7 +8,7 @@ The retained TCN+GRU control passes the active historical walk-forward evidence
 charter, but Phase 2 remains blocked. Historical research and frozen future-OOS
 confirmation are separate tracks:
 
-- Historical CV research may continue without changing a frozen candidate.
+- Historical CV model research is frozen; no active candidate remains.
 - Frozen future-OOS candidates must remain prediction-only and immutable.
 - A historical candidate cannot be promoted from the rolling holdout.
 
@@ -17,71 +17,56 @@ confirmation are separate tracks:
 Profile:
 `baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility`
 
-Latest full-CV run: `20260628_093830`
+Latest full-CV run: `20260628_155057`
 
 | Metric | Result |
 |---|---:|
-| Mean Rank IC | `0.0739` |
-| Rank IC std, monitor only | `0.0690` |
-| Positive-IC folds | `86.8%` |
-| Selected-threshold F1 | `0.4681` |
-| PRAUC lift vs prevalence | `1.1203` |
-| Precision lift vs prevalence | `1.0951` |
-| Top-decile label lift | `1.1219` |
-| Top-decile forward return | `0.00299` |
-| Worst-five mean Rank IC | `-0.0350` |
+| Mean Rank IC | `0.0748` |
+| Rank IC std, monitor only | `0.0832` |
+| Positive-IC folds | `76.3%` |
+| Official-threshold F1 | `0.4377` |
+| PRAUC lift vs prevalence | `1.1448` |
+| Precision lift vs prevalence | `1.0847` |
+| Top-decile label lift | `1.1321` |
+| Top-decile forward return | `0.00286` |
+| Worst-five mean Rank IC | `-0.0549` |
 
 The model has useful ranking and payoff evidence. Its raw sigmoid output is not
 a calibrated probability: raw and validation-only calibrated Brier skill remain
 below climatology. Phase 2 must treat the output as a ranking score unless a
 future frozen evaluation proves probability quality.
 
-## Latest Mechanism Result
+## Final Mechanism Result
 
-Bundle `20260628_093830` completed the fixed-sum auxiliary-return experiment.
-Against the paired 12-fold triage control it:
+Bundle `20260628_155057` completed primary-preserving multitask projection:
 
-- improved mean Rank IC from `0.0518` to `0.0602`
-- improved PRAUC from `0.3591` to `0.3652`
-- improved global top-decile lift from `1.2276` to `1.2705`
-- improved Rank IC in 7 of 12 folds
+- only `1.8%` of 6,400 batches had conflicting shared gradients
+- mean primary/auxiliary gradient cosine was `+0.61`
+- candidate mean IC improved from `0.0542` to `0.0606`
 
 It still failed the pre-registered promotion gates:
 
-- Rank IC std worsened from `0.0985` to `0.1032`
-- official F1 fell from `0.4557` to `0.4497`
-- bad-fold top-decile lift was only `0.6406`
-- the auxiliary and P(Long) rankings were `0.921` correlated
+- Rank IC std worsened from `0.1078` to `0.1086`
+- official F1 fell from `0.4423` to `0.4214`
+- positive top-decile-lift fold coverage fell from `58.3%` to `50%`
+- bad-fold top-decile lift remained only `0.7885`
 
-The target carries useful information, but fixed gradient summation does not
-protect the primary task in unstable periods. The fixed-sum profile is archived.
+Gradient interference is not the remaining instability mechanism. The
+auxiliary multitask family is closed.
 
-## Active Historical Experiment
+## Model Research State
 
-The only active candidate is
-`baseline_stable_multitask_return_head_conflict_projected`.
-
-It keeps the same auxiliary target and fixed weight `0.10`. The only change is
-shared-gradient handling:
-
-- the primary P(Long) gradient remains unchanged
-- aligned auxiliary gradients are retained
-- only a negatively aligned auxiliary component is projected away
-- conflict frequency, cosine before/after, and relative gradient norms are
-  persisted per fold
-
-Inference remains the original binary P(Long) output. No auxiliary-weight
-search or additional target is active.
-
-Seed audit remains enabled for seeds `42, 43, 44`, but every seed now uses the
-same eight temporally spaced folds instead of running all folds for seeds 43 and
-44.
+Historical model research is frozen. `candidate_profiles` is empty. The
+retained control passes every active historical model-evidence gate, including
+same-seed reproducibility, leakage, stationarity, aggregate Rank IC,
+classification skill, and top-score payoff. It is suitable for Phase 2
+backtest research only after frozen future-OOS confirmation passes.
 
 ## Frozen Future-OOS Track
 
 `control_recent3_equal_v2` remains pinned as historical frozen-candidate
 evidence. The latest diagnostics counted `313 / 720` mature labeled rows after
-its anchor. Research changes must not refit, replace, or tune that frozen
+its anchor. Model changes must not refit, replace, or tune that frozen
 candidate against its accumulating window.
 
 The failed June 13 candidate remains immutable historical evidence and cannot
@@ -89,14 +74,15 @@ be retested on the same window.
 
 ## Next Operator Run
 
-No data, feature, or label formula changed. Run:
+Do not run notebook 04. When at least 720 mature post-anchor rows are available:
 
 1. `git pull`
 2. Colab `Runtime -> Restart session`
-3. `04_training_walk_forward.ipynb`
-4. `05_diagnostics_validation.ipynb`
+3. `01_data_preparation.ipynb`
+4. `02_feature_engineering.ipynb`
+5. `03_labeling.ipynb`
+6. `05_diagnostics_validation.ipynb`
 
-Notebook 04 should train the full control, one 12-fold conflict-projected
-multitask triage candidate, and three eight-fold seed-audit scopes. At most one
-candidate may advance to full CV. Notebook 05 must include both auxiliary-task
-and multitask-gradient audits in the slim bundle.
+Notebook 05 performs prediction-only frozen evaluation. If it passes, Phase 2
+implementation may open from the reviewed design and entry checklist. If it
+fails, the failure becomes the only valid source for reopening model research.

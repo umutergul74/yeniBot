@@ -3120,9 +3120,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_multitask_return_head_conflict_projected",
-    ]
+    assert config["experiments"]["candidate_profiles"] == []
     multitask = config["features"]["profiles"][
         "baseline_stable_multitask_return_head_conflict_projected"
     ]
@@ -3144,6 +3142,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     rejected = config["experiments"]["experiment_memory"]["rejected_profiles"]
     assert "baseline_stable_orderflow_event_weighted_loss_v2" in rejected
     assert "baseline_stable_multitask_return_head_light" in rejected
+    assert "baseline_stable_multitask_return_head_conflict_projected" in rejected
     medium = config["features"]["profiles"]["baseline_stable_model_medium_capacity"]
     small = config["features"]["profiles"]["baseline_stable_model_small_capacity"]
     tcn_only = config["features"]["profiles"]["baseline_stable_model_tcn32_only"]
@@ -3301,7 +3300,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "primary_preserving_multitask_gradient_projection_preregistered"
+        "model_research_frozen_pending_future_oos"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
         "replacement_candidate_manifest_pinned_awaiting_future_oos"

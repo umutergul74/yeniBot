@@ -1,7 +1,7 @@
 # yeniBot
 
 [![Phase](https://img.shields.io/badge/phase-1%20model%20validation-16794b)](#current-status)
-[![Phase 2](https://img.shields.io/badge/phase%202-blocked%20after%20failed%20OOS-c47b13)](#current-status)
+[![Phase 2](https://img.shields.io/badge/phase%202-future%20OOS%20pending-c47b13)](#current-status)
 [![CI](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml/badge.svg)](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
 [![PyTorch](https://img.shields.io/badge/PyTorch-TCN%20%2B%20GRU-EE4C2C?logo=pytorch&logoColor=white)](yenibot/models/hybrid.py)
@@ -21,40 +21,34 @@ artifact-verified evidence for or against promotion.
 
 ## Current Status
 
-**Model evidence passes the active `v4_evidence` research charter. Phase 2 is
-still blocked.**
+**Model evidence passes the active `v4_evidence` research charter. Historical
+model research is frozen, while Phase 2 awaits one preregistered future-OOS
+confirmation.**
 
-The frozen primary candidate completed and failed its pre-registered future
-unseen out-of-sample evaluation. It is retired. The active research cycle has
-returned to the strongest historical walk-forward control to repair the
-identified score-reversal mechanism before a new candidate is frozen.
-
-The latest train-only clipping/reliability-mask cycle produced no promotable
-replacement. Hard masking increased fold instability; simple clipping was too
-weak and reduced top-decile lift. The active candidate and future-OOS primary
-slots are therefore intentionally empty until a distinct hypothesis is
-pre-registered.
+The first frozen candidate failed and remains immutable history. Its
+replacement, `control_recent3_equal_v2`, was selected using historical
+rolling-origin evidence only and pinned before collecting a new unseen window.
+It has not been refit or tuned against that window.
 
 Latest retained walk-forward evidence snapshot, generated from run
-`20260605_211102` and reviewed again on **June 14, 2026**:
+`20260628_155057` and reviewed on **June 28, 2026**:
 
 | Evidence | Result | Interpretation |
 |---|---:|---|
-| Mean walk-forward Rank IC | `0.0734` | Passes the `0.03` gate |
-| Positive-IC folds | `86.1%` | Broad, but not universal, fold support |
-| PRAUC lift vs prevalence | `1.124` | Robust under hierarchical bootstrap |
-| Precision lift vs prevalence | `1.101` | Positive point estimate; uncertainty remains |
-| F1 skill vs rate-matched random | `+0.027` | Small but positive classification skill |
-| Positive-return folds | `69.4%` | Passes the active consistency gate |
-| Top-decile OOS forward return | `0.00317` | Positive walk-forward economic ordering |
+| Mean walk-forward Rank IC | `0.0748` | Passes the `0.03` gate |
+| Positive-IC folds | `76.3%` | Passes the `75%` gate narrowly |
+| PRAUC lift vs prevalence | `1.145` | Robust under hierarchical bootstrap |
+| Precision lift vs prevalence | `1.085` | Positive point estimate; uncertainty remains |
+| F1 skill vs rate-matched random | `+0.028` | Small but positive classification skill |
+| Positive-return folds | `68.4%` | Passes the active consistency gate |
+| Top-decile OOS forward return | `0.00286` | Positive walk-forward economic ordering |
 | Raw probability calibration | Not deployment-ready | Use outputs as ranking scores |
-| Frozen future-OOS Rank IC | `-0.0075` | Failed; exact candidate retired |
-| Frozen future-OOS top-10 lift | `0.990` | Failed to concentrate long labels |
+| Replacement future-OOS rows | `313 / 720` | Confirmation not ready yet |
 
 The legacy monitors remain visible:
 
-- Fold Rank IC standard deviation: `0.0708`
-- Raw official Long F1: `0.4313`
+- Fold Rank IC standard deviation: `0.0832`
+- Raw official Long F1: `0.4377`
 
 These are not hidden or rewritten. Under the active evidence charter they are
 monitors rather than standalone promotion gates because the original targets
@@ -67,8 +61,9 @@ The current interpretation is deliberately narrow:
 - The model does **not** yet have reliable probability calibration.
 - The already-seen holdout produced a negative top-decile return and is not
   used for further tuning.
-- Phase 2 requires a newly pre-registered replacement to pass a new, no-refit
-  future-OOS window. The failed window is diagnostic/training history only.
+- Phase 2 requires the pinned replacement to pass its new, no-refit future-OOS
+  window. Historical profile search is closed while this confirmation is
+  pending.
 
 ## Research Boundary
 
@@ -178,13 +173,17 @@ Operational references:
 - [`docs/metrics.md`](docs/metrics.md): metric definitions and estimands
 - [`docs/experiment-history.md`](docs/experiment-history.md): retained lessons
   and rejected directions
+- [`docs/phase2-design.md`](docs/phase2-design.md): frozen Phase 2 research
+  backtest contract
+- [`docs/phase2-entry-checklist.md`](docs/phase2-entry-checklist.md): blocking
+  entry conditions before implementation
 
 ## Colab Workflow
 
 All production research notebooks run on Google Colab with source code from
 GitHub and data/checkpoints stored on Google Drive.
 
-The current walk-forward repair workflow is isolated on
+The current Phase 1 confirmation workflow is isolated on
 `research/next-candidate-v1`. Every notebook fetches, checks out, and verifies
 that branch by default, then prints the exact commit. Override
 `YENIBOT_REPO_BRANCH` only for a deliberate reviewed run.

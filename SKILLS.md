@@ -93,16 +93,20 @@ The current safe control profile is configured in `config.yaml`:
   bad-fold top-decile lift remained `0.6406`. The auxiliary and P(Long)
   rankings were `0.921` correlated, so the target is not missing; naive
   gradient summation is the unresolved mechanism.
-- The current research state is primary-preserving multitask projection:
+- Bundle `20260628_155057` closed primary-preserving multitask projection.
+  Shared gradients conflicted in only `1.8%` of 6,400 audited batches and had
+  mean cosine `+0.61`; gradient interference was not the instability mechanism.
+  The candidate still worsened dispersion and official F1, reduced positive
+  top-decile-lift coverage to `50%`, and left bad-fold top-decile lift below
+  one. Close the entire auxiliary multitask family.
+- The current research state is model-research freeze pending future OOS:
   `experiments.research_focus.status` should be
-  `primary_preserving_multitask_gradient_projection_preregistered`. The only
-  valid candidate keeps the same auxiliary target, weight, features, labels,
-  architecture, primary loss, and early stopping as the completed fixed-sum
-  test. It leaves the primary gradient unchanged and removes only the component
-  of the shared auxiliary gradient that has a negative dot product with it.
-  Inference remains one binary `P(Long)` output. Do not tune auxiliary weight,
-  add another target, or introduce symmetric/adaptive gradient balancing before
-  this isolated conflict mechanism is evaluated.
+  `model_research_frozen_pending_future_oos`. `candidate_profiles` must remain
+  empty. The retained control passes every active historical model-evidence
+  gate, but Phase 2 is still blocked by the pre-registered frozen future-OOS
+  confirmation. Do not run notebook 04, add profiles, tune thresholds, change
+  the frozen manifest, or lower the 720-row minimum while confirmation is
+  pending.
 
 Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
 
@@ -171,10 +175,13 @@ Forbidden feature behavior:
   data only, its weight and scaling live in `config.yaml`, early stopping stays
   on validation P(Long) Rank IC, and per-fold auxiliary metrics are persisted.
 - The fixed-sum auxiliary-return candidate is retired. Its next and only
-  permitted follow-up is primary-preserving conflict projection with the same
-  target and weight. The primary gradient must never be projected or weakened,
-  and gradient conflict frequency, cosine before/after projection, and relative
-  gradient norms must be persisted.
+  permitted follow-up was primary-preserving conflict projection. That
+  follow-up also failed and showed that gradient conflict was rare. Do not tune
+  auxiliary loss weights, projection variants, task balancing, or auxiliary
+  targets.
+- Historical model research is frozen. New training research may reopen only
+  after the pinned future-OOS outcome is known and only if that outcome fails
+  or reveals a new pre-registered mechanism.
 
 ## Experiment Memory Discipline
 
