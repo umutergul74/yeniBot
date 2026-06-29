@@ -279,6 +279,13 @@ def _write_experiment_bundle(
         "next_actions.json",
         "phase2_readiness.md",
         "phase2_readiness.json",
+        "phase2_sandbox/phase2_bars.csv",
+        "phase2_sandbox/phase2_signals.csv",
+        "phase2_sandbox/phase2_input_manifest.json",
+        "phase2_sandbox/phase2_trade_ledger.csv",
+        "phase2_sandbox/phase2_equity_curve.csv",
+        "phase2_sandbox/phase2_sandbox_report.json",
+        "phase2_sandbox/phase2_sandbox_report.md",
         "phase1_current_status.csv",
         "phase1_current_status.md",
         "phase1_current_status.json",
@@ -320,5 +327,10 @@ def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: 
                 or include_parquet
             ):
                 archive.write(path, f"{run_id}/{path.name}")
+        phase2_dir = report_dir / "phase2_sandbox"
+        if phase2_dir.exists():
+            for path in sorted(phase2_dir.glob("*")):
+                if path.is_file() and path.suffix.lower() in {".csv", ".json", ".md"}:
+                    archive.write(path, f"{run_id}/phase2_sandbox/{path.name}")
     shutil.copyfile(slim_path, latest_slim_path)
     return slim_path, latest_slim_path

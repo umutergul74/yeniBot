@@ -80,6 +80,11 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "recency_ensemble_paired_comparison.csv" in diagnostics
     assert "recency_ensemble_decision.json" in diagnostics
     assert "next_research_protocol.json" in diagnostics
+    assert "RUN_PHASE2_SANDBOX = True" in diagnostics
+    assert "run_phase2_sandbox([" in diagnostics
+    assert "phase2_sandbox_dir = report_dir / 'phase2_sandbox'" in diagnostics
+    assert "_write_experiment_slim_bundle" in diagnostics
+    assert "Repacked bundles after Phase 2 sandbox outputs were written." in diagnostics
 
 
 def test_notebook_code_cells_are_valid_python_after_colab_magics_are_removed() -> None:

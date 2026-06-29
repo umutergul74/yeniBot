@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from yenibot.experiment.artifacts import _write_experiment_slim_bundle
 from yenibot.phase2 import CostScenario
 from yenibot.phase2 import Phase2StrategyContract
 from yenibot.phase2 import build_phase2_sandbox_inputs
@@ -278,3 +280,25 @@ def test_cli_auto_builds_inputs_and_writes_sandbox_report(tmp_path: Path) -> Non
     assert report["summary"]["evidence_status"] == (
         "sandbox_not_promotable_until_future_oos_passes"
     )
+
+
+def test_slim_bundle_includes_phase2_sandbox_directory(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports" / "experiments" / "run"
+    phase2_dir = report_dir / "phase2_sandbox"
+    phase2_dir.mkdir(parents=True)
+    (phase2_dir / "phase2_sandbox_report.json").write_text("{}", encoding="utf-8")
+    (phase2_dir / "phase2_sandbox_report.md").write_text("# report\n", encoding="utf-8")
+    (phase2_dir / "phase2_trade_ledger.csv").write_text("a\n", encoding="utf-8")
+
+    slim_path, latest_path = _write_experiment_slim_bundle(
+        output_dir=tmp_path / "reports",
+        run_id="run",
+        report_dir=report_dir,
+    )
+
+    with zipfile.ZipFile(slim_path) as archive:
+        names = set(archive.namelist())
+    assert latest_path.exists()
+    assert "run/phase2_sandbox/phase2_sandbox_report.json" in names
+    assert "run/phase2_sandbox/phase2_sandbox_report.md" in names
+    assert "run/phase2_sandbox/phase2_trade_ledger.csv" in names
