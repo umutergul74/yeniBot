@@ -1,0 +1,72 @@
+{
+  "lock_version": "phase2_clean_confirmation_lock_v1",
+  "lock_status": "preregistered_clean_confirmation_pending",
+  "locked_at_utc": "2026-06-30T00:00:00Z",
+  "lock_hash": "7c8fe8858450d71419355923981765491ff32205391430ef60c129cb2ffbca1a",
+  "frozen_model": {
+    "candidate_id": "control_recent3_equal_v2",
+    "candidate_manifest_hash": "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857",
+    "source_run_id": "20260621_075454",
+    "threshold": 0.42674046854178105,
+    "threshold_source": "replacement_recent3_common_validation_guarded_f1",
+    "fit_data_end": "2026-06-13T01:00:00Z"
+  },
+  "selection_evidence": {
+    "source_bundle_sha256": "6d0667dd321b3c5ce120aa019f9073a752cfd26b0eb3dede1fdfc7cf0197e3c0",
+    "seen_window_decision_start": "2026-02-27T01:00:00Z",
+    "seen_window_decision_end": "2026-05-25T09:00:00Z",
+    "automatic_winner_selection_used": false
+  },
+  "confirmation_window": {
+    "decision_time_start_exclusive": "2026-06-13T01:00:00Z",
+    "minimum_coverage_days": 90,
+    "minimum_trade_count": 75,
+    "data_policy": "append_only_post_anchor_no_refit_no_reselection"
+  },
+  "candidates": [
+    {
+      "role": "primary_balanced",
+      "strategy_id": "score_margin_04_atr_band_007_010_time_stop_6bar_tp15_sl4_v1",
+      "contract": {
+        "min_score_margin": 0.04,
+        "min_entry_atr_fraction": 0.007,
+        "max_entry_atr_fraction": 0.01,
+        "max_holding_bars": 6,
+        "take_profit_atr": 1.5,
+        "stop_loss_atr": 4.0
+      },
+      "selection_note": "Lower concentration risk; positive after best-month removal and adverse costs on the seen diagnostic window."
+    },
+    {
+      "role": "challenger_return",
+      "strategy_id": "score_margin_07_atr_band_005_010_time_stop_6bar_tp2_sl4_v1",
+      "contract": {
+        "min_score_margin": 0.07,
+        "min_entry_atr_fraction": 0.005,
+        "max_entry_atr_fraction": 0.01,
+        "max_holding_bars": 6,
+        "take_profit_atr": 2.0,
+        "stop_loss_atr": 4.0
+      },
+      "selection_note": "Higher seen-window return retained only as a locked challenger."
+    }
+  ],
+  "risk_policy": {
+    "policy_id": "fixed_fractional_guardrails_v1",
+    "initial_equity": 10000.0,
+    "risk_fraction_per_trade": 0.0025,
+    "max_notional_fraction": 0.25,
+    "daily_realized_loss_limit_fraction": 0.01,
+    "max_realized_drawdown_fraction": 0.05,
+    "allow_leverage": false
+  },
+  "success_gates": {
+    "base_compounded_return_min_exclusive": 0.0,
+    "adverse_compounded_return_min_exclusive": 0.0,
+    "base_profit_factor_min": 1.1,
+    "bootstrap_probability_positive_min": 0.65,
+    "max_drawdown_floor": -0.1,
+    "best_month_removed_return_min": 0.0,
+    "automatic_promotion_allowed": false
+  }
+}

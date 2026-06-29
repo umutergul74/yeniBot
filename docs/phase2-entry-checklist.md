@@ -34,15 +34,15 @@ checklist passes.
 
 ## Phase 2 Preregistration
 
-- [ ] signal timing and next-bar fill rule committed
-- [ ] entry and exit rules committed
-- [ ] same-bar TP/SL ambiguity rule committed
-- [ ] fee, funding, and slippage sources committed
-- [ ] cost stress scenarios committed
-- [ ] portfolio accounting rules committed
-- [ ] required trade-ledger schema committed
-- [ ] required performance and robustness outputs committed
-- [ ] numerical Phase 2 success gates committed before results are read
+- [x] signal timing and next-bar fill rule committed
+- [x] entry and exit rules committed
+- [x] same-bar TP/SL ambiguity rule committed
+- [x] fee, funding, and slippage sources committed
+- [x] cost stress scenarios committed
+- [x] portfolio accounting rules committed
+- [x] required trade-ledger schema committed
+- [x] required performance and robustness outputs committed
+- [x] numerical Phase 2 success gates committed before clean results are read
 
 ## Authorization
 

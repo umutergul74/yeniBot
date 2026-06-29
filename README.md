@@ -81,13 +81,14 @@ The current interpretation is deliberately narrow:
 - Versioned validation charters and append-only experiment memory
 - Frozen candidate manifests with content-hashed artifacts
 - Prediction-only future-OOS evaluation
+- Fail-closed Phase 2 sandbox backtesting and trade forensics
+- Locked clean-forward candidates with fixed-fractional portfolio risk controls
 - Slim/full evidence bundles and executive diagnostic dashboards
 
 ### Explicitly Not Implemented
 
-- Backtesting
 - Trade execution or exchange order routing
-- Risk, leverage, or position management
+- Live leverage or discretionary position management
 - Live services or alerting
 - Short-side or three-class labels
 - XGBoost or other second-stage meta-learners
@@ -196,6 +197,7 @@ Run in strict order:
 4. [`04_training_walk_forward.ipynb`](notebooks/04_training_walk_forward.ipynb)
 5. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
 6. [`06_phase2_sandbox_backtest.ipynb`](notebooks/06_phase2_sandbox_backtest.ipynb)
+7. [`07_phase2_clean_forward_confirmation.ipynb`](notebooks/07_phase2_clean_forward_confirmation.ipynb)
 
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
@@ -210,6 +212,7 @@ Rerun rules:
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
 | Frozen-prediction Phase 2 sandbox/backtest only | `06`; no training and no Phase 1 report rebuild |
+| Locked clean-forward confirmation | `07` after `05` writes post-anchor Future-OOS predictions |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
 
@@ -236,6 +239,11 @@ without automatically selecting a winner. It writes:
 ```text
 /content/drive/MyDrive/yeniBot/reports/phase2_latest_sandbox_bundle.zip
 ```
+
+Notebook 07 is the immutable clean-forward evaluator. It uses only post-anchor
+Future-OOS predictions from Notebook 05, applies the committed candidate and
+risk lock, and refuses to select or promote automatically. See
+[`docs/phase2-forward-confirmation.md`](docs/phase2-forward-confirmation.md).
 
 See [`docs/reproducibility.md`](docs/reproducibility.md) before reproducing or
 reviewing an experiment.

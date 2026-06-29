@@ -24,6 +24,7 @@ from yenibot.experiment.future_oos_diagnostics import (
     future_oos_model_metrics,
 )
 from yenibot.experiment.holdout import _aggregate_holdout_predictions, _predict_holdout_for_profile
+from yenibot.phase2.adapter import attach_phase2_market_columns
 
 __all__ = ["evaluate_future_oos"]
 
@@ -278,6 +279,13 @@ _FUTURE_OOS_PREDICTION_COLUMNS = [
     "prob_long",
     "threshold",
     "selected",
+    "open",
+    "high",
+    "low",
+    "close",
+    "atr_14",
+    "volume",
+    "quote_volume",
 ]
 
 
@@ -565,6 +573,10 @@ def evaluate_future_oos(
                 else:
                     optional_candidate_warnings.append(message)
                 continue
+            predictions = attach_phase2_market_columns(
+                predictions,
+                future_context,
+            )
             predictions["candidate_id"] = manifest["candidate_id"]
             prediction_frames.append(predictions)
             evaluation_row = _evaluate_predictions(

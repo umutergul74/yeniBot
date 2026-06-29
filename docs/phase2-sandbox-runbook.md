@@ -122,7 +122,9 @@ window.
 Use `notebooks/06_phase2_sandbox_backtest.ipynb` for Phase 2 work. It does not
 call the Phase 1 diagnostics orchestrator, does not import the training stack,
 and performs zero fit operations. Notebook 05 remains the Future-OOS and Phase
-1 diagnostics notebook.
+1 diagnostics notebook. Notebook 06 is an already-seen sandbox and must not be
+used for clean strategy selection. The locked post-anchor workflow is described
+in [`phase2-forward-confirmation.md`](phase2-forward-confirmation.md).
 
 ## Command-Line Entry Point
 

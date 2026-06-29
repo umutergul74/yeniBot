@@ -338,6 +338,44 @@ def phase2_inputs_from_predictions(
     return bars, signals, stats
 
 
+def attach_phase2_market_columns(
+    predictions: pd.DataFrame,
+    market_context: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach causal OHLC/ATR columns to prediction-only artifacts."""
+
+    if predictions.empty or "timestamp" not in predictions.columns:
+        return predictions.copy()
+    market_columns = [
+        column
+        for column in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "atr_14",
+            "volume",
+            "quote_volume",
+        )
+        if column in market_context.columns
+    ]
+    if not market_columns:
+        return predictions.copy()
+    market = (
+        market_context[["timestamp", *market_columns]]
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .copy()
+    )
+    output = predictions.drop(
+        columns=[
+            column
+            for column in market_columns
+            if column in predictions.columns
+        ]
+    )
+    return output.merge(market, on="timestamp", how="left", validate="many_to_one")
+
+
 def build_phase2_sandbox_inputs(
     *,
     report_dir: str | Path,

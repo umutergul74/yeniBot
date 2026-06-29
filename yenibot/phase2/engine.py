@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +12,7 @@ from yenibot.phase2.contracts import Phase2Mode
 from yenibot.phase2.contracts import Phase2StrategyContract
 from yenibot.phase2.costs import net_long_return
 from yenibot.phase2.readiness import Phase2Gate
+from yenibot.phase2.risk import Phase2RiskPolicy
 
 
 @dataclass(frozen=True)
@@ -230,8 +232,15 @@ def _resolve_exit(
     )
 
 
-def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> dict[str, Any]:
+def _summarize(
+    trades: pd.DataFrame,
+    *,
+    mode: Phase2Mode,
+    gate: Phase2Gate,
+    risk_policy: Phase2RiskPolicy | None = None,
+) -> dict[str, Any]:
     if trades.empty:
+        initial_equity = risk_policy.initial_equity if risk_policy is not None else 1.0
         return {
             "mode": mode,
             "evidence_status": gate.evidence_status,
@@ -243,28 +252,48 @@ def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> d
             "average_win": None,
             "average_loss": None,
             "payoff_ratio": None,
-            "final_equity": 1.0,
+            "initial_equity": initial_equity,
+            "final_equity": initial_equity,
             "compounded_return": 0.0,
             "max_drawdown": 0.0,
             "max_single_trade_net_return": None,
             "min_single_trade_net_return": None,
+            "return_basis": (
+                "risk_sized_portfolio_return"
+                if risk_policy is not None
+                else "full_notional_trade_return"
+            ),
         }
-    wins = trades.loc[trades["net_return"] > 0, "net_return"].sum()
-    losses = -trades.loc[trades["net_return"] < 0, "net_return"].sum()
-    compounded = (1.0 + trades["net_return"]).cumprod()
+    return_column = (
+        "portfolio_return" if "portfolio_return" in trades.columns else "net_return"
+    )
+    returns = pd.to_numeric(trades[return_column], errors="coerce").fillna(0.0)
+    wins = returns.loc[returns > 0].sum()
+    losses = -returns.loc[returns < 0].sum()
+    compounded = (1.0 + returns).cumprod()
     running_peak = compounded.cummax().clip(lower=1.0)
     drawdown = compounded / running_peak - 1.0
-    winning_trades = trades.loc[trades["net_return"] > 0, "net_return"]
-    losing_trades = trades.loc[trades["net_return"] < 0, "net_return"]
+    winning_trades = returns.loc[returns > 0]
+    losing_trades = returns.loc[returns < 0]
     average_win = float(winning_trades.mean()) if not winning_trades.empty else None
     average_loss = float(losing_trades.mean()) if not losing_trades.empty else None
+    initial_equity = (
+        float(trades["equity_before"].iloc[0])
+        if "equity_before" in trades.columns
+        else 1.0
+    )
+    final_equity = (
+        float(trades["equity_after"].iloc[-1])
+        if "equity_after" in trades.columns
+        else float(compounded.iloc[-1])
+    )
     return {
         "mode": mode,
         "evidence_status": gate.evidence_status,
         "trade_count": int(len(trades)),
-        "mean_net_return": float(trades["net_return"].mean()),
-        "sum_net_return": float(trades["net_return"].sum()),
-        "hit_rate": float((trades["net_return"] > 0).mean()),
+        "mean_net_return": float(returns.mean()),
+        "sum_net_return": float(returns.sum()),
+        "hit_rate": float((returns > 0).mean()),
         "profit_factor": float(wins / losses) if losses > 0 else None,
         "average_win": average_win,
         "average_loss": average_loss,
@@ -273,18 +302,42 @@ def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> d
             if average_win is not None and average_loss not in {None, 0.0}
             else None
         ),
-        "final_equity": float(compounded.iloc[-1]),
+        "initial_equity": initial_equity,
+        "final_equity": final_equity,
         "compounded_return": float(compounded.iloc[-1] - 1.0),
         "max_drawdown": float(drawdown.min()),
-        "max_single_trade_net_return": float(trades["net_return"].max()),
-        "min_single_trade_net_return": float(trades["net_return"].min()),
+        "max_single_trade_net_return": float(returns.max()),
+        "min_single_trade_net_return": float(returns.min()),
         "cost_scenario": str(trades["cost_scenario"].iloc[0]),
+        "return_basis": (
+            "risk_sized_portfolio_return"
+            if return_column == "portfolio_return"
+            else "full_notional_trade_return"
+        ),
     }
 
 
 def _equity_curve(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty:
         return pd.DataFrame(columns=["timestamp", "equity", "net_return", "drawdown"])
+    if {"equity_before", "equity_after", "portfolio_return"}.issubset(trades.columns):
+        peak = float(trades["equity_before"].iloc[0])
+        rows: list[dict[str, Any]] = []
+        for row in trades.itertuples(index=False):
+            equity = float(row.equity_after)
+            peak = max(peak, equity)
+            rows.append(
+                {
+                    "timestamp": row.exit_time,
+                    "equity": equity,
+                    "net_return": float(row.portfolio_return),
+                    "drawdown": equity / peak - 1.0,
+                    "position_notional_fraction": float(
+                        row.position_notional_fraction
+                    ),
+                }
+            )
+        return pd.DataFrame(rows)
     equity = 1.0
     peak = 1.0
     rows: list[dict[str, Any]] = []
@@ -309,6 +362,7 @@ def run_long_only_backtest(
     gate: Phase2Gate,
     contract: Phase2StrategyContract = DEFAULT_PHASE2_CONTRACT,
     cost_scenario: CostScenario | None = None,
+    risk_policy: Phase2RiskPolicy | None = None,
     mode: Phase2Mode = "sandbox",
 ) -> Phase2BacktestResult:
     """Run the first pre-registered long-only Phase 2 sandbox backtest.
@@ -319,6 +373,8 @@ def run_long_only_backtest(
     """
 
     contract.validate()
+    if risk_policy is not None:
+        risk_policy.validate()
     gate.assert_mode_allowed(mode)
     scenario = cost_scenario or contract.cost_scenarios[1]
     bars = _prepare_bars(bars, contract)
@@ -337,7 +393,14 @@ def run_long_only_backtest(
     score_margin_filter_skipped_count = 0
     atr_fraction_filter_skipped_count = 0
     data_gap_forced_close_count = 0
+    risk_daily_loss_skip_count = 0
+    risk_drawdown_halt_skip_count = 0
     entry_delay_hours: list[float] = []
+    portfolio_equity = risk_policy.initial_equity if risk_policy is not None else 1.0
+    portfolio_peak = portfolio_equity
+    portfolio_halted = False
+    daily_start_equity: dict[Any, float] = {}
+    daily_realized_pnl: dict[Any, float] = {}
     for signal in signals.itertuples(index=False):
         score = float(getattr(signal, contract.score_column))
         if score < contract.threshold:
@@ -378,6 +441,23 @@ def run_long_only_backtest(
         if not contract.allow_overlapping_positions and entry_idx < min_entry_idx:
             skipped_during_open_position_count += 1
             continue
+        if risk_policy is not None:
+            decision_day = decision_time.date()
+            daily_start_equity.setdefault(decision_day, portfolio_equity)
+            daily_realized_pnl.setdefault(decision_day, 0.0)
+            if portfolio_halted:
+                risk_drawdown_halt_skip_count += 1
+                continue
+            realized_loss_fraction = (
+                daily_realized_pnl[decision_day]
+                / daily_start_equity[decision_day]
+            )
+            if (
+                realized_loss_fraction
+                <= -risk_policy.daily_realized_loss_limit_fraction
+            ):
+                risk_daily_loss_skip_count += 1
+                continue
         exit_resolution = _resolve_exit(
             bars,
             contract,
@@ -399,6 +479,61 @@ def run_long_only_backtest(
             exit_price=exit_price,
             holding_hours=holding_hours,
         )
+        risk_fields: dict[str, Any] = {}
+        if risk_policy is not None:
+            stop_distance_fraction = max(
+                (
+                    entry_price
+                    - exit_resolution.initial_stop_price
+                )
+                / entry_price,
+                0.0,
+            )
+            risk_sizing_cost_fraction = scenario.round_trip_cost_fraction(
+                holding_hours=(
+                    contract.max_holding_bars
+                    * contract.expected_bar_interval_hours
+                )
+            )
+            risk_sizing_loss_fraction = (
+                stop_distance_fraction + risk_sizing_cost_fraction
+            )
+            notional_fraction = risk_policy.notional_fraction(
+                stop_distance_fraction=risk_sizing_loss_fraction,
+            )
+            equity_before = portfolio_equity
+            position_notional = equity_before * notional_fraction
+            realized_pnl = position_notional * float(returns["net_return"])
+            portfolio_equity = equity_before + realized_pnl
+            portfolio_return = (
+                realized_pnl / equity_before if equity_before > 0 else 0.0
+            )
+            portfolio_peak = max(portfolio_peak, portfolio_equity)
+            realized_drawdown = portfolio_equity / portfolio_peak - 1.0
+            exit_day = bars.loc[exit_idx, contract.bar_time_column].date()
+            daily_start_equity.setdefault(exit_day, equity_before)
+            daily_realized_pnl.setdefault(exit_day, 0.0)
+            daily_realized_pnl[exit_day] += realized_pnl
+            if (
+                realized_drawdown
+                <= -risk_policy.max_realized_drawdown_fraction
+            ):
+                portfolio_halted = True
+            risk_fields = {
+                "risk_policy_id": risk_policy.policy_id,
+                "risk_budget_fraction": risk_policy.risk_fraction_per_trade,
+                "stop_distance_fraction": stop_distance_fraction,
+                "risk_sizing_cost_fraction": risk_sizing_cost_fraction,
+                "risk_sizing_loss_fraction": risk_sizing_loss_fraction,
+                "position_notional_fraction": notional_fraction,
+                "position_notional": position_notional,
+                "equity_before": equity_before,
+                "realized_portfolio_pnl": realized_pnl,
+                "portfolio_return": portfolio_return,
+                "equity_after": portfolio_equity,
+                "realized_drawdown_after": realized_drawdown,
+                "portfolio_halted_after_trade": portfolio_halted,
+            }
         trades.append(
             {
                 "strategy_id": contract.strategy_id,
@@ -436,13 +571,19 @@ def run_long_only_backtest(
                 "cost_scenario": scenario.name,
                 "phase2_mode": mode,
                 "evidence_status": gate.evidence_status,
+                **risk_fields,
             }
         )
         min_entry_idx = exit_idx + 1 if not contract.allow_overlapping_positions else entry_idx + 1
 
     trade_frame = pd.DataFrame(trades)
     equity = _equity_curve(trade_frame)
-    summary = _summarize(trade_frame, mode=mode, gate=gate)
+    summary = _summarize(
+        trade_frame,
+        mode=mode,
+        gate=gate,
+        risk_policy=risk_policy,
+    )
     summary["cost_scenario"] = scenario.name
     execution_diagnostics = {
         "selected_signal_count": selected_signal_count,
@@ -463,6 +604,9 @@ def run_long_only_backtest(
             else None
         ),
         "data_gap_forced_close_count": data_gap_forced_close_count,
+        "risk_daily_loss_skip_count": risk_daily_loss_skip_count,
+        "risk_drawdown_halt_skip_count": risk_drawdown_halt_skip_count,
+        "risk_portfolio_halted": portfolio_halted,
         "dynamic_stop_activation_count": (
             int(trade_frame["dynamic_stop_activated"].sum())
             if not trade_frame.empty
@@ -504,6 +648,7 @@ def run_long_only_backtest(
         },
         "gate": gate.as_dict(),
         "cost_scenario": scenario.name,
+        "risk_policy": asdict(risk_policy) if risk_policy is not None else None,
         "execution_diagnostics": execution_diagnostics,
         "not_promotable_reason": None
         if gate.official_allowed and mode == "official"

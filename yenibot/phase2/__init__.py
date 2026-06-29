@@ -11,10 +11,15 @@ from yenibot.phase2.adapter import build_phase2_sandbox_inputs
 from yenibot.phase2.adapter import phase2_inputs_from_predictions
 from yenibot.phase2.contracts import CostScenario
 from yenibot.phase2.contracts import Phase2StrategyContract
+from yenibot.phase2.confirmation import filter_clean_confirmation_inputs
+from yenibot.phase2.confirmation import load_phase2_forward_lock
+from yenibot.phase2.confirmation import locked_risk_policy
+from yenibot.phase2.confirmation import locked_strategy_contracts
 from yenibot.phase2.engine import Phase2BacktestResult
 from yenibot.phase2.engine import run_long_only_backtest
 from yenibot.phase2.readiness import Phase2Gate
 from yenibot.phase2.readiness import load_phase2_gate
+from yenibot.phase2.risk import Phase2RiskPolicy
 from yenibot.phase2.variants import Phase2StrategyVariantSpec
 from yenibot.phase2.variants import phase2_strategy_registry
 from yenibot.phase2.variants import registered_phase2_strategy_variants
@@ -26,8 +31,13 @@ __all__ = [
     "Phase2InputBuildResult",
     "Phase2StrategyContract",
     "Phase2StrategyVariantSpec",
+    "Phase2RiskPolicy",
     "build_phase2_sandbox_inputs",
+    "filter_clean_confirmation_inputs",
+    "load_phase2_forward_lock",
     "load_phase2_gate",
+    "locked_risk_policy",
+    "locked_strategy_contracts",
     "phase2_inputs_from_predictions",
     "phase2_strategy_registry",
     "registered_phase2_strategy_variants",
