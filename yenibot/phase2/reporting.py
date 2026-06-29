@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from yenibot.phase2.engine import Phase2BacktestResult
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(v) for v in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return value
+
+
+def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
+    summary = result.summary
+    metadata = result.metadata
+    lines = [
+        "# Phase 2 Sandbox Report",
+        "",
+        f"Mode: `{metadata.get('mode')}`",
+        f"Evidence status: `{summary.get('evidence_status')}`",
+        "",
+        "> This report is sandbox evidence unless the Phase 2 gate is fully open.",
+        "",
+        "## Summary",
+        "",
+        f"- Trade count: `{summary.get('trade_count')}`",
+        f"- Mean net return: `{summary.get('mean_net_return')}`",
+        f"- Sum net return: `{summary.get('sum_net_return')}`",
+        f"- Hit rate: `{summary.get('hit_rate')}`",
+        f"- Profit factor: `{summary.get('profit_factor')}`",
+        f"- Cost scenario: `{summary.get('cost_scenario')}`",
+        "",
+        "## Gate",
+        "",
+        f"- Official allowed: `{metadata.get('gate', {}).get('official_allowed')}`",
+        f"- Blockers: `{metadata.get('gate', {}).get('blockers')}`",
+        f"- Next action: `{metadata.get('gate', {}).get('next_action')}`",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_phase2_sandbox_report(
+    output_dir: str | Path,
+    result: Phase2BacktestResult,
+) -> dict[str, Any]:
+    path = Path(output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    result.trades.to_csv(path / "phase2_trade_ledger.csv", index=False)
+    result.equity.to_csv(path / "phase2_equity_curve.csv", index=False)
+    payload = {
+        "summary": _json_ready(result.summary),
+        "metadata": _json_ready(result.metadata),
+    }
+    (path / "phase2_sandbox_report.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (path / "phase2_sandbox_report.md").write_text(
+        phase2_sandbox_markdown(result),
+        encoding="utf-8",
+    )
+    return payload

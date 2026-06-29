@@ -1,10 +1,33 @@
 # Phase 2 Research Backtest Design
 
-Status: **prepared, implementation blocked pending frozen future-OOS pass**
+Status: **sandbox implementation allowed, official promotion blocked pending
+frozen future-OOS pass**
 
 Phase 2 begins only when `phase2_readiness.json` reports
-`ready_for_phase2: true`. This document defines the first backtest before its
-results are known. It does not authorize execution or live deployment.
+`ready_for_phase2: true`. Until then, Phase 2 code may run only as a sandbox
+to prepare trade-ledger, cost, slippage, funding, portfolio-accounting, and
+reporting infrastructure. Sandbox results are not promotable evidence and must
+not be used to tune the frozen model, threshold, or candidate identity.
+
+This document defines the first backtest before its results are known. It does
+not authorize execution or live deployment.
+
+## Sandbox Boundary
+
+The package `yenibot.phase2` is allowed to exist before Future-OOS completion
+only because it is fail-closed:
+
+- `official` mode requires `phase2_readiness`, report consistency,
+  Future-OOS evaluation, Future-OOS pass, and `promotion_allowed` to all pass.
+- `sandbox` mode may run while the gate is pending, but every output is marked
+  `sandbox_not_promotable_until_future_oos_passes`.
+- Sandbox reports may validate mechanics, accounting, schemas, and robustness
+  plumbing.
+- Sandbox reports must not select a new threshold, tune exits, refit models, or
+  justify promotion.
+
+The intended working style while waiting for Future-OOS is: build the machine,
+wire the brakes, and leave the ignition key locked.
 
 ## Objective
 
@@ -148,4 +171,3 @@ The first Phase 2 implementation must not include:
 - XGBoost or another model layer
 - threshold search on frozen future-OOS data
 - discretionary removal of losing trades or periods
-

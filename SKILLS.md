@@ -8,7 +8,7 @@ The project goal is not to find a short-term attractive metric. The goal is to b
 
 Build a professional, bias-free ML pipeline that trains a binary TCN+GRU sequence model to identify BTC/USDT perpetual futures long opportunities from market microstructure features.
 
-Phase 1 ends at model validation. Do not build backtesting, execution, trade management, order routing, live bot services, alerting, position sizing, or Phase 2 notebooks until Phase 1 readiness gates pass. Preparing a Phase 2 design document is allowed; writing Phase 2 trading code is not.
+Phase 1 ends at model validation. Do not build execution, trade management, order routing, live bot services, alerting, leverage, or deployable trading code until Phase 1 readiness gates pass. A gated Phase 2 sandbox branch may prepare backtest accounting, trade-ledger, fee/slippage/funding, and report plumbing while Future-OOS is pending, but every output must be marked non-promotable and official mode must fail closed until Phase 2 readiness passes.
 
 ## Current Safe Baseline
 

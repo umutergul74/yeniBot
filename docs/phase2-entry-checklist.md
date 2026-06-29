@@ -1,6 +1,9 @@
 # Phase 2 Entry Checklist
 
-Phase 2 implementation may start only when every blocking item is checked.
+Official/promotable Phase 2 implementation may start only when every blocking
+item is checked. A gated sandbox may exist earlier for schema, accounting,
+cost, and reporting preparation, but its output is non-promotable until this
+checklist passes.
 
 ## Phase 1 Evidence
 
