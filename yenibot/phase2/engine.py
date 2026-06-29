@@ -55,10 +55,8 @@ def _prepare_signals(frame: pd.DataFrame, contract: Phase2StrategyContract) -> p
 def _entry_index_after_decision(
     bar_times: pd.Series,
     decision_time: pd.Timestamp,
-    *,
-    min_index: int,
 ) -> int | None:
-    candidates = bar_times[(bar_times > decision_time) & (bar_times.index >= min_index)]
+    candidates = bar_times[bar_times > decision_time]
     if candidates.empty:
         return None
     return int(candidates.index[0])
@@ -175,20 +173,30 @@ def run_long_only_backtest(
 
     trades: list[dict[str, Any]] = []
     min_entry_idx = 0
+    selected_signal_count = 0
+    skipped_no_next_bar_count = 0
+    skipped_during_open_position_count = 0
+    skipped_invalid_atr_count = 0
+    entry_delay_hours: list[float] = []
     for signal in signals.itertuples(index=False):
         score = float(getattr(signal, contract.score_column))
         if score < contract.threshold:
             continue
+        selected_signal_count += 1
         decision_time = getattr(signal, contract.decision_time_column)
         entry_idx = _entry_index_after_decision(
             bar_times,
             decision_time,
-            min_index=min_entry_idx,
         )
         if entry_idx is None:
+            skipped_no_next_bar_count += 1
+            continue
+        if not contract.allow_overlapping_positions and entry_idx < min_entry_idx:
+            skipped_during_open_position_count += 1
             continue
         atr = float(bars.loc[max(entry_idx - 1, 0), contract.atr_column])
         if atr <= 0:
+            skipped_invalid_atr_count += 1
             continue
         entry_price = float(bars.loc[entry_idx, "open"])
         exit_idx, exit_price, exit_reason = _resolve_exit(
@@ -199,6 +207,9 @@ def run_long_only_backtest(
             atr=atr,
         )
         holding_hours = _holding_hours(bars, contract, entry_idx, exit_idx)
+        entry_time = bars.loc[entry_idx, contract.bar_time_column]
+        entry_delay = max((entry_time - decision_time).total_seconds() / 3600.0, 0.0)
+        entry_delay_hours.append(entry_delay)
         returns = net_long_return(
             scenario,
             entry_price=entry_price,
@@ -209,10 +220,11 @@ def run_long_only_backtest(
             {
                 "candidate_id": contract.candidate_id,
                 "decision_time": decision_time,
-                "entry_time": bars.loc[entry_idx, contract.bar_time_column],
+                "entry_time": entry_time,
                 "exit_time": bars.loc[exit_idx, contract.bar_time_column],
                 "score": score,
                 "threshold": contract.threshold,
+                "entry_delay_hours": entry_delay,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "atr": atr,
@@ -234,6 +246,19 @@ def run_long_only_backtest(
     trade_frame = pd.DataFrame(trades)
     equity = _equity_curve(trade_frame)
     summary = _summarize(trade_frame, mode=mode, gate=gate)
+    execution_diagnostics = {
+        "selected_signal_count": selected_signal_count,
+        "skipped_no_next_bar_count": skipped_no_next_bar_count,
+        "skipped_during_open_position_count": skipped_during_open_position_count,
+        "skipped_invalid_atr_count": skipped_invalid_atr_count,
+        "max_entry_delay_hours": max(entry_delay_hours) if entry_delay_hours else None,
+        "mean_entry_delay_hours": (
+            sum(entry_delay_hours) / len(entry_delay_hours)
+            if entry_delay_hours
+            else None
+        ),
+    }
+    summary.update(execution_diagnostics)
     metadata = {
         "mode": mode,
         "contract": {
@@ -248,6 +273,7 @@ def run_long_only_backtest(
         },
         "gate": gate.as_dict(),
         "cost_scenario": scenario.name,
+        "execution_diagnostics": execution_diagnostics,
         "not_promotable_reason": None
         if gate.official_allowed and mode == "official"
         else "future_oos_or_phase2_gate_not_passed",

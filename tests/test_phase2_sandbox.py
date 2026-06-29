@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import zipfile
 from pathlib import Path
@@ -7,7 +8,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from yenibot.experiment.artifacts import _write_experiment_slim_bundle
 from yenibot.phase2 import CostScenario
 from yenibot.phase2 import Phase2StrategyContract
 from yenibot.phase2 import build_phase2_sandbox_inputs
@@ -15,6 +15,19 @@ from yenibot.phase2 import load_phase2_gate
 from yenibot.phase2 import run_long_only_backtest
 from yenibot.automation.phase2_sandbox import main as phase2_sandbox_main
 from yenibot.phase2.reporting import write_phase2_sandbox_report
+
+
+def _load_slim_bundle_writer():
+    path = Path(__file__).resolve().parents[1] / "yenibot" / "experiment" / "artifacts.py"
+    spec = importlib.util.spec_from_file_location("_yenibot_experiment_artifacts", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load experiment artifacts module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._write_experiment_slim_bundle
+
+
+_write_experiment_slim_bundle = _load_slim_bundle_writer()
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -192,6 +205,59 @@ def test_backtest_uses_next_bar_and_conservative_same_bar_exit(tmp_path: Path) -
     assert trade["exit_reason"] == "stop_loss_same_bar_conservative"
     assert trade["exit_price"] == 97
     assert trade["evidence_status"] == "sandbox_not_promotable_until_future_oos_passes"
+
+
+def test_backtest_does_not_queue_stale_signals_while_position_is_open(
+    tmp_path: Path,
+) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.date_range(
+                "2026-01-01",
+                periods=12,
+                freq="1h",
+                tz="UTC",
+            ),
+            "open": [100.0] * 12,
+            "high": [100.2] * 12,
+            "low": [99.8] * 12,
+            "close": [100.0] * 12,
+            "atr_14": [1.0] * 12,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [
+                pd.Timestamp("2026-01-01 01:00:00", tz="UTC"),
+                pd.Timestamp("2026-01-01 02:00:00", tz="UTC"),
+            ],
+            "prob_long": [0.90, 0.95],
+        }
+    )
+    contract = Phase2StrategyContract(
+        threshold=0.5,
+        take_profit_atr=999.0,
+        stop_loss_atr=999.0,
+        max_holding_bars=5,
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=contract,
+        cost_scenario=CostScenario(name="zero", entry_fee_bps=0, exit_fee_bps=0),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades.iloc[0]
+    assert trade["decision_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
+    assert trade["entry_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
+    assert trade["entry_delay_hours"] == 1.0
+    assert result.summary["selected_signal_count"] == 2
+    assert result.summary["skipped_during_open_position_count"] == 1
+    assert result.summary["max_entry_delay_hours"] == 1.0
 
 
 def test_report_writer_marks_sandbox_as_not_promotable(tmp_path: Path) -> None:

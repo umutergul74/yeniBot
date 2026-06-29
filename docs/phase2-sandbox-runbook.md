@@ -55,6 +55,8 @@ The initial contract is deliberately simple and pre-registered:
 - signal: `prob_long` ranking score
 - threshold: `0.42674046854178105`
 - entry: next-bar open only
+- signal queueing: disabled; signals whose immediate next bar occurs while a
+  prior position is still open are ignored, not delayed into a future entry
 - take-profit: `2 x ATR`
 - stop-loss: `5 x ATR`
 - maximum hold: `10` bars

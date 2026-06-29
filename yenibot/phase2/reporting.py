@@ -38,6 +38,10 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         f"- Hit rate: `{summary.get('hit_rate')}`",
         f"- Profit factor: `{summary.get('profit_factor')}`",
         f"- Cost scenario: `{summary.get('cost_scenario')}`",
+        f"- Selected signals: `{summary.get('selected_signal_count')}`",
+        "- Skipped signals during open position: "
+        f"`{summary.get('skipped_during_open_position_count')}`",
+        f"- Max entry delay hours: `{summary.get('max_entry_delay_hours')}`",
         "",
         "## Gate",
         "",
