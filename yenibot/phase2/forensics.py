@@ -189,11 +189,15 @@ def phase2_trade_forensics(
     }
 
     selected = int(execution.get("selected_signal_count", 0) or 0)
+    entry_filter_skipped = int(execution.get("entry_filter_skipped_count", 0) or 0)
+    entry_filter_passed = int(execution.get("entry_filter_passed_count", 0) or 0)
     executed = int(len(frame))
     funnel = pd.DataFrame(
         [
             {"stage": "input_signals", "count": int(len(signal_frame))},
             {"stage": "selected_above_threshold", "count": selected},
+            {"stage": "skipped_entry_filter", "count": entry_filter_skipped},
+            {"stage": "entry_filter_passed", "count": entry_filter_passed},
             {
                 "stage": "skipped_open_position",
                 "count": int(
@@ -244,6 +248,13 @@ def phase2_trade_forensics(
         "selected_signal_count": selected,
         "selected_signal_execution_rate": (
             float(executed / selected) if selected > 0 else None
+        ),
+        "entry_filter_skipped_count": entry_filter_skipped,
+        "entry_filter_passed_count": entry_filter_passed,
+        "entry_filter_pass_rate": (
+            float(entry_filter_passed / (entry_filter_passed + entry_filter_skipped))
+            if entry_filter_passed + entry_filter_skipped > 0
+            else None
         ),
         "gross_edge_bps_per_trade": (
             float(gross.mean() * 10_000.0) if not gross.empty else None
@@ -341,6 +352,8 @@ def write_phase2_forensics(
             "",
             f"- Strategy: `{summary.get('strategy_id')}`",
             f"- Trades: `{summary.get('trade_count')}`",
+            f"- Entry-filter passed: `{summary.get('entry_filter_passed_count')}`",
+            f"- Entry-filter skipped: `{summary.get('entry_filter_skipped_count')}`",
             f"- Gross edge per trade (bps): `{summary.get('gross_edge_bps_per_trade')}`",
             f"- Cost per trade (bps): `{summary.get('cost_bps_per_trade')}`",
             f"- Net edge per trade (bps): `{summary.get('net_edge_bps_per_trade')}`",

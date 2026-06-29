@@ -88,6 +88,44 @@ def registered_phase2_strategy_variants(
                 "frozen entry threshold or ATR barriers."
             ),
         ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_05_fixed_atr_v1",
+                min_score_margin=0.05,
+            ),
+            status="exploratory_registered_after_baseline_review",
+            rationale=(
+                "Require the frozen score to clear the baseline threshold by "
+                "at least 0.05 before accepting a trade; this is a bounded "
+                "entry-quality filter, not a threshold promotion."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_08_fixed_atr_v1",
+                min_score_margin=0.08,
+            ),
+            status="exploratory_registered_after_baseline_review",
+            rationale=(
+                "Test a stricter score-margin buffer as a cost-pressure proxy "
+                "while leaving the frozen model and official threshold unchanged."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_05_time_stop_6bar_v1",
+                min_score_margin=0.05,
+                max_holding_bars=6,
+            ),
+            status="exploratory_registered_after_baseline_review",
+            rationale=(
+                "Combine the first score-margin entry filter with the shorter "
+                "signal lifetime suggested by max-holding forensics."
+            ),
+        ),
     )
 
 

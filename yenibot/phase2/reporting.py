@@ -34,6 +34,8 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         "",
         f"- Strategy: `{metadata.get('contract', {}).get('strategy_id')}`",
         f"- Exit policy: `{metadata.get('contract', {}).get('exit_policy')}`",
+        "- Minimum score margin: "
+        f"`{metadata.get('contract', {}).get('min_score_margin')}`",
         f"- Trade count: `{summary.get('trade_count')}`",
         f"- Mean net return: `{summary.get('mean_net_return')}`",
         f"- Sum net return: `{summary.get('sum_net_return')}`",
@@ -44,6 +46,9 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         f"- Maximum drawdown: `{summary.get('max_drawdown')}`",
         f"- Cost scenario: `{summary.get('cost_scenario')}`",
         f"- Selected signals: `{summary.get('selected_signal_count')}`",
+        "- Entry-filter passed/skipped: "
+        f"`{summary.get('entry_filter_passed_count')}` / "
+        f"`{summary.get('entry_filter_skipped_count')}`",
         f"- Skipped stale entries: `{summary.get('skipped_stale_entry_count')}`",
         "- Skipped signals during open position: "
         f"`{summary.get('skipped_during_open_position_count')}`",

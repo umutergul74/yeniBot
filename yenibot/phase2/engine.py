@@ -84,6 +84,32 @@ def _holding_hours(
     return max((end - start).total_seconds() / 3600.0, 0.0)
 
 
+def _entry_filter_rejection_reason(
+    contract: Phase2StrategyContract,
+    *,
+    score: float,
+    entry_price: float,
+    atr: float,
+) -> str | None:
+    score_margin = score - contract.threshold
+    if score_margin < contract.min_score_margin:
+        return "score_margin_below_min"
+    atr_fraction = atr / entry_price if entry_price > 0 else None
+    if atr_fraction is None:
+        return "invalid_entry_price_for_atr_fraction"
+    if (
+        contract.min_entry_atr_fraction is not None
+        and atr_fraction < contract.min_entry_atr_fraction
+    ):
+        return "entry_atr_fraction_below_min"
+    if (
+        contract.max_entry_atr_fraction is not None
+        and atr_fraction > contract.max_entry_atr_fraction
+    ):
+        return "entry_atr_fraction_above_max"
+    return None
+
+
 def _resolve_exit(
     bars: pd.DataFrame,
     contract: Phase2StrategyContract,
@@ -306,6 +332,10 @@ def run_long_only_backtest(
     skipped_stale_entry_count = 0
     skipped_during_open_position_count = 0
     skipped_invalid_atr_count = 0
+    entry_filter_passed_count = 0
+    entry_filter_skipped_count = 0
+    score_margin_filter_skipped_count = 0
+    atr_fraction_filter_skipped_count = 0
     data_gap_forced_close_count = 0
     entry_delay_hours: list[float] = []
     for signal in signals.itertuples(index=False):
@@ -326,14 +356,28 @@ def run_long_only_backtest(
         if entry_delay > contract.max_bar_gap_hours:
             skipped_stale_entry_count += 1
             continue
-        if not contract.allow_overlapping_positions and entry_idx < min_entry_idx:
-            skipped_during_open_position_count += 1
-            continue
         atr = float(bars.loc[max(entry_idx - 1, 0), contract.atr_column])
         if atr <= 0:
             skipped_invalid_atr_count += 1
             continue
         entry_price = float(bars.loc[entry_idx, "open"])
+        filter_rejection = _entry_filter_rejection_reason(
+            contract,
+            score=score,
+            entry_price=entry_price,
+            atr=atr,
+        )
+        if filter_rejection is not None:
+            entry_filter_skipped_count += 1
+            if filter_rejection == "score_margin_below_min":
+                score_margin_filter_skipped_count += 1
+            if filter_rejection.startswith("entry_atr_fraction"):
+                atr_fraction_filter_skipped_count += 1
+            continue
+        entry_filter_passed_count += 1
+        if not contract.allow_overlapping_positions and entry_idx < min_entry_idx:
+            skipped_during_open_position_count += 1
+            continue
         exit_resolution = _resolve_exit(
             bars,
             contract,
@@ -364,10 +408,12 @@ def run_long_only_backtest(
                 "exit_time": bars.loc[exit_idx, contract.bar_time_column],
                 "score": score,
                 "threshold": contract.threshold,
+                "score_margin": score - contract.threshold,
                 "entry_delay_hours": entry_delay,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "atr": atr,
+                "entry_atr_fraction": atr / entry_price if entry_price > 0 else None,
                 "take_profit_atr": contract.take_profit_atr,
                 "stop_loss_atr": contract.stop_loss_atr,
                 "exit_policy": contract.exit_policy,
@@ -404,6 +450,18 @@ def run_long_only_backtest(
         "skipped_stale_entry_count": skipped_stale_entry_count,
         "skipped_during_open_position_count": skipped_during_open_position_count,
         "skipped_invalid_atr_count": skipped_invalid_atr_count,
+        "entry_filter_passed_count": entry_filter_passed_count,
+        "entry_filter_skipped_count": entry_filter_skipped_count,
+        "score_margin_filter_skipped_count": score_margin_filter_skipped_count,
+        "atr_fraction_filter_skipped_count": atr_fraction_filter_skipped_count,
+        "entry_filter_pass_rate": (
+            float(
+                entry_filter_passed_count
+                / (entry_filter_passed_count + entry_filter_skipped_count)
+            )
+            if entry_filter_passed_count + entry_filter_skipped_count > 0
+            else None
+        ),
         "data_gap_forced_close_count": data_gap_forced_close_count,
         "dynamic_stop_activation_count": (
             int(trade_frame["dynamic_stop_activated"].sum())
@@ -435,6 +493,9 @@ def run_long_only_backtest(
             "take_profit_atr": contract.take_profit_atr,
             "stop_loss_atr": contract.stop_loss_atr,
             "max_holding_bars": contract.max_holding_bars,
+            "min_score_margin": contract.min_score_margin,
+            "min_entry_atr_fraction": contract.min_entry_atr_fraction,
+            "max_entry_atr_fraction": contract.max_entry_atr_fraction,
             "exit_policy": contract.exit_policy,
             "breakeven_trigger_atr": contract.breakeven_trigger_atr,
             "trailing_stop_atr": contract.trailing_stop_atr,

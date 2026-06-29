@@ -299,6 +299,61 @@ def test_backtest_rejects_next_bar_entry_across_data_gap(tmp_path: Path) -> None
     assert result.summary["max_entry_delay_hours"] is None
 
 
+def test_backtest_applies_score_margin_entry_filter_before_execution(
+    tmp_path: Path,
+) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.date_range(
+                "2026-01-01",
+                periods=6,
+                freq="1h",
+                tz="UTC",
+            ),
+            "open": [100.0] * 6,
+            "high": [101.0] * 6,
+            "low": [99.0] * 6,
+            "close": [100.0] * 6,
+            "atr_14": [1.0] * 6,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [
+                pd.Timestamp("2026-01-01 00:00:00", tz="UTC"),
+                pd.Timestamp("2026-01-01 02:00:00", tz="UTC"),
+            ],
+            "prob_long": [0.53, 0.59],
+        }
+    )
+    contract = Phase2StrategyContract(
+        threshold=0.5,
+        min_score_margin=0.05,
+        take_profit_atr=999.0,
+        stop_loss_atr=999.0,
+        max_holding_bars=2,
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=contract,
+        cost_scenario=CostScenario(name="zero", entry_fee_bps=0, exit_fee_bps=0),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades.iloc[0]
+    assert trade["decision_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
+    assert trade["score_margin"] == pytest.approx(0.09)
+    assert result.summary["selected_signal_count"] == 2
+    assert result.summary["entry_filter_skipped_count"] == 1
+    assert result.summary["score_margin_filter_skipped_count"] == 1
+    assert result.summary["entry_filter_passed_count"] == 1
+    assert result.summary["entry_filter_pass_rate"] == pytest.approx(0.5)
+
+
 def test_backtest_forces_close_before_internal_data_gap(tmp_path: Path) -> None:
     gate = load_phase2_gate(_pending_report_dir(tmp_path))
     bars = pd.DataFrame(
@@ -636,15 +691,20 @@ def test_cli_writes_bounded_strategy_suite_and_forensics(tmp_path: Path) -> None
     assert exit_code == 0
     assert registry["automatic_winner_selection"] is False
     assert registry["selection_allowed_on_current_test"] is False
-    assert registry["trial_count"] == 4
-    assert len(summary) == 12
+    assert registry["trial_count"] == 7
+    assert len(summary) == 21
     assert set(summary["strategy_id"]) == {
         "baseline_fixed_atr_v1",
         "breakeven_after_1atr_v1",
         "atr_trailing_1atr_after_1atr_v1",
         "time_stop_6bar_v1",
+        "score_margin_05_fixed_atr_v1",
+        "score_margin_08_fixed_atr_v1",
+        "score_margin_05_time_stop_6bar_v1",
     }
     assert not summary["selection_allowed_on_current_test"].any()
+    assert "min_score_margin" in summary.columns
+    assert "entry_filter_skipped_count" in summary.columns
     assert "delta_compounded_return_vs_baseline" in summary.columns
     baseline_rows = summary.loc[
         summary["strategy_id"] == "baseline_fixed_atr_v1",

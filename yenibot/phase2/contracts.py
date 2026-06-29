@@ -43,6 +43,9 @@ class Phase2StrategyContract:
     take_profit_atr: float = 2.0
     stop_loss_atr: float = 5.0
     max_holding_bars: int = 10
+    min_score_margin: float = 0.0
+    min_entry_atr_fraction: float | None = None
+    max_entry_atr_fraction: float | None = None
     exit_policy: ExitPolicy = "fixed_atr"
     breakeven_trigger_atr: float | None = None
     trailing_stop_atr: float | None = None
@@ -84,6 +87,28 @@ class Phase2StrategyContract:
             raise ValueError("ATR exits must be positive.")
         if self.max_holding_bars <= 0:
             raise ValueError("Maximum holding bars must be positive.")
+        if self.min_score_margin < 0:
+            raise ValueError("Minimum score margin must be non-negative.")
+        if self.threshold + self.min_score_margin >= 1:
+            raise ValueError("Threshold plus minimum score margin must stay below 1.")
+        if (
+            self.min_entry_atr_fraction is not None
+            and self.min_entry_atr_fraction <= 0
+        ):
+            raise ValueError("Minimum entry ATR fraction must be positive when set.")
+        if (
+            self.max_entry_atr_fraction is not None
+            and self.max_entry_atr_fraction <= 0
+        ):
+            raise ValueError("Maximum entry ATR fraction must be positive when set.")
+        if (
+            self.min_entry_atr_fraction is not None
+            and self.max_entry_atr_fraction is not None
+            and self.min_entry_atr_fraction > self.max_entry_atr_fraction
+        ):
+            raise ValueError(
+                "Minimum entry ATR fraction cannot exceed the maximum entry ATR fraction."
+            )
         if self.exit_policy not in {"fixed_atr", "breakeven", "atr_trailing"}:
             raise ValueError(f"Unsupported exit policy: {self.exit_policy}")
         if self.exit_policy in {"breakeven", "atr_trailing"}:
