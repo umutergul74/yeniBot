@@ -164,6 +164,41 @@ python -m yenibot.automation.phase2_sandbox \
   --mode sandbox
 ```
 
+## Local Lab Entry Point
+
+For fast Phase 2 iteration on a local machine, use the local lab wrapper against
+an existing `phase2_latest_sandbox_bundle*.zip` file. This avoids model fitting
+and reruns only the lightweight backtest/forensic stack from the bundled
+`phase2_bars.csv`, `phase2_signals.csv`, and `phase2_input_manifest.json`.
+
+```bash
+python -m yenibot.automation.phase2_lab \
+  --bundle "C:/Users/Umut/Downloads/phase2_latest_sandbox_bundle (4).zip" \
+  --output-dir reports/phase2_local_lab
+```
+
+If `--bundle` is omitted, the newest
+`~/Downloads/phase2_latest_sandbox_bundle*.zip` file is used.
+
+The local lab writes a new ignored run directory under
+`reports/phase2_local_lab/<run_id>/` with:
+
+```text
+phase2_sandbox/
+phase2_lab_decision_report.json
+phase2_lab_decision_report.md
+```
+
+The decision report separates:
+
+- non-promotable exploratory evidence from promotable evidence,
+- overfit-risk flags such as seen-window-only, low trade count, single-fold
+  dependency, low bootstrap positivity, and best-month dependency,
+- hypotheses that are worth carrying into a clean confirmation window.
+
+Local lab output is diagnostic only. It cannot select or promote a strategy
+from the already-seen sandbox window.
+
 Official mode is intentionally fail-closed:
 
 ```bash
