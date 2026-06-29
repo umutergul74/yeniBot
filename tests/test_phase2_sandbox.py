@@ -244,6 +244,49 @@ def test_adapter_builds_inputs_from_frozen_candidate_predictions(tmp_path: Path)
     assert input_manifest["adapter_version"] == "phase2_input_adapter_v1"
 
 
+def test_adapter_prefers_current_report_manifest_over_stale_preflight_path(
+    tmp_path: Path,
+) -> None:
+    report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
+    stale_manifest_path = tmp_path / "stale" / "manifest_old.json"
+    stale_manifest_path.parent.mkdir(parents=True)
+    _write_json(
+        stale_manifest_path,
+        {
+            "available": False,
+            "candidate_id": "control_recent3_equal_v2",
+            "candidate_type": "recency_profile",
+            "source_run_id": "source_run",
+            "manifest_hash": "abc123",
+            "expected_manifest_hash": "<fill_after_05_generates_manifest_hash>",
+            "unavailable_reasons": [
+                "expected_manifest_hash_mismatch:"
+                "<fill_after_05_generates_manifest_hash>:abc123"
+            ],
+            "threshold": {"value": 0.5},
+            "components": [],
+        },
+    )
+    _write_json(
+        report_dir / "future_oos_preflight.json",
+        {
+            "primary_candidate": {
+                "candidate_id": "control_recent3_equal_v2",
+                "manifest_path": str(stale_manifest_path),
+            }
+        },
+    )
+
+    result = build_phase2_sandbox_inputs(
+        report_dir=report_dir,
+        checkpoint_dir=checkpoint_dir,
+        output_dir=tmp_path / "phase2",
+    )
+
+    assert result.candidate_manifest_path == report_dir / "frozen_candidate_manifest.json"
+    assert result.signal_count == 6
+
+
 def test_cli_auto_builds_inputs_and_writes_sandbox_report(tmp_path: Path) -> None:
     report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
     output_dir = tmp_path / "phase2_cli"

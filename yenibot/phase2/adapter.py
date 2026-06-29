@@ -99,6 +99,11 @@ def _resolve_existing_manifest_path(
             raise FileNotFoundError(f"Frozen candidate manifest not found: {explicit}")
         return explicit
 
+    report_manifest = report_dir / "frozen_candidate_manifest.json"
+    candidate_paths: list[Path] = []
+    if report_manifest.exists():
+        candidate_paths.append(report_manifest)
+
     preflight = _read_json(report_dir / "future_oos_preflight.json")
     preflight_path = str(
         (preflight.get("primary_candidate", {}) or {}).get("manifest_path", "")
@@ -107,11 +112,15 @@ def _resolve_existing_manifest_path(
     if preflight_path:
         candidate = Path(preflight_path)
         if candidate.exists():
-            return candidate
+            candidate_paths.append(candidate)
 
-    report_manifest = report_dir / "frozen_candidate_manifest.json"
-    if report_manifest.exists():
-        return report_manifest
+    for candidate in candidate_paths:
+        manifest = _read_json(candidate)
+        if bool(manifest.get("available", False)):
+            return candidate
+    for candidate in candidate_paths:
+        if _read_json(candidate):
+            return candidate
     return None
 
 
@@ -122,9 +131,10 @@ def load_frozen_candidate_manifest(
 ) -> tuple[dict[str, Any], Path | None]:
     """Load the primary frozen candidate manifest used for sandbox inputs.
 
-    The immutable manifest path from ``future_oos_preflight.json`` is preferred
-    when it exists in the current environment. Slim bundles still work because
-    they carry ``frozen_candidate_manifest.json`` in the report directory.
+    The report-local ``frozen_candidate_manifest.json`` is preferred when it is
+    available because Notebook 05 regenerates it from the active config. The
+    immutable path recorded in ``future_oos_preflight.json`` remains a fallback
+    for environments where only the checkpoint artifact is present.
     """
 
     report_path = Path(report_dir)
