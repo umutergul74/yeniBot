@@ -89,6 +89,8 @@ phase2_equity_curve_all_costs.csv
 phase2_strategy_registry.json
 phase2_strategy_variant_summary.csv
 phase2_strategy_variant_by_fold.csv
+phase2_strategy_forensics_summary.csv
+phase2_strategy_forensics_summary.json
 phase2_trade_ledger_all_variants.csv
 phase2_forensics_summary.json
 phase2_bootstrap_summary.json
@@ -107,8 +109,11 @@ root report remains the base scenario for compatibility.
 The strategy registry contains seven bounded contracts: the baseline reference,
 three dynamic-exit checks, and three entry-quality / score-margin checks. The
 baseline remains the root report. Variant outputs are stored under
-`strategy_variants/<strategy_id>/<cost_scenario>/`. No command ranks, selects,
-or promotes a winner from the current test window.
+`strategy_variants/<strategy_id>/<cost_scenario>/`. Each base-cost variant
+directory also contains its own forensic and bootstrap diagnostics, and the
+root `phase2_strategy_forensics_summary.*` files collect the base-cost forensic
+rows. No command ranks, selects, or promotes a winner from the current test
+window.
 
 ## Colab Entry Point
 

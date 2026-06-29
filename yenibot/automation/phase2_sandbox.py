@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -17,6 +18,74 @@ from yenibot.phase2.forensics import write_phase2_forensics
 from yenibot.phase2.reporting import write_phase2_sandbox_report
 from yenibot.phase2.variants import phase2_strategy_registry
 from yenibot.phase2.variants import registered_phase2_strategy_variants
+
+
+def _strategy_forensics_summary_row(
+    *,
+    strategy_contract: Phase2StrategyContract,
+    scenario_name: str,
+    variant_status: str,
+    rationale: str,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    summary = diagnostics["summary"]
+    bootstrap = diagnostics["bootstrap"]
+    compounded_ci = bootstrap.get("compounded_return_ci_95") or [None, None]
+    mean_ci = bootstrap.get("mean_return_ci_95") or [None, None]
+    return {
+        "strategy_id": strategy_contract.strategy_id,
+        "cost_scenario": scenario_name,
+        "exit_policy": strategy_contract.exit_policy,
+        "max_holding_bars": strategy_contract.max_holding_bars,
+        "min_score_margin": strategy_contract.min_score_margin,
+        "min_entry_atr_fraction": strategy_contract.min_entry_atr_fraction,
+        "max_entry_atr_fraction": strategy_contract.max_entry_atr_fraction,
+        "variant_status": variant_status,
+        "selection_allowed_on_current_test": False,
+        "automatic_policy_selection_allowed": False,
+        "selection_reason": "already_seen_test_window_exploratory_only",
+        "rationale": rationale,
+        "trade_count": summary.get("trade_count"),
+        "selected_signal_count": summary.get("selected_signal_count"),
+        "selected_signal_execution_rate": summary.get(
+            "selected_signal_execution_rate"
+        ),
+        "entry_filter_passed_count": summary.get("entry_filter_passed_count"),
+        "entry_filter_skipped_count": summary.get("entry_filter_skipped_count"),
+        "entry_filter_pass_rate": summary.get("entry_filter_pass_rate"),
+        "gross_edge_bps_per_trade": summary.get("gross_edge_bps_per_trade"),
+        "cost_bps_per_trade": summary.get("cost_bps_per_trade"),
+        "net_edge_bps_per_trade": summary.get("net_edge_bps_per_trade"),
+        "break_even_round_trip_cost_bps": summary.get(
+            "break_even_round_trip_cost_bps"
+        ),
+        "compounded_gross_return": summary.get("compounded_gross_return"),
+        "compounded_net_return": summary.get("compounded_net_return"),
+        "max_holding_exit_share": summary.get("max_holding_exit_share"),
+        "best_month": summary.get("best_month"),
+        "best_month_removed_compounded_return": summary.get(
+            "best_month_removed_compounded_return"
+        ),
+        "best_trade_removed_compounded_return": summary.get(
+            "best_trade_removed_compounded_return"
+        ),
+        "best_five_trades_removed_compounded_return": summary.get(
+            "best_five_trades_removed_compounded_return"
+        ),
+        "bootstrap_method": bootstrap.get("method"),
+        "bootstrap_samples": bootstrap.get("samples"),
+        "bootstrap_block_length": bootstrap.get("block_length"),
+        "bootstrap_probability_mean_return_positive": bootstrap.get(
+            "probability_mean_return_positive"
+        ),
+        "bootstrap_probability_compounded_return_positive": bootstrap.get(
+            "probability_compounded_return_positive"
+        ),
+        "bootstrap_mean_return_ci_low": mean_ci[0],
+        "bootstrap_mean_return_ci_high": mean_ci[1],
+        "bootstrap_compounded_return_ci_low": compounded_ci[0],
+        "bootstrap_compounded_return_ci_high": compounded_ci[1],
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -273,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         variant_rows = []
         variant_fold_frames = []
+        variant_forensics_rows = []
         for record in run_records:
             strategy_contract = record["contract"]
             scenario = record["scenario"]
@@ -300,6 +370,22 @@ def main(argv: list[str] | None = None) -> int:
                     result.trades,
                     signals,
                     execution_summary=result.summary,
+                )
+                write_phase2_forensics(
+                    output_dir
+                    / "strategy_variants"
+                    / strategy_contract.strategy_id
+                    / scenario.name,
+                    diagnostics,
+                )
+                variant_forensics_rows.append(
+                    _strategy_forensics_summary_row(
+                        strategy_contract=strategy_contract,
+                        scenario_name=scenario.name,
+                        variant_status=spec.status,
+                        rationale=spec.rationale,
+                        diagnostics=diagnostics,
+                    )
                 )
                 fold_frame = diagnostics["fold"].copy()
                 if not fold_frame.empty:
@@ -362,6 +448,24 @@ def main(argv: list[str] | None = None) -> int:
         if variant_trade_frames:
             pd.concat(variant_trade_frames, ignore_index=True).to_csv(
                 output_dir / "phase2_trade_ledger_all_variants.csv",
+                index=False,
+            )
+        if variant_forensics_rows:
+            variant_forensics_payload = {
+                "forensics_summary_version": "phase2_strategy_forensics_v1",
+                "cost_scenario": "base",
+                "selection_allowed_on_current_test": False,
+                "automatic_policy_selection": False,
+                "selection_reason": "already_seen_test_window_exploratory_only",
+                "clean_confirmation_window_required": True,
+                "rows": variant_forensics_rows,
+            }
+            (output_dir / "phase2_strategy_forensics_summary.json").write_text(
+                json.dumps(variant_forensics_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            pd.DataFrame(variant_forensics_rows).to_csv(
+                output_dir / "phase2_strategy_forensics_summary.csv",
                 index=False,
             )
 

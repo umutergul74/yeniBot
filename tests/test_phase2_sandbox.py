@@ -712,11 +712,33 @@ def test_cli_writes_bounded_strategy_suite_and_forensics(tmp_path: Path) -> None
     ]
     assert (baseline_rows.abs() < 1e-12).all()
     assert (output_dir / "phase2_strategy_variant_by_fold.csv").exists()
+    assert (output_dir / "phase2_strategy_forensics_summary.csv").exists()
+    assert (output_dir / "phase2_strategy_forensics_summary.json").exists()
     assert (output_dir / "phase2_trade_ledger_all_variants.csv").exists()
     assert (output_dir / "phase2_forensics_summary.json").exists()
     assert (output_dir / "phase2_bootstrap_summary.json").exists()
     assert (output_dir / "phase2_exit_reason_forensics.csv").exists()
     assert (output_dir / "phase2_signal_funnel.csv").exists()
+    strategy_forensics = pd.read_csv(output_dir / "phase2_strategy_forensics_summary.csv")
+    assert set(strategy_forensics["strategy_id"]) == set(summary["strategy_id"])
+    assert not strategy_forensics["selection_allowed_on_current_test"].any()
+    assert "bootstrap_probability_compounded_return_positive" in (
+        strategy_forensics.columns
+    )
+    assert (
+        output_dir
+        / "strategy_variants"
+        / "score_margin_05_time_stop_6bar_v1"
+        / "base"
+        / "phase2_forensics_summary.json"
+    ).exists()
+    assert (
+        output_dir
+        / "strategy_variants"
+        / "score_margin_05_time_stop_6bar_v1"
+        / "base"
+        / "phase2_bootstrap_summary.json"
+    ).exists()
 
 
 def test_slim_bundle_includes_phase2_sandbox_directory(tmp_path: Path) -> None:
