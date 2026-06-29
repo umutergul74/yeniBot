@@ -70,6 +70,9 @@ baseline contract after results are known.
 The sandbox writer emits:
 
 ```text
+phase2_bars.csv
+phase2_signals.csv
+phase2_input_manifest.json
 phase2_trade_ledger.csv
 phase2_equity_curve.csv
 phase2_sandbox_report.json
@@ -80,7 +83,34 @@ Every report must include the gate state and whether the result is promotable.
 
 ## Command-Line Entry Point
 
-The first implementation can be called with CSV inputs:
+Preferred Colab path: let the sandbox build inputs directly from the frozen
+candidate manifest and its pinned `predictions_all` artifact:
+
+```bash
+python -m yenibot.automation.phase2_sandbox \
+  --report-dir /content/drive/MyDrive/yeniBot/reports/experiments/<run_id> \
+  --checkpoint-dir /content/drive/MyDrive/yeniBot/checkpoints \
+  --output-dir /content/drive/MyDrive/yeniBot/reports/experiments/<run_id>/phase2_sandbox \
+  --mode sandbox
+```
+
+By default this uses `split=test` from the frozen `predictions_all` file. Use
+`--split all` only when intentionally auditing the complete prediction timeline.
+
+The adapter writes:
+
+```text
+phase2_bars.csv
+phase2_signals.csv
+phase2_input_manifest.json
+```
+
+The manifest records the source prediction path, frozen candidate hash,
+threshold, row counts, and duplicate timestamp handling. This makes the
+sandbox reproducible without changing the Phase 1 or Future-OOS gate.
+
+Manual CSV inputs are still supported:
+
 
 ```bash
 python -m yenibot.automation.phase2_sandbox \

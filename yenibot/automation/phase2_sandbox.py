@@ -7,8 +7,10 @@ import pandas as pd
 
 from yenibot.phase2 import CostScenario
 from yenibot.phase2 import Phase2StrategyContract
+from yenibot.phase2 import build_phase2_sandbox_inputs
 from yenibot.phase2 import load_phase2_gate
 from yenibot.phase2 import run_long_only_backtest
+from yenibot.phase2.contracts import DEFAULT_PHASE2_CONTRACT
 from yenibot.phase2.reporting import write_phase2_sandbox_report
 
 
@@ -20,11 +22,63 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--report-dir", required=True, help="Phase 1 report directory.")
-    parser.add_argument("--bars", required=True, help="CSV with causal OHLCV/ATR bars.")
-    parser.add_argument("--signals", required=True, help="CSV with decision_time and prob_long.")
+    parser.add_argument(
+        "--bars",
+        help=(
+            "CSV with causal OHLCV/ATR bars. If omitted, inputs are generated "
+            "from the frozen candidate predictions."
+        ),
+    )
+    parser.add_argument(
+        "--signals",
+        help=(
+            "CSV with decision_time and prob_long. If omitted, inputs are "
+            "generated from the frozen candidate predictions."
+        ),
+    )
     parser.add_argument("--output-dir", required=True, help="Directory for sandbox outputs.")
     parser.add_argument("--mode", default="sandbox", choices=["sandbox", "official"])
-    parser.add_argument("--threshold", type=float, default=0.42674046854178105)
+    parser.add_argument(
+        "--checkpoint-dir",
+        help=(
+            "Checkpoint root containing experiments/<source_run_id>. Required "
+            "for automatic input generation unless --scope-dir is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--manifest-path",
+        help="Optional explicit frozen candidate manifest path.",
+    )
+    parser.add_argument(
+        "--scope-dir",
+        help=(
+            "Optional explicit profile scope directory containing "
+            "predictions_all.parquet/csv."
+        ),
+    )
+    parser.add_argument(
+        "--split",
+        default="test",
+        help="Prediction split used by automatic input generation. Use 'all' for all rows.",
+    )
+    parser.add_argument(
+        "--build-inputs",
+        action="store_true",
+        help="Generate phase2_bars.csv and phase2_signals.csv before running.",
+    )
+    parser.add_argument(
+        "--candidate-id",
+        help="Override candidate id in the Phase 2 contract.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help=(
+            "Override signal threshold. Defaults to the frozen manifest threshold "
+            "when auto-building, otherwise the default Phase 2 contract threshold."
+        ),
+    )
     parser.add_argument("--cost-name", default="base")
     parser.add_argument("--entry-fee-bps", type=float, default=4.0)
     parser.add_argument("--exit-fee-bps", type=float, default=4.0)
@@ -36,8 +90,53 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    gate = load_phase2_gate(Path(args.report_dir))
-    contract = Phase2StrategyContract(threshold=float(args.threshold))
+    report_dir = Path(args.report_dir)
+    output_dir = Path(args.output_dir)
+    gate = load_phase2_gate(report_dir)
+    manual_inputs = bool(args.bars or args.signals)
+    if manual_inputs and not (args.bars and args.signals):
+        raise ValueError("--bars and --signals must be supplied together.")
+
+    input_build = None
+    bars_path = Path(args.bars) if args.bars else None
+    signals_path = Path(args.signals) if args.signals else None
+    if args.build_inputs or not manual_inputs:
+        input_build = build_phase2_sandbox_inputs(
+            report_dir=report_dir,
+            checkpoint_dir=args.checkpoint_dir,
+            manifest_path=args.manifest_path,
+            scope_dir=args.scope_dir,
+            output_dir=output_dir,
+            split=str(args.split),
+            threshold=args.threshold,
+        )
+        bars_path = input_build.bars_path
+        signals_path = input_build.signals_path
+
+    if bars_path is None or signals_path is None:
+        raise ValueError(
+            "No Phase 2 inputs resolved. Supply --bars/--signals or allow "
+            "automatic generation with --checkpoint-dir/--scope-dir."
+        )
+
+    threshold = float(
+        args.threshold
+        if args.threshold is not None
+        else (
+            input_build.threshold
+            if input_build is not None
+            else DEFAULT_PHASE2_CONTRACT.threshold
+        )
+    )
+    candidate_id = str(
+        args.candidate_id
+        or (input_build.candidate_id if input_build is not None else "")
+        or DEFAULT_PHASE2_CONTRACT.candidate_id
+    )
+    contract = Phase2StrategyContract(
+        candidate_id=candidate_id,
+        threshold=threshold,
+    )
     scenario = CostScenario(
         name=str(args.cost_name),
         entry_fee_bps=float(args.entry_fee_bps),
@@ -46,8 +145,8 @@ def main(argv: list[str] | None = None) -> int:
         exit_slippage_bps=float(args.exit_slippage_bps),
         funding_bps_per_8h=float(args.funding_bps_per_8h),
     )
-    bars = pd.read_csv(args.bars)
-    signals = pd.read_csv(args.signals)
+    bars = pd.read_csv(bars_path)
+    signals = pd.read_csv(signals_path)
     result = run_long_only_backtest(
         bars,
         signals,
@@ -56,9 +155,11 @@ def main(argv: list[str] | None = None) -> int:
         cost_scenario=scenario,
         mode=args.mode,
     )
-    write_phase2_sandbox_report(args.output_dir, result)
+    if input_build is not None:
+        result.metadata["input_adapter"] = input_build.as_dict()
+    write_phase2_sandbox_report(output_dir, result)
     print(
-        f"phase2_sandbox_written output_dir={args.output_dir} "
+        f"phase2_sandbox_written output_dir={output_dir} "
         f"mode={args.mode} evidence_status={result.summary.get('evidence_status')} "
         f"trades={result.summary.get('trade_count')}"
     )

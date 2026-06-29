@@ -8,8 +8,10 @@ import pytest
 
 from yenibot.phase2 import CostScenario
 from yenibot.phase2 import Phase2StrategyContract
+from yenibot.phase2 import build_phase2_sandbox_inputs
 from yenibot.phase2 import load_phase2_gate
 from yenibot.phase2 import run_long_only_backtest
+from yenibot.automation.phase2_sandbox import main as phase2_sandbox_main
 from yenibot.phase2.reporting import write_phase2_sandbox_report
 
 
@@ -87,6 +89,65 @@ def _bars() -> pd.DataFrame:
     )
 
 
+def _frozen_prediction_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    report_dir = _pending_report_dir(tmp_path / "reports")
+    checkpoint_dir = tmp_path / "checkpoints"
+    scope_dir = (
+        checkpoint_dir
+        / "experiments"
+        / "source_run"
+        / "baseline_profile"
+        / "replacement_recent3"
+    )
+    scope_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        report_dir / "frozen_candidate_manifest.json",
+        {
+            "available": True,
+            "candidate_id": "control_recent3_equal_v2",
+            "candidate_type": "recency_profile",
+            "source_run_id": "source_run",
+            "manifest_hash": "abc123",
+            "expected_manifest_hash": "abc123",
+            "threshold": {
+                "value": 0.5,
+                "source": "test_threshold",
+                "selected_from": "pre_anchor_walk_forward_validation",
+            },
+            "components": [
+                {
+                    "profile": "baseline_profile",
+                    "fold_scope": "replacement_recent3",
+                    "scope_relative_path": "baseline_profile/replacement_recent3",
+                    "model_count": 3,
+                }
+            ],
+        },
+    )
+    predictions = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2026-01-01 00:00:00",
+                periods=7,
+                freq="1h",
+                tz="UTC",
+            ),
+            "open": [100, 101, 102, 103, 104, 105, 106],
+            "high": [101, 102, 104, 104, 106, 106, 108],
+            "low": [99, 100, 101, 100, 103, 104, 105],
+            "close": [100.5, 101.5, 103.0, 102.0, 105.0, 105.5, 107.0],
+            "atr_14": [1.0] * 7,
+            "prob_long": [0.9, 0.3, 0.8, 0.6, 0.4, 0.7, 0.2],
+            "split": ["val", "test", "test", "test", "test", "test", "test"],
+            "fold": [1, 1, 1, 1, 2, 2, 2],
+            "label": [1, 0, 1, 0, 1, 1, 0],
+            "forward_return": [0.01, -0.01, 0.02, -0.02, 0.01, 0.03, -0.01],
+        }
+    )
+    predictions.to_csv(scope_dir / "predictions_all.csv", index=False)
+    return report_dir, checkpoint_dir
+
+
 def test_pending_gate_allows_sandbox_but_blocks_official(tmp_path: Path) -> None:
     gate = load_phase2_gate(_pending_report_dir(tmp_path))
 
@@ -148,3 +209,72 @@ def test_report_writer_marks_sandbox_as_not_promotable(tmp_path: Path) -> None:
     )
     assert (tmp_path / "phase2" / "phase2_trade_ledger.csv").exists()
     assert (tmp_path / "phase2" / "phase2_sandbox_report.md").exists()
+
+
+def test_adapter_builds_inputs_from_frozen_candidate_predictions(tmp_path: Path) -> None:
+    report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
+
+    result = build_phase2_sandbox_inputs(
+        report_dir=report_dir,
+        checkpoint_dir=checkpoint_dir,
+        output_dir=tmp_path / "phase2",
+    )
+
+    bars = pd.read_csv(result.bars_path)
+    signals = pd.read_csv(result.signals_path)
+    input_manifest = json.loads(result.input_manifest_path.read_text(encoding="utf-8"))
+    assert result.candidate_id == "control_recent3_equal_v2"
+    assert result.threshold == 0.5
+    assert result.rows_read == 7
+    assert result.rows_after_split_filter == 6
+    assert result.bar_count == 6
+    assert result.signal_count == 6
+    assert list(bars.columns[:6]) == [
+        "bar_close_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "atr_14",
+    ]
+    assert set(signals["split"]) == {"test"}
+    assert signals["candidate_id"].eq("control_recent3_equal_v2").all()
+    assert input_manifest["adapter_version"] == "phase2_input_adapter_v1"
+
+
+def test_cli_auto_builds_inputs_and_writes_sandbox_report(tmp_path: Path) -> None:
+    report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
+    output_dir = tmp_path / "phase2_cli"
+
+    exit_code = phase2_sandbox_main(
+        [
+            "--report-dir",
+            str(report_dir),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--output-dir",
+            str(output_dir),
+            "--mode",
+            "sandbox",
+            "--entry-fee-bps",
+            "0",
+            "--exit-fee-bps",
+            "0",
+            "--entry-slippage-bps",
+            "0",
+            "--exit-slippage-bps",
+            "0",
+        ]
+    )
+
+    report = json.loads((output_dir / "phase2_sandbox_report.json").read_text())
+    assert exit_code == 0
+    assert (output_dir / "phase2_bars.csv").exists()
+    assert (output_dir / "phase2_signals.csv").exists()
+    assert (output_dir / "phase2_input_manifest.json").exists()
+    assert report["metadata"]["input_adapter"]["candidate_id"] == (
+        "control_recent3_equal_v2"
+    )
+    assert report["summary"]["evidence_status"] == (
+        "sandbox_not_promotable_until_future_oos_passes"
+    )
