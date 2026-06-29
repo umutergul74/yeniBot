@@ -218,12 +218,14 @@ def _risk_flags(
         flags.append("base_cost_return_still_negative")
     if compounded_return is not None and compounded_return <= baseline_base_return:
         flags.append("does_not_improve_baseline_base_return")
-    if (
+    if best_month_removed is not None and best_month_removed < 0:
+        flags.append("best_month_removed_return_negative")
+    elif (
         best_month_removed is not None
         and compounded_return is not None
         and best_month_removed < compounded_return - 0.03
     ):
-        flags.append("best_month_dependency")
+        flags.append("best_month_concentration")
     if max_holding_share is not None and max_holding_share > 0.50:
         flags.append("high_max_holding_exit_share")
     return flags
@@ -256,7 +258,8 @@ def _hypothesis_status(
                 "single_or_zero_positive_fold",
                 "bootstrap_positive_probability_below_50pct",
                 "base_cost_return_still_negative",
-                "best_month_dependency",
+                "best_month_removed_return_negative",
+                "best_month_concentration",
             )
         ):
             return "candidate_for_clean_confirmation_high_risk"
@@ -345,12 +348,23 @@ def _build_decision_report(
                 "rationale": row.get("rationale"),
             }
         )
+    risk_weights = {
+        "low_trade_count": 3,
+        "single_or_zero_positive_fold": 4,
+        "bootstrap_positive_probability_below_50pct": 3,
+        "base_cost_return_still_negative": 4,
+        "does_not_improve_baseline_base_return": 3,
+        "best_month_removed_return_negative": 3,
+        "best_month_concentration": 1,
+        "high_max_holding_exit_share": 1,
+    }
     hypotheses = sorted(
         hypotheses,
         key=lambda item: (
             item["status"] != "carry_to_clean_confirmation",
             item["status"] != "candidate_for_clean_confirmation_high_risk",
             item["status"] != "watchlist_low_sample_or_fragile",
+            sum(risk_weights.get(flag, 0) for flag in item["overfit_risk_flags"]),
             -(item["base_delta_compounded_return_vs_baseline"] or -999.0),
         ),
     )

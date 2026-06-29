@@ -175,6 +175,81 @@ def registered_phase2_strategy_variants(
                 "entry-quality candidate."
             ),
         ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_07_atr_band_005_010_time_stop_7bar_tp2_sl4_v1",
+                min_score_margin=0.07,
+                min_entry_atr_fraction=0.005,
+                max_entry_atr_fraction=0.010,
+                max_holding_bars=7,
+                take_profit_atr=2.0,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_third_wave_low_sample_confirmation_watchlist",
+            rationale=(
+                "Require entry ATR to stay between 0.5% and 1.0% of price on "
+                "the strongest second-wave candidate. The band improved fold "
+                "breadth locally but reduced the sample below the robustness "
+                "minimum, so this is a clean-window watchlist hypothesis only."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_07_atr_band_005_010_time_stop_6bar_tp2_sl4_v1",
+                min_score_margin=0.07,
+                min_entry_atr_fraction=0.005,
+                max_entry_atr_fraction=0.010,
+                max_holding_bars=6,
+                take_profit_atr=2.0,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_third_wave_low_sample_confirmation_watchlist",
+            rationale=(
+                "Adjacent six-bar companion for the bounded ATR-regime filter. "
+                "It checks whether the observed effect survives a one-bar "
+                "holding-period perturbation and remains non-selectable until "
+                "a clean confirmation window supplies enough trades."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_04_atr_band_007_010_time_stop_6bar_tp15_sl4_v1",
+                min_score_margin=0.04,
+                min_entry_atr_fraction=0.007,
+                max_entry_atr_fraction=0.010,
+                max_holding_bars=6,
+                take_profit_atr=1.5,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_third_wave_low_sample_confirmation_watchlist",
+            rationale=(
+                "A narrower 0.7%-1.0% ATR regime with a softer score margin "
+                "and nearer take-profit. Local diagnostics stayed positive "
+                "after removing the best month and under adverse costs, but "
+                "the trade count remains below the robustness minimum."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_04_atr_band_007_010_time_stop_7bar_tp15_sl4_v1",
+                min_score_margin=0.04,
+                min_entry_atr_fraction=0.007,
+                max_entry_atr_fraction=0.010,
+                max_holding_bars=7,
+                take_profit_atr=1.5,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_third_wave_low_sample_confirmation_watchlist",
+            rationale=(
+                "Seven-bar perturbation of the balanced ATR-regime hypothesis. "
+                "It is retained only to test local parameter stability and "
+                "cannot be selected from the already-seen window."
+            ),
+        ),
     )
 
 
