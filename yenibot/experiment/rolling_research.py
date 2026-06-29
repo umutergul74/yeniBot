@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import asdict, dataclass
 from math import comb
 from pathlib import Path
@@ -13,7 +12,12 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, f1_score, precision_score, recall_score
 
-from yenibot.experiment.common import _hash_payload, _rank_ic_for_frame, _write_json
+from yenibot.experiment.common import (
+    _durable_copy_file,
+    _hash_payload,
+    _rank_ic_for_frame,
+    _write_json,
+)
 from yenibot.experiment.configuration import profile_config
 from yenibot.experiment.holdout import _predict_holdout_for_profile
 from yenibot.training import PurgedWalkForwardCV
@@ -385,7 +389,7 @@ def publish_recency_research_reports(
         return pd.DataFrame(), {}
     for source in sorted(source_path.glob("recency_ensemble_*")):
         if source.is_file():
-            shutil.copy2(source, report_path / source.name)
+            _durable_copy_file(source, report_path / source.name)
     summary_path = source_path / "recency_ensemble_summary.csv"
     decision_path = source_path / "recency_ensemble_decision.json"
     summary = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame()

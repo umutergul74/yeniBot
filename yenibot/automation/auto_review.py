@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -11,6 +10,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from yenibot.experiment.common import _durable_copy_file
 
 
 def _json_ready(value: Any) -> Any:
@@ -1936,8 +1937,8 @@ def main(argv: list[str] | None = None) -> int:
         if temp is not None:
             auto_review_copy = input_path.with_name(f"{input_path.stem}_auto_review.md")
             next_actions_copy = input_path.with_name(f"{input_path.stem}_next_actions.json")
-            shutil.copyfile(result["auto_review_path"], auto_review_copy)
-            shutil.copyfile(result["next_actions_path"], next_actions_copy)
+            _durable_copy_file(result["auto_review_path"], auto_review_copy)
+            _durable_copy_file(result["next_actions_path"], next_actions_copy)
             result["auto_review_path"] = str(auto_review_copy)
             result["next_actions_path"] = str(next_actions_copy)
         print(result["auto_review_path"])

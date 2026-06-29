@@ -14,7 +14,7 @@ from yenibot.experiment import (
     run_experiment_matrix,
     write_experiment_diagnostics,
 )
-from yenibot.experiment.common import _write_json
+from yenibot.experiment.common import _durable_copy_file, _write_json
 from yenibot.experiment.execution import WorkflowJournal, traced_workflow, workflow_checkpoint
 
 
@@ -144,6 +144,29 @@ def test_common_json_writer_retries_transient_drive_write_failure(tmp_path: Path
 
     assert calls["count"] == 3
     assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_common_file_copy_retries_transient_drive_copy_failure(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    destination = tmp_path / "report" / "recency_ensemble_manifest.json"
+    source.write_text('{"ok": true}', encoding="utf-8")
+    original_copyfile = __import__("shutil").copyfile
+    calls = {"count": 0}
+
+    def flaky_copyfile(src, dst, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise OSError(5, "temporary Drive I/O error")
+        return original_copyfile(src, dst, *args, **kwargs)
+
+    with (
+        patch("yenibot.experiment.common.shutil.copyfile", new=flaky_copyfile),
+        patch("yenibot.experiment.common.sleep", return_value=None),
+    ):
+        _durable_copy_file(source, destination)
+
+    assert calls["count"] == 3
+    assert destination.read_text(encoding="utf-8") == '{"ok": true}'
 
 
 def test_workflow_journal_warns_but_does_not_abort_after_retry_exhaustion(

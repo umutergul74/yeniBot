@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+import shutil
 import warnings
 from pathlib import Path
 from time import sleep
@@ -40,6 +41,7 @@ __all__ = [
     '_clean_probability_inputs',
     '_safe_average_precision',
     '_numeric_mean',
+    '_durable_copy_file',
     '_durable_write_text',
 ]
 
@@ -187,6 +189,42 @@ def _durable_write_text(path: Path, text: str) -> None:
     warnings.warn(
         "Durable text write failed after retries. "
         f"path={path} error={type(last_error).__name__}: {last_error}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    raise last_error
+
+def _durable_copy_file(source: str | Path, destination: str | Path) -> None:
+    """Copy a file atomically with retries for flaky Drive-backed filesystems."""
+
+    src = Path(source)
+    dst = Path(destination)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    last_error: OSError | None = None
+    for attempt in range(_WRITE_ATTEMPTS):
+        temporary = dst.with_name(f".{dst.name}.{uuid4().hex}.tmp")
+        try:
+            shutil.copyfile(src, temporary)
+            temporary.replace(dst)
+            return
+        except OSError as error:
+            last_error = error
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+            except OSError:
+                pass
+            if (
+                not _retryable_write_error(error)
+                or attempt + 1 >= _WRITE_ATTEMPTS
+            ):
+                break
+            sleep(min(_WRITE_BASE_DELAY_SECONDS * (2**attempt), 2.0))
+    assert last_error is not None
+    warnings.warn(
+        "Durable file copy failed after retries. "
+        f"source={src} destination={dst} "
+        f"error={type(last_error).__name__}: {last_error}",
         RuntimeWarning,
         stacklevel=2,
     )

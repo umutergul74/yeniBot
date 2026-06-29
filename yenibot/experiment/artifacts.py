@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import shutil
 import zipfile
 from pathlib import Path
+
+from yenibot.experiment.common import _durable_copy_file
 
 __all__ = [
     '_write_experiment_bundle',
@@ -313,7 +314,7 @@ def _write_experiment_bundle(
             path = Path(item)
             if path.exists():
                 archive.write(path, f"{run_id}/diagnostics/{path.name}")
-    shutil.copyfile(bundle_path, latest_path)
+    _durable_copy_file(bundle_path, latest_path)
     return bundle_path, latest_path
 
 def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: Path) -> tuple[Path, Path]:
@@ -332,5 +333,5 @@ def _write_experiment_slim_bundle(*, output_dir: Path, run_id: str, report_dir: 
             for path in sorted(phase2_dir.glob("*")):
                 if path.is_file() and path.suffix.lower() in {".csv", ".json", ".md"}:
                     archive.write(path, f"{run_id}/phase2_sandbox/{path.name}")
-    shutil.copyfile(slim_path, latest_slim_path)
+    _durable_copy_file(slim_path, latest_slim_path)
     return slim_path, latest_slim_path

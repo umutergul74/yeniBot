@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from yenibot.experiment.common import _cfg, _hash_payload, _slug, _write_json
+from yenibot.experiment.common import (
+    _cfg,
+    _durable_copy_file,
+    _hash_payload,
+    _slug,
+    _write_json,
+)
 from yenibot.experiment.configuration import profile_config
 from yenibot.experiment.holdout import _predict_holdout_for_profile
 from yenibot.experiment.rolling_research import (
@@ -528,5 +533,5 @@ def publish_replacement_candidate_reports(
     ):
         item = source / name
         if item.exists():
-            shutil.copy2(item, target / name)
+            _durable_copy_file(item, target / name)
     return json.loads(payload_path.read_text(encoding="utf-8"))
