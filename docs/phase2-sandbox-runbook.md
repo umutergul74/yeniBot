@@ -84,11 +84,28 @@ phase2_sandbox_report.md
 phase2_cost_scenario_summary.csv
 phase2_trade_ledger_all_costs.csv
 phase2_equity_curve_all_costs.csv
+phase2_strategy_registry.json
+phase2_strategy_variant_summary.csv
+phase2_strategy_variant_by_fold.csv
+phase2_trade_ledger_all_variants.csv
+phase2_forensics_summary.json
+phase2_bootstrap_summary.json
+phase2_exit_reason_forensics.csv
+phase2_fold_forensics.csv
+phase2_month_forensics.csv
+phase2_score_band_forensics.csv
+phase2_holding_forensics.csv
+phase2_signal_funnel.csv
 ```
 
 Every report must include the gate state and whether the result is promotable.
 The optimistic, base, and adverse cost scenarios are written separately; the
 root report remains the base scenario for compatibility.
+
+The strategy registry contains four bounded contracts. The baseline remains the
+root report. Dynamic-exit outputs are stored under
+`strategy_variants/<strategy_id>/<cost_scenario>/`. No command ranks, selects,
+or promotes a winner from the current test window.
 
 ## Colab Entry Point
 
@@ -108,7 +125,8 @@ python -m yenibot.automation.phase2_sandbox \
   --checkpoint-dir /content/drive/MyDrive/yeniBot/checkpoints \
   --output-dir /content/drive/MyDrive/yeniBot/reports/experiments/<run_id>/phase2_sandbox \
   --mode sandbox \
-  --all-cost-scenarios
+  --all-cost-scenarios \
+  --strategy-suite
 ```
 
 By default this uses `split=test` from the frozen `predictions_all` file. Use

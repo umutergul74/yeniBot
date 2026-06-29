@@ -7,6 +7,7 @@ from typing import Literal
 
 Phase2Mode = Literal["sandbox", "official"]
 SameBarPolicy = Literal["stop_first", "take_profit_first", "skip_ambiguous"]
+ExitPolicy = Literal["fixed_atr", "breakeven", "atr_trailing"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class CostScenario:
 class Phase2StrategyContract:
     """Pre-registered first Phase 2 long-only strategy contract."""
 
+    strategy_id: str = "baseline_fixed_atr_v1"
     candidate_id: str = "control_recent3_equal_v2"
     score_column: str = "prob_long"
     decision_time_column: str = "decision_time"
@@ -41,6 +43,9 @@ class Phase2StrategyContract:
     take_profit_atr: float = 2.0
     stop_loss_atr: float = 5.0
     max_holding_bars: int = 10
+    exit_policy: ExitPolicy = "fixed_atr"
+    breakeven_trigger_atr: float | None = None
+    trailing_stop_atr: float | None = None
     expected_bar_interval_hours: float = 1.0
     max_bar_gap_hours: float = 1.5
     atr_column: str = "atr_14"
@@ -79,6 +84,16 @@ class Phase2StrategyContract:
             raise ValueError("ATR exits must be positive.")
         if self.max_holding_bars <= 0:
             raise ValueError("Maximum holding bars must be positive.")
+        if self.exit_policy not in {"fixed_atr", "breakeven", "atr_trailing"}:
+            raise ValueError(f"Unsupported exit policy: {self.exit_policy}")
+        if self.exit_policy in {"breakeven", "atr_trailing"}:
+            if self.breakeven_trigger_atr is None or self.breakeven_trigger_atr <= 0:
+                raise ValueError(
+                    "Dynamic exit policies require a positive breakeven trigger."
+                )
+        if self.exit_policy == "atr_trailing":
+            if self.trailing_stop_atr is None or self.trailing_stop_atr <= 0:
+                raise ValueError("ATR trailing exits require a positive trailing distance.")
         if self.expected_bar_interval_hours <= 0:
             raise ValueError("Expected bar interval must be positive.")
         if self.max_bar_gap_hours < self.expected_bar_interval_hours:

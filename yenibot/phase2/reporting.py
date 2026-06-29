@@ -32,6 +32,8 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         "",
         "## Summary",
         "",
+        f"- Strategy: `{metadata.get('contract', {}).get('strategy_id')}`",
+        f"- Exit policy: `{metadata.get('contract', {}).get('exit_policy')}`",
         f"- Trade count: `{summary.get('trade_count')}`",
         f"- Mean net return: `{summary.get('mean_net_return')}`",
         f"- Sum net return: `{summary.get('sum_net_return')}`",

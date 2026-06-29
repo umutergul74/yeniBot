@@ -80,6 +80,37 @@ success probability.
 Alternative exits, cooldowns, sizing rules, or overlapping positions are later
 experiments and require separate preregistration.
 
+## Dynamic Exit Research Boundary
+
+ATR barriers are already dynamic in price space because the absolute TP/SL
+distance changes with causal volatility. The first extension is therefore a
+small path-dependent exit family, not a broad grid search:
+
+- `baseline_fixed_atr_v1`: immutable `2 ATR / 5 ATR / 10 bar` reference
+- `breakeven_after_1atr_v1`: after a completed bar reaches `+1 ATR`, move the
+  stop to entry for subsequent bars
+- `atr_trailing_1atr_after_1atr_v1`: after the same completed-bar trigger, trail
+  by `1 ATR` with breakeven as the minimum stop
+- `time_stop_6bar_v1`: retain fixed barriers but shorten signal lifetime
+
+Dynamic stops update only after a bar is complete. A high and low inside the
+same bar can never be used to manufacture a favorable ordering.
+
+These variants were registered after the first baseline report was reviewed.
+They are explicitly exploratory and cannot be selected on the already-seen
+test window. A new clean confirmation window is required before any variant
+can replace the baseline.
+
+The design follows the economic motivation for state/path-dependent trading
+stops while respecting the documented risk of selecting among many backtests:
+
+- Di Graziano, *Optimal Trading Stops and Algorithmic Trading*
+  (SSRN 2381830)
+- Leung and Zhang, *Optimal Trading with a Trailing Stop*
+  (SSRN 2895437)
+- Bailey et al., *The Probability of Backtest Overfitting*
+  and Bailey/Lopez de Prado, *The Deflated Sharpe Ratio*
+
 ## Cost And Carry Model
 
 The baseline backtest must itemize rather than combine:
@@ -148,6 +179,9 @@ cannot replace temporal breakdowns.
 - moving-block bootstrap of net trade returns
 - stale or missing prediction handling
 - purged-fold and missing-bar gap isolation
+- best-trade, best-five-trades, and best-month removal
+- fold, month, score-band, holding-period, and exit-reason attribution
+- bounded strategy-trial registry with automatic winner selection disabled
 
 ## Phase 2 Decision Boundary
 

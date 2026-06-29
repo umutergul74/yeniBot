@@ -86,6 +86,8 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "06_phase2_sandbox_backtest.ipynb" in diagnostics
     assert "run_phase2_sandbox(args)" in phase2
     assert "--all-cost-scenarios" in phase2
+    assert "--strategy-suite" in phase2
+    assert "no winner is selected" in phase2
     assert "Fit operations performed: 0" in phase2
     assert "write_experiment_diagnostics" not in phase2
     assert "phase2_latest_sandbox_bundle.zip" in phase2

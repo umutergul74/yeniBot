@@ -347,6 +347,106 @@ def test_backtest_forces_close_before_internal_data_gap(tmp_path: Path) -> None:
     assert result.summary["data_gap_forced_close_count"] == 1
 
 
+def test_breakeven_stop_activates_only_after_completed_trigger_bar(
+    tmp_path: Path,
+) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.date_range(
+                "2026-01-01",
+                periods=4,
+                freq="1h",
+                tz="UTC",
+            ),
+            "open": [100.0] * 4,
+            "high": [100.2, 101.2, 100.5, 100.2],
+            "low": [99.8, 99.5, 99.8, 99.7],
+            "close": [100.0, 100.8, 100.0, 100.0],
+            "atr_14": [1.0] * 4,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [pd.Timestamp("2026-01-01 00:00:00", tz="UTC")],
+            "prob_long": [0.90],
+        }
+    )
+    contract = Phase2StrategyContract(
+        strategy_id="breakeven_test",
+        threshold=0.5,
+        take_profit_atr=999.0,
+        stop_loss_atr=5.0,
+        exit_policy="breakeven",
+        breakeven_trigger_atr=1.0,
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=contract,
+        cost_scenario=CostScenario(name="zero", entry_fee_bps=0, exit_fee_bps=0),
+    )
+
+    trade = result.trades.iloc[0]
+    assert trade["entry_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
+    assert trade["exit_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
+    assert trade["exit_reason"] == "breakeven_stop"
+    assert trade["exit_price"] == 100.0
+    assert bool(trade["dynamic_stop_activated"]) is True
+
+
+def test_atr_trailing_stop_uses_only_prior_completed_bar_extremes(
+    tmp_path: Path,
+) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.date_range(
+                "2026-01-01",
+                periods=5,
+                freq="1h",
+                tz="UTC",
+            ),
+            "open": [100.0, 100.0, 101.0, 102.0, 101.0],
+            "high": [100.2, 101.2, 103.0, 102.0, 101.2],
+            "low": [99.8, 99.5, 100.2, 100.5, 100.0],
+            "close": [100.0, 100.8, 102.5, 101.0, 100.5],
+            "atr_14": [1.0] * 5,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [pd.Timestamp("2026-01-01 00:00:00", tz="UTC")],
+            "prob_long": [0.90],
+        }
+    )
+    contract = Phase2StrategyContract(
+        strategy_id="trailing_test",
+        threshold=0.5,
+        take_profit_atr=999.0,
+        stop_loss_atr=5.0,
+        exit_policy="atr_trailing",
+        breakeven_trigger_atr=1.0,
+        trailing_stop_atr=2.0,
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=contract,
+        cost_scenario=CostScenario(name="zero", entry_fee_bps=0, exit_fee_bps=0),
+    )
+
+    trade = result.trades.iloc[0]
+    assert trade["exit_time"] == pd.Timestamp("2026-01-01 03:00:00", tz="UTC")
+    assert trade["exit_reason"] == "atr_trailing_stop"
+    assert trade["exit_price"] == 101.0
+    assert trade["final_active_stop_price"] == 101.0
+
+
 def test_report_writer_marks_sandbox_as_not_promotable(tmp_path: Path) -> None:
     gate = load_phase2_gate(_pending_report_dir(tmp_path / "reports"))
     signals = pd.DataFrame(
@@ -508,6 +608,55 @@ def test_cli_runs_all_preregistered_cost_scenarios(tmp_path: Path) -> None:
             / scenario
             / "phase2_sandbox_report.json"
         ).exists()
+
+
+def test_cli_writes_bounded_strategy_suite_and_forensics(tmp_path: Path) -> None:
+    report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
+    output_dir = tmp_path / "phase2_strategy_suite"
+
+    exit_code = phase2_sandbox_main(
+        [
+            "--report-dir",
+            str(report_dir),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--output-dir",
+            str(output_dir),
+            "--mode",
+            "sandbox",
+            "--all-cost-scenarios",
+            "--strategy-suite",
+        ]
+    )
+
+    registry = json.loads(
+        (output_dir / "phase2_strategy_registry.json").read_text(encoding="utf-8")
+    )
+    summary = pd.read_csv(output_dir / "phase2_strategy_variant_summary.csv")
+    assert exit_code == 0
+    assert registry["automatic_winner_selection"] is False
+    assert registry["selection_allowed_on_current_test"] is False
+    assert registry["trial_count"] == 4
+    assert len(summary) == 12
+    assert set(summary["strategy_id"]) == {
+        "baseline_fixed_atr_v1",
+        "breakeven_after_1atr_v1",
+        "atr_trailing_1atr_after_1atr_v1",
+        "time_stop_6bar_v1",
+    }
+    assert not summary["selection_allowed_on_current_test"].any()
+    assert "delta_compounded_return_vs_baseline" in summary.columns
+    baseline_rows = summary.loc[
+        summary["strategy_id"] == "baseline_fixed_atr_v1",
+        "delta_compounded_return_vs_baseline",
+    ]
+    assert (baseline_rows.abs() < 1e-12).all()
+    assert (output_dir / "phase2_strategy_variant_by_fold.csv").exists()
+    assert (output_dir / "phase2_trade_ledger_all_variants.csv").exists()
+    assert (output_dir / "phase2_forensics_summary.json").exists()
+    assert (output_dir / "phase2_bootstrap_summary.json").exists()
+    assert (output_dir / "phase2_exit_reason_forensics.csv").exists()
+    assert (output_dir / "phase2_signal_funnel.csv").exists()
 
 
 def test_slim_bundle_includes_phase2_sandbox_directory(tmp_path: Path) -> None:

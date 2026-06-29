@@ -229,7 +229,9 @@ Notebook 05 writes a shareable slim archive under Google Drive:
 
 Notebook 06 is the fast, independent Phase 2 entry point. It consumes the
 already-pinned prediction artifact, runs no fit operation, executes the
-pre-registered optimistic/base/adverse cost scenarios, and writes:
+pre-registered optimistic/base/adverse cost scenarios, produces fold/month/
+exit/score/holding forensics, and evaluates a bounded dynamic-exit family
+without automatically selecting a winner. It writes:
 
 ```text
 /content/drive/MyDrive/yeniBot/reports/phase2_latest_sandbox_bundle.zip

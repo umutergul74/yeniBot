@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -11,7 +12,11 @@ from yenibot.phase2 import build_phase2_sandbox_inputs
 from yenibot.phase2 import load_phase2_gate
 from yenibot.phase2 import run_long_only_backtest
 from yenibot.phase2.contracts import DEFAULT_PHASE2_CONTRACT
+from yenibot.phase2.forensics import phase2_trade_forensics
+from yenibot.phase2.forensics import write_phase2_forensics
 from yenibot.phase2.reporting import write_phase2_sandbox_report
+from yenibot.phase2.variants import phase2_strategy_registry
+from yenibot.phase2.variants import registered_phase2_strategy_variants
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -93,6 +98,14 @@ def _parser() -> argparse.ArgumentParser:
             "The root report remains the base scenario for compatibility."
         ),
     )
+    parser.add_argument(
+        "--strategy-suite",
+        action="store_true",
+        help=(
+            "Run the bounded Phase 2 baseline/dynamic-exit research family. "
+            "Outputs remain exploratory and automatic winner selection is disabled."
+        ),
+    )
     return parser
 
 
@@ -156,43 +169,82 @@ def main(argv: list[str] | None = None) -> int:
     bars = pd.read_csv(bars_path)
     signals = pd.read_csv(signals_path)
     scenarios = (
-        contract.cost_scenarios
-        if args.all_cost_scenarios
-        else (custom_scenario,)
+        contract.cost_scenarios if args.all_cost_scenarios else (custom_scenario,)
     )
-    results = []
-    for scenario in scenarios:
-        result = run_long_only_backtest(
-            bars,
-            signals,
-            gate=gate,
-            contract=contract,
-            cost_scenario=scenario,
-            mode=args.mode,
+    variant_specs = (
+        registered_phase2_strategy_variants(
+            candidate_id=candidate_id,
+            threshold=threshold,
         )
-        if input_build is not None:
-            result.metadata["input_adapter"] = input_build.as_dict()
-        results.append(result)
-        if args.all_cost_scenarios:
-            write_phase2_sandbox_report(
-                output_dir / "cost_scenarios" / scenario.name,
-                result,
+        if args.strategy_suite
+        else ()
+    )
+    strategy_contracts = (
+        [item.contract for item in variant_specs]
+        if variant_specs
+        else [contract]
+    )
+    spec_by_strategy = {
+        item.contract.strategy_id: item
+        for item in variant_specs
+    }
+    run_records = []
+    for strategy_contract in strategy_contracts:
+        for scenario in scenarios:
+            result = run_long_only_backtest(
+                bars,
+                signals,
+                gate=gate,
+                contract=strategy_contract,
+                cost_scenario=scenario,
+                mode=args.mode,
             )
-            if scenario.name == "base":
+            if input_build is not None:
+                result.metadata["input_adapter"] = input_build.as_dict()
+            run_records.append(
+                {
+                    "contract": strategy_contract,
+                    "scenario": scenario,
+                    "result": result,
+                }
+            )
+            if args.strategy_suite:
+                write_phase2_sandbox_report(
+                    output_dir
+                    / "strategy_variants"
+                    / strategy_contract.strategy_id
+                    / scenario.name,
+                    result,
+                )
+            if strategy_contract.strategy_id != DEFAULT_PHASE2_CONTRACT.strategy_id:
+                continue
+            if args.all_cost_scenarios:
+                write_phase2_sandbox_report(
+                    output_dir / "cost_scenarios" / scenario.name,
+                    result,
+                )
+                if scenario.name == "base":
+                    write_phase2_sandbox_report(output_dir, result)
+            else:
                 write_phase2_sandbox_report(output_dir, result)
-        else:
-            write_phase2_sandbox_report(output_dir, result)
 
+    baseline_records = [
+        record
+        for record in run_records
+        if record["contract"].strategy_id == DEFAULT_PHASE2_CONTRACT.strategy_id
+    ]
     if args.all_cost_scenarios:
-        summary_frame = pd.DataFrame([result.summary for result in results])
+        summary_frame = pd.DataFrame(
+            [record["result"].summary for record in baseline_records]
+        )
         summary_frame.to_csv(
             output_dir / "phase2_cost_scenario_summary.csv",
             index=False,
         )
         trade_frames = [
-            result.trades
-            for result in results
-            if not result.trades.empty
+            record["result"].trades
+            for record in baseline_records
+            if not record["result"].trades.empty
         ]
         if trade_frames:
             pd.concat(trade_frames, ignore_index=True).to_csv(
@@ -200,7 +252,8 @@ def main(argv: list[str] | None = None) -> int:
                 index=False,
             )
         equity_frames = []
-        for result in results:
+        for record in baseline_records:
+            result = record["result"]
             equity = result.equity.copy()
             equity["cost_scenario"] = result.summary.get("cost_scenario")
             equity_frames.append(equity)
@@ -209,19 +262,126 @@ def main(argv: list[str] | None = None) -> int:
             index=False,
         )
 
+    if args.strategy_suite:
+        registry = phase2_strategy_registry(
+            candidate_id=candidate_id,
+            threshold=threshold,
+        )
+        (output_dir / "phase2_strategy_registry.json").write_text(
+            json.dumps(registry, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        variant_rows = []
+        variant_fold_frames = []
+        for record in run_records:
+            strategy_contract = record["contract"]
+            scenario = record["scenario"]
+            result = record["result"]
+            spec = spec_by_strategy[strategy_contract.strategy_id]
+            row = {
+                "strategy_id": strategy_contract.strategy_id,
+                "exit_policy": strategy_contract.exit_policy,
+                "max_holding_bars": strategy_contract.max_holding_bars,
+                "breakeven_trigger_atr": strategy_contract.breakeven_trigger_atr,
+                "trailing_stop_atr": strategy_contract.trailing_stop_atr,
+                "variant_status": spec.status,
+                "selection_allowed_on_current_test": (
+                    spec.selection_allowed_on_current_test
+                ),
+                "rationale": spec.rationale,
+                **result.summary,
+            }
+            variant_rows.append(row)
+            if scenario.name == "base":
+                diagnostics = phase2_trade_forensics(
+                    result.trades,
+                    signals,
+                    execution_summary=result.summary,
+                )
+                fold_frame = diagnostics["fold"].copy()
+                if not fold_frame.empty:
+                    fold_frame.insert(0, "strategy_id", strategy_contract.strategy_id)
+                    fold_frame.insert(1, "cost_scenario", scenario.name)
+                    variant_fold_frames.append(fold_frame)
+        variant_summary = pd.DataFrame(variant_rows)
+        baseline_columns = [
+            "cost_scenario",
+            "compounded_return",
+            "max_drawdown",
+            "profit_factor",
+        ]
+        baseline_comparison = variant_summary.loc[
+            variant_summary["strategy_id"] == DEFAULT_PHASE2_CONTRACT.strategy_id,
+            baseline_columns,
+        ].rename(
+            columns={
+                "compounded_return": "baseline_compounded_return",
+                "max_drawdown": "baseline_max_drawdown",
+                "profit_factor": "baseline_profit_factor",
+            }
+        )
+        variant_summary = variant_summary.merge(
+            baseline_comparison,
+            on="cost_scenario",
+            how="left",
+        )
+        variant_summary["delta_compounded_return_vs_baseline"] = (
+            variant_summary["compounded_return"]
+            - variant_summary["baseline_compounded_return"]
+        )
+        variant_summary["delta_max_drawdown_vs_baseline"] = (
+            variant_summary["max_drawdown"]
+            - variant_summary["baseline_max_drawdown"]
+        )
+        variant_summary["delta_profit_factor_vs_baseline"] = (
+            variant_summary["profit_factor"]
+            - variant_summary["baseline_profit_factor"]
+        )
+        variant_summary.to_csv(
+            output_dir / "phase2_strategy_variant_summary.csv",
+            index=False,
+        )
+        if variant_fold_frames:
+            fold_records = [
+                row
+                for frame in variant_fold_frames
+                for row in frame.to_dict(orient="records")
+            ]
+            pd.DataFrame.from_records(fold_records).to_csv(
+                output_dir / "phase2_strategy_variant_by_fold.csv",
+                index=False,
+            )
+        variant_trade_frames = [
+            record["result"].trades
+            for record in run_records
+            if not record["result"].trades.empty
+        ]
+        if variant_trade_frames:
+            pd.concat(variant_trade_frames, ignore_index=True).to_csv(
+                output_dir / "phase2_trade_ledger_all_variants.csv",
+                index=False,
+            )
+
     base_result = next(
         (
-            result
-            for result in results
-            if result.summary.get("cost_scenario") == "base"
+            record["result"]
+            for record in baseline_records
+            if record["scenario"].name == "base"
         ),
-        results[0],
+        baseline_records[0]["result"],
     )
+    base_diagnostics = phase2_trade_forensics(
+        base_result.trades,
+        signals,
+        execution_summary=base_result.summary,
+    )
+    write_phase2_forensics(output_dir, base_diagnostics)
     print(
         f"phase2_sandbox_written output_dir={output_dir} "
         f"mode={args.mode} evidence_status={base_result.summary.get('evidence_status')} "
         f"trades={base_result.summary.get('trade_count')} "
-        f"cost_scenarios={len(results)}"
+        f"cost_scenarios={len(scenarios)} "
+        f"strategies={len(strategy_contracts)}"
     )
     return 0
 

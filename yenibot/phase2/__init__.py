@@ -15,6 +15,9 @@ from yenibot.phase2.engine import Phase2BacktestResult
 from yenibot.phase2.engine import run_long_only_backtest
 from yenibot.phase2.readiness import Phase2Gate
 from yenibot.phase2.readiness import load_phase2_gate
+from yenibot.phase2.variants import Phase2StrategyVariantSpec
+from yenibot.phase2.variants import phase2_strategy_registry
+from yenibot.phase2.variants import registered_phase2_strategy_variants
 
 __all__ = [
     "CostScenario",
@@ -22,8 +25,11 @@ __all__ = [
     "Phase2Gate",
     "Phase2InputBuildResult",
     "Phase2StrategyContract",
+    "Phase2StrategyVariantSpec",
     "build_phase2_sandbox_inputs",
     "load_phase2_gate",
     "phase2_inputs_from_predictions",
+    "phase2_strategy_registry",
+    "registered_phase2_strategy_variants",
     "run_long_only_backtest",
 ]

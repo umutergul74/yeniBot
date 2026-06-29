@@ -21,6 +21,17 @@ class Phase2BacktestResult:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ExitResolution:
+    exit_idx: int
+    exit_price: float
+    exit_reason: str
+    initial_stop_price: float
+    take_profit_price: float
+    final_active_stop_price: float
+    dynamic_stop_activated: bool
+
+
 def _to_timestamp(value: Any) -> pd.Timestamp:
     ts = pd.Timestamp(value)
     if ts.tzinfo is None:
@@ -80,9 +91,13 @@ def _resolve_exit(
     entry_idx: int,
     entry_price: float,
     atr: float,
-) -> tuple[int, float, str]:
+) -> ExitResolution:
     take_price = entry_price + contract.take_profit_atr * atr
-    stop_price = entry_price - contract.stop_loss_atr * atr
+    initial_stop_price = entry_price - contract.stop_loss_atr * atr
+    active_stop_price = initial_stop_price
+    active_stop_reason = "stop_loss"
+    dynamic_stop_activated = False
+    running_high = entry_price
     last_idx = min(entry_idx + contract.max_holding_bars - 1, len(bars) - 1)
 
     for idx in range(entry_idx, last_idx + 1):
@@ -92,27 +107,101 @@ def _resolve_exit(
             gap_hours = (current_time - previous_time).total_seconds() / 3600.0
             if gap_hours > contract.max_bar_gap_hours:
                 prior_idx = idx - 1
-                return (
-                    prior_idx,
-                    float(bars.loc[prior_idx, "close"]),
-                    "data_gap_forced_close",
+                return ExitResolution(
+                    exit_idx=prior_idx,
+                    exit_price=float(bars.loc[prior_idx, "close"]),
+                    exit_reason="data_gap_forced_close",
+                    initial_stop_price=initial_stop_price,
+                    take_profit_price=take_price,
+                    final_active_stop_price=active_stop_price,
+                    dynamic_stop_activated=dynamic_stop_activated,
                 )
         high = float(bars.loc[idx, "high"])
         low = float(bars.loc[idx, "low"])
         touched_take = high >= take_price
-        touched_stop = low <= stop_price
+        touched_stop = low <= active_stop_price
         if touched_take and touched_stop:
             if contract.same_bar_policy == "skip_ambiguous":
-                return idx, float(bars.loc[idx, "close"]), "ambiguous_same_bar_skipped_to_close"
+                return ExitResolution(
+                    exit_idx=idx,
+                    exit_price=float(bars.loc[idx, "close"]),
+                    exit_reason="ambiguous_same_bar_skipped_to_close",
+                    initial_stop_price=initial_stop_price,
+                    take_profit_price=take_price,
+                    final_active_stop_price=active_stop_price,
+                    dynamic_stop_activated=dynamic_stop_activated,
+                )
             if contract.same_bar_policy == "take_profit_first":
-                return idx, take_price, "take_profit_same_bar"
-            return idx, stop_price, "stop_loss_same_bar_conservative"
+                return ExitResolution(
+                    exit_idx=idx,
+                    exit_price=take_price,
+                    exit_reason="take_profit_same_bar",
+                    initial_stop_price=initial_stop_price,
+                    take_profit_price=take_price,
+                    final_active_stop_price=active_stop_price,
+                    dynamic_stop_activated=dynamic_stop_activated,
+                )
+            return ExitResolution(
+                exit_idx=idx,
+                exit_price=active_stop_price,
+                exit_reason=f"{active_stop_reason}_same_bar_conservative",
+                initial_stop_price=initial_stop_price,
+                take_profit_price=take_price,
+                final_active_stop_price=active_stop_price,
+                dynamic_stop_activated=dynamic_stop_activated,
+            )
         if touched_stop:
-            return idx, stop_price, "stop_loss"
+            return ExitResolution(
+                exit_idx=idx,
+                exit_price=active_stop_price,
+                exit_reason=active_stop_reason,
+                initial_stop_price=initial_stop_price,
+                take_profit_price=take_price,
+                final_active_stop_price=active_stop_price,
+                dynamic_stop_activated=dynamic_stop_activated,
+            )
         if touched_take:
-            return idx, take_price, "take_profit"
+            return ExitResolution(
+                exit_idx=idx,
+                exit_price=take_price,
+                exit_reason="take_profit",
+                initial_stop_price=initial_stop_price,
+                take_profit_price=take_price,
+                final_active_stop_price=active_stop_price,
+                dynamic_stop_activated=dynamic_stop_activated,
+            )
 
-    return last_idx, float(bars.loc[last_idx, "close"]), "max_holding_bars"
+        running_high = max(running_high, high)
+        if (
+            contract.exit_policy in {"breakeven", "atr_trailing"}
+            and contract.breakeven_trigger_atr is not None
+            and running_high
+            >= entry_price + contract.breakeven_trigger_atr * atr
+        ):
+            candidate_stop = entry_price
+            candidate_reason = "breakeven_stop"
+            if (
+                contract.exit_policy == "atr_trailing"
+                and contract.trailing_stop_atr is not None
+            ):
+                trailing_stop = running_high - contract.trailing_stop_atr * atr
+                if trailing_stop > candidate_stop:
+                    candidate_stop = trailing_stop
+                    candidate_reason = "atr_trailing_stop"
+            if candidate_stop > active_stop_price:
+                active_stop_price = candidate_stop
+                active_stop_reason = candidate_reason
+                dynamic_stop_activated = True
+
+    return ExitResolution(
+        exit_idx=last_idx,
+        exit_price=float(bars.loc[last_idx, "close"]),
+        exit_reason="max_holding_bars",
+        initial_stop_price=initial_stop_price,
+        take_profit_price=take_price,
+        final_active_stop_price=active_stop_price,
+        dynamic_stop_activated=dynamic_stop_activated,
+    )
 
 
 def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> dict[str, Any]:
@@ -245,13 +334,16 @@ def run_long_only_backtest(
             skipped_invalid_atr_count += 1
             continue
         entry_price = float(bars.loc[entry_idx, "open"])
-        exit_idx, exit_price, exit_reason = _resolve_exit(
+        exit_resolution = _resolve_exit(
             bars,
             contract,
             entry_idx=entry_idx,
             entry_price=entry_price,
             atr=atr,
         )
+        exit_idx = exit_resolution.exit_idx
+        exit_price = exit_resolution.exit_price
+        exit_reason = exit_resolution.exit_reason
         if exit_reason == "data_gap_forced_close":
             data_gap_forced_close_count += 1
         holding_hours = _holding_hours(bars, contract, entry_idx, exit_idx)
@@ -265,6 +357,7 @@ def run_long_only_backtest(
         )
         trades.append(
             {
+                "strategy_id": contract.strategy_id,
                 "candidate_id": contract.candidate_id,
                 "decision_time": decision_time,
                 "entry_time": entry_time,
@@ -277,6 +370,11 @@ def run_long_only_backtest(
                 "atr": atr,
                 "take_profit_atr": contract.take_profit_atr,
                 "stop_loss_atr": contract.stop_loss_atr,
+                "exit_policy": contract.exit_policy,
+                "initial_stop_price": exit_resolution.initial_stop_price,
+                "take_profit_price": exit_resolution.take_profit_price,
+                "final_active_stop_price": exit_resolution.final_active_stop_price,
+                "dynamic_stop_activated": exit_resolution.dynamic_stop_activated,
                 "exit_reason": exit_reason,
                 "holding_bars": int(exit_idx - entry_idx + 1),
                 "holding_hours": holding_hours,
@@ -307,6 +405,16 @@ def run_long_only_backtest(
         "skipped_during_open_position_count": skipped_during_open_position_count,
         "skipped_invalid_atr_count": skipped_invalid_atr_count,
         "data_gap_forced_close_count": data_gap_forced_close_count,
+        "dynamic_stop_activation_count": (
+            int(trade_frame["dynamic_stop_activated"].sum())
+            if not trade_frame.empty
+            else 0
+        ),
+        "dynamic_stop_activation_share": (
+            float(trade_frame["dynamic_stop_activated"].mean())
+            if not trade_frame.empty
+            else 0.0
+        ),
         "max_entry_delay_hours": max(entry_delay_hours) if entry_delay_hours else None,
         "mean_entry_delay_hours": (
             sum(entry_delay_hours) / len(entry_delay_hours)
@@ -318,6 +426,7 @@ def run_long_only_backtest(
     metadata = {
         "mode": mode,
         "contract": {
+            "strategy_id": contract.strategy_id,
             "candidate_id": contract.candidate_id,
             "score_column": contract.score_column,
             "threshold": contract.threshold,
@@ -326,6 +435,9 @@ def run_long_only_backtest(
             "take_profit_atr": contract.take_profit_atr,
             "stop_loss_atr": contract.stop_loss_atr,
             "max_holding_bars": contract.max_holding_bars,
+            "exit_policy": contract.exit_policy,
+            "breakeven_trigger_atr": contract.breakeven_trigger_atr,
+            "trailing_stop_atr": contract.trailing_stop_atr,
             "expected_bar_interval_hours": contract.expected_bar_interval_hours,
             "max_bar_gap_hours": contract.max_bar_gap_hours,
         },
