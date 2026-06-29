@@ -13,7 +13,7 @@ NOTEBOOK_NAMES = [
     "04_training_walk_forward.ipynb",
     "05_diagnostics_validation.ipynb",
 ]
-RESEARCH_BRANCH = "research/next-candidate-v1"
+RESEARCH_BRANCH = "codex/phase2-sandbox"
 
 
 def _load_notebook(name: str) -> dict:
@@ -60,6 +60,8 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "source_run_id" in diagnostics
     assert "notebook04_run.json" in diagnostics
     assert "notebook04_handoff" in diagnostics
+    assert "latest_experiment_fallback_stale_notebook04_handoff_branch" in diagnostics
+    assert "Ignoring stale Notebook 04 handoff from branch:" in diagnostics
     assert "optional=True" in diagnostics
     assert "Seed reproducibility audit:" in diagnostics
     assert "seed_reproducibility_manifest_diff.csv" in diagnostics
