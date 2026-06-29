@@ -691,8 +691,8 @@ def test_cli_writes_bounded_strategy_suite_and_forensics(tmp_path: Path) -> None
     assert exit_code == 0
     assert registry["automatic_winner_selection"] is False
     assert registry["selection_allowed_on_current_test"] is False
-    assert registry["trial_count"] == 7
-    assert len(summary) == 21
+    assert registry["trial_count"] == 10
+    assert len(summary) == 30
     assert set(summary["strategy_id"]) == {
         "baseline_fixed_atr_v1",
         "breakeven_after_1atr_v1",
@@ -701,6 +701,9 @@ def test_cli_writes_bounded_strategy_suite_and_forensics(tmp_path: Path) -> None
         "score_margin_05_fixed_atr_v1",
         "score_margin_08_fixed_atr_v1",
         "score_margin_05_time_stop_6bar_v1",
+        "score_margin_07_time_stop_7bar_tp2_sl4_v1",
+        "score_margin_07_time_stop_7bar_tp15_sl4_v1",
+        "score_margin_07_time_stop_6bar_tp25_sl4_v1",
     }
     assert not summary["selection_allowed_on_current_test"].any()
     assert "min_score_margin" in summary.columns

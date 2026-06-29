@@ -126,6 +126,55 @@ def registered_phase2_strategy_variants(
                 "signal lifetime suggested by max-holding forensics."
             ),
         ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_07_time_stop_7bar_tp2_sl4_v1",
+                min_score_margin=0.07,
+                max_holding_bars=7,
+                take_profit_atr=2.0,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_second_wave_after_local_lab_review",
+            rationale=(
+                "Second-wave local-lab hypothesis: require a stronger score "
+                "margin, cap signal lifetime at seven bars, and tighten the "
+                "ATR stop to test whether the gross edge can clear base costs. "
+                "This remains seen-window exploratory evidence only."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_07_time_stop_7bar_tp15_sl4_v1",
+                min_score_margin=0.07,
+                max_holding_bars=7,
+                take_profit_atr=1.5,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_second_wave_after_local_lab_review",
+            rationale=(
+                "Companion second-wave variant with a nearer take-profit to "
+                "check whether the positive local-lab effect is specific to a "
+                "single TP setting."
+            ),
+        ),
+        Phase2StrategyVariantSpec(
+            contract=replace(
+                common,
+                strategy_id="score_margin_07_time_stop_6bar_tp25_sl4_v1",
+                min_score_margin=0.07,
+                max_holding_bars=6,
+                take_profit_atr=2.5,
+                stop_loss_atr=4.0,
+            ),
+            status="exploratory_second_wave_after_local_lab_review",
+            rationale=(
+                "Companion second-wave variant that keeps the stricter score "
+                "filter but uses the shorter six-bar lifetime from the first "
+                "entry-quality candidate."
+            ),
+        ),
     )
 
 

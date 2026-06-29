@@ -106,9 +106,10 @@ Every report must include the gate state and whether the result is promotable.
 The optimistic, base, and adverse cost scenarios are written separately; the
 root report remains the base scenario for compatibility.
 
-The strategy registry contains seven bounded contracts: the baseline reference,
-three dynamic-exit checks, and three entry-quality / score-margin checks. The
-baseline remains the root report. Variant outputs are stored under
+The strategy registry contains ten bounded contracts: the baseline reference,
+three dynamic-exit checks, three first-wave entry-quality / score-margin checks,
+and three second-wave local-lab hypotheses. The baseline remains the root
+report. Variant outputs are stored under
 `strategy_variants/<strategy_id>/<cost_scenario>/`. Each base-cost variant
 directory also contains its own forensic and bootstrap diagnostics, and the
 root `phase2_strategy_forensics_summary.*` files collect the base-cost forensic
