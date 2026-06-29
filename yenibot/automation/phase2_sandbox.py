@@ -85,6 +85,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-slippage-bps", type=float, default=2.0)
     parser.add_argument("--exit-slippage-bps", type=float, default=2.0)
     parser.add_argument("--funding-bps-per-8h", type=float, default=0.0)
+    parser.add_argument(
+        "--all-cost-scenarios",
+        action="store_true",
+        help=(
+            "Run the preregistered optimistic, base, and adverse cost scenarios. "
+            "The root report remains the base scenario for compatibility."
+        ),
+    )
     return parser
 
 
@@ -137,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         candidate_id=candidate_id,
         threshold=threshold,
     )
-    scenario = CostScenario(
+    custom_scenario = CostScenario(
         name=str(args.cost_name),
         entry_fee_bps=float(args.entry_fee_bps),
         exit_fee_bps=float(args.exit_fee_bps),
@@ -147,21 +155,73 @@ def main(argv: list[str] | None = None) -> int:
     )
     bars = pd.read_csv(bars_path)
     signals = pd.read_csv(signals_path)
-    result = run_long_only_backtest(
-        bars,
-        signals,
-        gate=gate,
-        contract=contract,
-        cost_scenario=scenario,
-        mode=args.mode,
+    scenarios = (
+        contract.cost_scenarios
+        if args.all_cost_scenarios
+        else (custom_scenario,)
     )
-    if input_build is not None:
-        result.metadata["input_adapter"] = input_build.as_dict()
-    write_phase2_sandbox_report(output_dir, result)
+    results = []
+    for scenario in scenarios:
+        result = run_long_only_backtest(
+            bars,
+            signals,
+            gate=gate,
+            contract=contract,
+            cost_scenario=scenario,
+            mode=args.mode,
+        )
+        if input_build is not None:
+            result.metadata["input_adapter"] = input_build.as_dict()
+        results.append(result)
+        if args.all_cost_scenarios:
+            write_phase2_sandbox_report(
+                output_dir / "cost_scenarios" / scenario.name,
+                result,
+            )
+            if scenario.name == "base":
+                write_phase2_sandbox_report(output_dir, result)
+        else:
+            write_phase2_sandbox_report(output_dir, result)
+
+    if args.all_cost_scenarios:
+        summary_frame = pd.DataFrame([result.summary for result in results])
+        summary_frame.to_csv(
+            output_dir / "phase2_cost_scenario_summary.csv",
+            index=False,
+        )
+        trade_frames = [
+            result.trades
+            for result in results
+            if not result.trades.empty
+        ]
+        if trade_frames:
+            pd.concat(trade_frames, ignore_index=True).to_csv(
+                output_dir / "phase2_trade_ledger_all_costs.csv",
+                index=False,
+            )
+        equity_frames = []
+        for result in results:
+            equity = result.equity.copy()
+            equity["cost_scenario"] = result.summary.get("cost_scenario")
+            equity_frames.append(equity)
+        pd.concat(equity_frames, ignore_index=True).to_csv(
+            output_dir / "phase2_equity_curve_all_costs.csv",
+            index=False,
+        )
+
+    base_result = next(
+        (
+            result
+            for result in results
+            if result.summary.get("cost_scenario") == "base"
+        ),
+        results[0],
+    )
     print(
         f"phase2_sandbox_written output_dir={output_dir} "
-        f"mode={args.mode} evidence_status={result.summary.get('evidence_status')} "
-        f"trades={result.summary.get('trade_count')}"
+        f"mode={args.mode} evidence_status={base_result.summary.get('evidence_status')} "
+        f"trades={base_result.summary.get('trade_count')} "
+        f"cost_scenarios={len(results)}"
     )
     return 0
 

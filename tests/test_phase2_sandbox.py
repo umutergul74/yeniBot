@@ -260,6 +260,93 @@ def test_backtest_does_not_queue_stale_signals_while_position_is_open(
     assert result.summary["max_entry_delay_hours"] == 1.0
 
 
+def test_backtest_rejects_next_bar_entry_across_data_gap(tmp_path: Path) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.to_datetime(
+                [
+                    "2026-01-01 00:00:00+00:00",
+                    "2026-01-01 01:00:00+00:00",
+                    "2026-01-01 05:00:00+00:00",
+                    "2026-01-01 06:00:00+00:00",
+                ]
+            ),
+            "open": [100.0] * 4,
+            "high": [101.0] * 4,
+            "low": [99.0] * 4,
+            "close": [100.0] * 4,
+            "atr_14": [1.0] * 4,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [pd.Timestamp("2026-01-01 01:00:00", tz="UTC")],
+            "prob_long": [0.90],
+        }
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=Phase2StrategyContract(threshold=0.5),
+    )
+
+    assert result.trades.empty
+    assert result.summary["selected_signal_count"] == 1
+    assert result.summary["skipped_stale_entry_count"] == 1
+    assert result.summary["max_entry_delay_hours"] is None
+
+
+def test_backtest_forces_close_before_internal_data_gap(tmp_path: Path) -> None:
+    gate = load_phase2_gate(_pending_report_dir(tmp_path))
+    bars = pd.DataFrame(
+        {
+            "bar_close_time": pd.to_datetime(
+                [
+                    "2026-01-01 00:00:00+00:00",
+                    "2026-01-01 01:00:00+00:00",
+                    "2026-01-01 02:00:00+00:00",
+                    "2026-01-01 06:00:00+00:00",
+                ]
+            ),
+            "open": [100.0] * 4,
+            "high": [100.2] * 4,
+            "low": [99.8] * 4,
+            "close": [100.0, 100.1, 100.2, 100.3],
+            "atr_14": [1.0] * 4,
+        }
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_time": [pd.Timestamp("2026-01-01 00:00:00", tz="UTC")],
+            "prob_long": [0.90],
+        }
+    )
+    contract = Phase2StrategyContract(
+        threshold=0.5,
+        take_profit_atr=999.0,
+        stop_loss_atr=999.0,
+        max_holding_bars=10,
+    )
+
+    result = run_long_only_backtest(
+        bars,
+        signals,
+        gate=gate,
+        contract=contract,
+        cost_scenario=CostScenario(name="zero", entry_fee_bps=0, exit_fee_bps=0),
+    )
+
+    trade = result.trades.iloc[0]
+    assert trade["entry_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
+    assert trade["exit_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
+    assert trade["exit_reason"] == "data_gap_forced_close"
+    assert trade["holding_bars"] == 2
+    assert result.summary["data_gap_forced_close_count"] == 1
+
+
 def test_report_writer_marks_sandbox_as_not_promotable(tmp_path: Path) -> None:
     gate = load_phase2_gate(_pending_report_dir(tmp_path / "reports"))
     signals = pd.DataFrame(
@@ -389,6 +476,38 @@ def test_cli_auto_builds_inputs_and_writes_sandbox_report(tmp_path: Path) -> Non
     assert report["summary"]["evidence_status"] == (
         "sandbox_not_promotable_until_future_oos_passes"
     )
+
+
+def test_cli_runs_all_preregistered_cost_scenarios(tmp_path: Path) -> None:
+    report_dir, checkpoint_dir = _frozen_prediction_fixture(tmp_path)
+    output_dir = tmp_path / "phase2_cost_suite"
+
+    exit_code = phase2_sandbox_main(
+        [
+            "--report-dir",
+            str(report_dir),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--output-dir",
+            str(output_dir),
+            "--mode",
+            "sandbox",
+            "--all-cost-scenarios",
+        ]
+    )
+
+    summary = pd.read_csv(output_dir / "phase2_cost_scenario_summary.csv")
+    assert exit_code == 0
+    assert set(summary["cost_scenario"]) == {"optimistic", "base", "adverse"}
+    assert (output_dir / "phase2_trade_ledger_all_costs.csv").exists()
+    assert (output_dir / "phase2_equity_curve_all_costs.csv").exists()
+    for scenario in ("optimistic", "base", "adverse"):
+        assert (
+            output_dir
+            / "cost_scenarios"
+            / scenario
+            / "phase2_sandbox_report.json"
+        ).exists()
 
 
 def test_slim_bundle_includes_phase2_sandbox_directory(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ NOTEBOOK_NAMES = [
     "03_labeling.ipynb",
     "04_training_walk_forward.ipynb",
     "05_diagnostics_validation.ipynb",
+    "06_phase2_sandbox_backtest.ipynb",
 ]
 RESEARCH_BRANCH = "codex/phase2-sandbox"
 
@@ -42,6 +43,7 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     combined = _source(_load_notebook("00_phase1_auto_run.ipynb"))
     training = _source(_load_notebook("04_training_walk_forward.ipynb"))
     diagnostics = _source(_load_notebook("05_diagnostics_validation.ipynb"))
+    phase2 = _source(_load_notebook("06_phase2_sandbox_backtest.ipynb"))
 
     assert "open_after_failed_future_oos" not in training
     assert "current_code_reproducibility_retrain" not in training
@@ -80,11 +82,13 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
     assert "recency_ensemble_paired_comparison.csv" in diagnostics
     assert "recency_ensemble_decision.json" in diagnostics
     assert "next_research_protocol.json" in diagnostics
-    assert "RUN_PHASE2_SANDBOX = True" in diagnostics
-    assert "run_phase2_sandbox([" in diagnostics
-    assert "phase2_sandbox_dir = report_dir / 'phase2_sandbox'" in diagnostics
-    assert "_write_experiment_slim_bundle" in diagnostics
-    assert "Repacked bundles after Phase 2 sandbox outputs were written." in diagnostics
+    assert "run_phase2_sandbox" not in diagnostics
+    assert "06_phase2_sandbox_backtest.ipynb" in diagnostics
+    assert "run_phase2_sandbox(args)" in phase2
+    assert "--all-cost-scenarios" in phase2
+    assert "Fit operations performed: 0" in phase2
+    assert "write_experiment_diagnostics" not in phase2
+    assert "phase2_latest_sandbox_bundle.zip" in phase2
 
 
 def test_notebook_code_cells_are_valid_python_after_colab_magics_are_removed() -> None:

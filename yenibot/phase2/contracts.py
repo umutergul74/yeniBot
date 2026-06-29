@@ -41,6 +41,8 @@ class Phase2StrategyContract:
     take_profit_atr: float = 2.0
     stop_loss_atr: float = 5.0
     max_holding_bars: int = 10
+    expected_bar_interval_hours: float = 1.0
+    max_bar_gap_hours: float = 1.5
     atr_column: str = "atr_14"
     same_bar_policy: SameBarPolicy = "stop_first"
     allow_overlapping_positions: bool = False
@@ -77,6 +79,12 @@ class Phase2StrategyContract:
             raise ValueError("ATR exits must be positive.")
         if self.max_holding_bars <= 0:
             raise ValueError("Maximum holding bars must be positive.")
+        if self.expected_bar_interval_hours <= 0:
+            raise ValueError("Expected bar interval must be positive.")
+        if self.max_bar_gap_hours < self.expected_bar_interval_hours:
+            raise ValueError(
+                "Maximum bar gap cannot be shorter than the expected bar interval."
+            )
         if self.same_bar_policy not in {"stop_first", "take_profit_first", "skip_ambiguous"}:
             raise ValueError(f"Unsupported same-bar ambiguity policy: {self.same_bar_policy}")
 

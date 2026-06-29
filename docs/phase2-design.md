@@ -58,6 +58,9 @@ success probability.
 - Generate a decision only after the complete 1H bar is available.
 - Aligned 4H inputs must already satisfy the four-hour completion shift.
 - Execute no earlier than the next tradable bar after the decision.
+- A missing-data or purged-fold gap is not a tradable next bar. The baseline
+  rejects entries delayed by more than 1.5 hours and force-closes an existing
+  position at the last observed close before an internal gap.
 - The default research fill is next-bar open plus configured adverse slippage.
 - Never fill at the close used to create the signal.
 - Record decision, order, and fill timestamps separately.
@@ -144,6 +147,7 @@ cannot replace temporal breakdowns.
 - removal of the best trades and best month
 - moving-block bootstrap of net trade returns
 - stale or missing prediction handling
+- purged-fold and missing-bar gap isolation
 
 ## Phase 2 Decision Boundary
 

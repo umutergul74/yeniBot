@@ -86,6 +86,17 @@ def _resolve_exit(
     last_idx = min(entry_idx + contract.max_holding_bars - 1, len(bars) - 1)
 
     for idx in range(entry_idx, last_idx + 1):
+        if idx > entry_idx:
+            previous_time = bars.loc[idx - 1, contract.bar_time_column]
+            current_time = bars.loc[idx, contract.bar_time_column]
+            gap_hours = (current_time - previous_time).total_seconds() / 3600.0
+            if gap_hours > contract.max_bar_gap_hours:
+                prior_idx = idx - 1
+                return (
+                    prior_idx,
+                    float(bars.loc[prior_idx, "close"]),
+                    "data_gap_forced_close",
+                )
         high = float(bars.loc[idx, "high"])
         low = float(bars.loc[idx, "low"])
         touched_take = high >= take_price
@@ -114,9 +125,24 @@ def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> d
             "sum_net_return": 0.0,
             "hit_rate": 0.0,
             "profit_factor": 0.0,
+            "average_win": None,
+            "average_loss": None,
+            "payoff_ratio": None,
+            "final_equity": 1.0,
+            "compounded_return": 0.0,
+            "max_drawdown": 0.0,
+            "max_single_trade_net_return": None,
+            "min_single_trade_net_return": None,
         }
     wins = trades.loc[trades["net_return"] > 0, "net_return"].sum()
     losses = -trades.loc[trades["net_return"] < 0, "net_return"].sum()
+    compounded = (1.0 + trades["net_return"]).cumprod()
+    running_peak = compounded.cummax().clip(lower=1.0)
+    drawdown = compounded / running_peak - 1.0
+    winning_trades = trades.loc[trades["net_return"] > 0, "net_return"]
+    losing_trades = trades.loc[trades["net_return"] < 0, "net_return"]
+    average_win = float(winning_trades.mean()) if not winning_trades.empty else None
+    average_loss = float(losing_trades.mean()) if not losing_trades.empty else None
     return {
         "mode": mode,
         "evidence_status": gate.evidence_status,
@@ -125,6 +151,16 @@ def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> d
         "sum_net_return": float(trades["net_return"].sum()),
         "hit_rate": float((trades["net_return"] > 0).mean()),
         "profit_factor": float(wins / losses) if losses > 0 else None,
+        "average_win": average_win,
+        "average_loss": average_loss,
+        "payoff_ratio": (
+            float(average_win / abs(average_loss))
+            if average_win is not None and average_loss not in {None, 0.0}
+            else None
+        ),
+        "final_equity": float(compounded.iloc[-1]),
+        "compounded_return": float(compounded.iloc[-1] - 1.0),
+        "max_drawdown": float(drawdown.min()),
         "max_single_trade_net_return": float(trades["net_return"].max()),
         "min_single_trade_net_return": float(trades["net_return"].min()),
         "cost_scenario": str(trades["cost_scenario"].iloc[0]),
@@ -133,16 +169,19 @@ def _summarize(trades: pd.DataFrame, *, mode: Phase2Mode, gate: Phase2Gate) -> d
 
 def _equity_curve(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty:
-        return pd.DataFrame(columns=["timestamp", "equity", "net_return"])
+        return pd.DataFrame(columns=["timestamp", "equity", "net_return", "drawdown"])
     equity = 1.0
+    peak = 1.0
     rows: list[dict[str, Any]] = []
     for row in trades.itertuples(index=False):
         equity *= 1.0 + float(row.net_return)
+        peak = max(peak, equity)
         rows.append(
             {
                 "timestamp": row.exit_time,
                 "equity": equity,
                 "net_return": float(row.net_return),
+                "drawdown": equity / peak - 1.0,
             }
         )
     return pd.DataFrame(rows)
@@ -175,8 +214,10 @@ def run_long_only_backtest(
     min_entry_idx = 0
     selected_signal_count = 0
     skipped_no_next_bar_count = 0
+    skipped_stale_entry_count = 0
     skipped_during_open_position_count = 0
     skipped_invalid_atr_count = 0
+    data_gap_forced_close_count = 0
     entry_delay_hours: list[float] = []
     for signal in signals.itertuples(index=False):
         score = float(getattr(signal, contract.score_column))
@@ -190,6 +231,11 @@ def run_long_only_backtest(
         )
         if entry_idx is None:
             skipped_no_next_bar_count += 1
+            continue
+        entry_time = bars.loc[entry_idx, contract.bar_time_column]
+        entry_delay = max((entry_time - decision_time).total_seconds() / 3600.0, 0.0)
+        if entry_delay > contract.max_bar_gap_hours:
+            skipped_stale_entry_count += 1
             continue
         if not contract.allow_overlapping_positions and entry_idx < min_entry_idx:
             skipped_during_open_position_count += 1
@@ -206,10 +252,11 @@ def run_long_only_backtest(
             entry_price=entry_price,
             atr=atr,
         )
+        if exit_reason == "data_gap_forced_close":
+            data_gap_forced_close_count += 1
         holding_hours = _holding_hours(bars, contract, entry_idx, exit_idx)
-        entry_time = bars.loc[entry_idx, contract.bar_time_column]
-        entry_delay = max((entry_time - decision_time).total_seconds() / 3600.0, 0.0)
         entry_delay_hours.append(entry_delay)
+        trade_bars = bars.loc[entry_idx:exit_idx]
         returns = net_long_return(
             scenario,
             entry_price=entry_price,
@@ -233,6 +280,12 @@ def run_long_only_backtest(
                 "exit_reason": exit_reason,
                 "holding_bars": int(exit_idx - entry_idx + 1),
                 "holding_hours": holding_hours,
+                "max_favorable_excursion": (
+                    float(trade_bars["high"].max()) / entry_price - 1.0
+                ),
+                "max_adverse_excursion": (
+                    float(trade_bars["low"].min()) / entry_price - 1.0
+                ),
                 "gross_return": returns["gross_return"],
                 "net_return": returns["net_return"],
                 "total_cost_return": returns["total_cost_return"],
@@ -246,11 +299,14 @@ def run_long_only_backtest(
     trade_frame = pd.DataFrame(trades)
     equity = _equity_curve(trade_frame)
     summary = _summarize(trade_frame, mode=mode, gate=gate)
+    summary["cost_scenario"] = scenario.name
     execution_diagnostics = {
         "selected_signal_count": selected_signal_count,
         "skipped_no_next_bar_count": skipped_no_next_bar_count,
+        "skipped_stale_entry_count": skipped_stale_entry_count,
         "skipped_during_open_position_count": skipped_during_open_position_count,
         "skipped_invalid_atr_count": skipped_invalid_atr_count,
+        "data_gap_forced_close_count": data_gap_forced_close_count,
         "max_entry_delay_hours": max(entry_delay_hours) if entry_delay_hours else None,
         "mean_entry_delay_hours": (
             sum(entry_delay_hours) / len(entry_delay_hours)
@@ -270,6 +326,8 @@ def run_long_only_backtest(
             "take_profit_atr": contract.take_profit_atr,
             "stop_loss_atr": contract.stop_loss_atr,
             "max_holding_bars": contract.max_holding_bars,
+            "expected_bar_interval_hours": contract.expected_bar_interval_hours,
+            "max_bar_gap_hours": contract.max_bar_gap_hours,
         },
         "gate": gate.as_dict(),
         "cost_scenario": scenario.name,

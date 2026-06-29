@@ -57,6 +57,8 @@ The initial contract is deliberately simple and pre-registered:
 - entry: next-bar open only
 - signal queueing: disabled; signals whose immediate next bar occurs while a
   prior position is still open are ignored, not delayed into a future entry
+- data-gap guard: entries delayed by more than `1.5` hours are rejected; open
+  positions are closed at the last observed close before an internal gap
 - take-profit: `2 x ATR`
 - stop-loss: `5 x ATR`
 - maximum hold: `10` bars
@@ -79,9 +81,21 @@ phase2_trade_ledger.csv
 phase2_equity_curve.csv
 phase2_sandbox_report.json
 phase2_sandbox_report.md
+phase2_cost_scenario_summary.csv
+phase2_trade_ledger_all_costs.csv
+phase2_equity_curve_all_costs.csv
 ```
 
 Every report must include the gate state and whether the result is promotable.
+The optimistic, base, and adverse cost scenarios are written separately; the
+root report remains the base scenario for compatibility.
+
+## Colab Entry Point
+
+Use `notebooks/06_phase2_sandbox_backtest.ipynb` for Phase 2 work. It does not
+call the Phase 1 diagnostics orchestrator, does not import the training stack,
+and performs zero fit operations. Notebook 05 remains the Future-OOS and Phase
+1 diagnostics notebook.
 
 ## Command-Line Entry Point
 
@@ -93,7 +107,8 @@ python -m yenibot.automation.phase2_sandbox \
   --report-dir /content/drive/MyDrive/yeniBot/reports/experiments/<run_id> \
   --checkpoint-dir /content/drive/MyDrive/yeniBot/checkpoints \
   --output-dir /content/drive/MyDrive/yeniBot/reports/experiments/<run_id>/phase2_sandbox \
-  --mode sandbox
+  --mode sandbox \
+  --all-cost-scenarios
 ```
 
 By default this uses `split=test` from the frozen `predictions_all` file. Use

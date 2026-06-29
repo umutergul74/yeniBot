@@ -183,8 +183,8 @@ Operational references:
 All production research notebooks run on Google Colab with source code from
 GitHub and data/checkpoints stored on Google Drive.
 
-The current Phase 1 confirmation workflow is isolated on
-`research/next-candidate-v1`. Every notebook fetches, checks out, and verifies
+The current Phase 1/Phase 2 sandbox workflow is isolated on
+`codex/phase2-sandbox`. Every notebook fetches, checks out, and verifies
 that branch by default, then prints the exact commit. Override
 `YENIBOT_REPO_BRANCH` only for a deliberate reviewed run.
 
@@ -195,6 +195,7 @@ Run in strict order:
 3. [`03_labeling.ipynb`](notebooks/03_labeling.ipynb)
 4. [`04_training_walk_forward.ipynb`](notebooks/04_training_walk_forward.ipynb)
 5. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
+6. [`06_phase2_sandbox_backtest.ipynb`](notebooks/06_phase2_sandbox_backtest.ipynb)
 
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
@@ -208,6 +209,7 @@ Rerun rules:
 | Label semantics | `03 -> 04 -> 05` |
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
+| Frozen-prediction Phase 2 sandbox/backtest only | `06`; no training and no Phase 1 report rebuild |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
 
@@ -223,6 +225,14 @@ Notebook 05 writes a shareable slim archive under Google Drive:
 
 ```text
 /content/drive/MyDrive/yeniBot/reports/phase1_latest_experiment_slim_bundle.zip
+```
+
+Notebook 06 is the fast, independent Phase 2 entry point. It consumes the
+already-pinned prediction artifact, runs no fit operation, executes the
+pre-registered optimistic/base/adverse cost scenarios, and writes:
+
+```text
+/content/drive/MyDrive/yeniBot/reports/phase2_latest_sandbox_bundle.zip
 ```
 
 See [`docs/reproducibility.md`](docs/reproducibility.md) before reproducing or
