@@ -273,6 +273,56 @@ def test_frozen_manifest_hash_survives_operator_status_after_pin(tmp_path: Path)
     assert index.loc[0, "unavailable_reasons"] == ""
 
 
+def test_frozen_manifest_rewrites_stale_verification_wrapper_after_pin(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _, entry = _fake_scope(run_dir)
+    config = _config(tmp_path)
+
+    manifests, _ = freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "stage1_report",
+        entries=[entry],
+        config=config,
+    )
+    pinned_hash = manifests[0]["manifest_hash"]
+    immutable_path = (
+        run_dir
+        / "frozen_candidates"
+        / "control_v1"
+        / f"manifest_{pinned_hash}.json"
+    )
+    stale = json.loads(immutable_path.read_text(encoding="utf-8"))
+    stale["expected_manifest_hash"] = "<fill_after_05_generates_manifest_hash>"
+    stale["manifest_hash_verified"] = False
+    stale["available"] = False
+    stale["unavailable_reasons"] = [
+        "expected_manifest_hash_mismatch:"
+        f"<fill_after_05_generates_manifest_hash>:{pinned_hash}"
+    ]
+    immutable_path.write_text(json.dumps(stale), encoding="utf-8")
+
+    candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
+    candidate["expected_manifest_hash"] = pinned_hash
+    candidate["manifest_candidate_status"] = candidate["status"]
+    candidate["status"] = "manifest_pinned_awaiting_future_oos"
+
+    freeze_candidate_manifests(
+        run_dir=run_dir,
+        report_dir=tmp_path / "stage2_report",
+        entries=[entry],
+        config=config,
+    )
+
+    stored = json.loads(immutable_path.read_text(encoding="utf-8"))
+    assert stored["expected_manifest_hash"] == pinned_hash
+    assert stored["manifest_hash_verified"] is True
+    assert stored["available"] is True
+    assert stored["unavailable_reasons"] == []
+    assert verify_frozen_manifest_artifacts(stored, run_dir=run_dir) == []
+
+
 def test_optional_frozen_benchmark_does_not_invalidate_primary(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     _, entry = _fake_scope(run_dir)
@@ -620,6 +670,78 @@ def test_future_oos_preflight_is_read_only_while_waiting(tmp_path: Path) -> None
     assert result["fit_operations_performed"] == 0
     assert result["side_effect_free"] is True
     assert before == after
+
+
+def test_future_oos_preflight_normalizes_stale_immutable_manifest_wrapper(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    checkpoint_dir = tmp_path / "checkpoints"
+    source_run = checkpoint_dir / "experiments" / "source_run"
+    _, entry = _fake_scope(source_run)
+    config = _config(tmp_path, min_rows=20)
+    candidate = config["experiments"]["frozen_candidates"]["candidates"][0]
+    candidate["source_run_id"] = "source_run"
+    candidate["threshold"] = {
+        "value": 0.55,
+        "source": "validation_threshold",
+        "selected_from": "pre_anchor_walk_forward_validation",
+    }
+    manifests, _ = freeze_candidate_manifests(
+        run_dir=source_run,
+        report_dir=tmp_path / "freeze_report",
+        entries=[entry],
+        config=config,
+    )
+    candidate["expected_manifest_hash"] = manifests[0]["manifest_hash"]
+    pinned_hash = manifests[0]["manifest_hash"]
+    immutable_path = (
+        checkpoint_dir
+        / "experiments"
+        / "source_run"
+        / "frozen_candidates"
+        / "control_v1"
+        / f"manifest_{pinned_hash}.json"
+    )
+    stale = json.loads(immutable_path.read_text(encoding="utf-8"))
+    stale["expected_manifest_hash"] = "<fill_after_05_generates_manifest_hash>"
+    stale["manifest_hash_verified"] = False
+    stale["available"] = False
+    stale["unavailable_reasons"] = [
+        "expected_manifest_hash_mismatch:"
+        f"<fill_after_05_generates_manifest_hash>:{pinned_hash}"
+    ]
+    immutable_path.write_text(json.dumps(stale), encoding="utf-8")
+    anchor = pd.Timestamp("2024-01-02 00:00:00", tz="UTC")
+    timestamps = pd.date_range(
+        anchor - pd.Timedelta(hours=23),
+        periods=34,
+        freq="h",
+        tz="UTC",
+    )
+    labeled = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "feature": np.arange(len(timestamps), dtype=float),
+            "label": np.arange(len(timestamps)) % 2,
+            "fwd_return_10h": np.linspace(-0.01, 0.01, len(timestamps)),
+        }
+    )
+    data_dir = Path(config["paths"]["data_dir"]) / "processed"
+    data_dir.mkdir(parents=True)
+    (data_dir / "labeled_1h.parquet").write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(pd, "read_parquet", lambda *_, **__: labeled.copy())
+
+    result = future_oos_preflight(
+        checkpoint_dir=checkpoint_dir,
+        config=config,
+    )
+
+    assert result["invariants_passed"] is True
+    assert result["state"] == "waiting_for_mature_labeled_rows"
+    assert "manifest_declared_available" not in result["failed_checks"]
+    assert "artifact_integrity" not in result["failed_checks"]
+    assert result["artifact_integrity_errors"] == []
 
 
 def test_future_oos_preflight_reports_expected_research_state_without_replacement(

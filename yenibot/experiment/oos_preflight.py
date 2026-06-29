@@ -14,6 +14,7 @@ from yenibot.experiment.common import _cfg
 from yenibot.experiment.configuration import experiment_root
 from yenibot.experiment.frozen import (
     frozen_manifest_activation_state,
+    normalize_frozen_manifest_verification,
     verify_frozen_manifest_artifacts,
 )
 
@@ -74,7 +75,10 @@ def _load_primary_manifest(
             or spec.get("source_run_id", "")
         )
         expected_hash = str(spec.get("expected_manifest_hash", "") or "")
-        return manifest, _immutable_manifest_path(
+        return normalize_frozen_manifest_verification(
+            manifest,
+            expected_manifest_hash=expected_hash,
+        ), _immutable_manifest_path(
             checkpoint_dir,
             source_run_id=source_run_id,
             candidate_id=primary_id,
@@ -92,7 +96,14 @@ def _load_primary_manifest(
     )
     if not path.exists():
         return {}, path
-    return json.loads(path.read_text(encoding="utf-8")), path
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    return (
+        normalize_frozen_manifest_verification(
+            manifest,
+            expected_manifest_hash=expected_hash,
+        ),
+        path,
+    )
 
 
 def _check_rows(frame: pd.DataFrame, anchor: pd.Timestamp) -> dict[str, Any]:

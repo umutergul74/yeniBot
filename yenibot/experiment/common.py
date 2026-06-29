@@ -6,8 +6,11 @@ import copy
 import hashlib
 import json
 import re
+import warnings
 from pathlib import Path
+from time import sleep
 from typing import Any
+from uuid import uuid4
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score
@@ -37,7 +40,22 @@ __all__ = [
     '_clean_probability_inputs',
     '_safe_average_precision',
     '_numeric_mean',
+    '_durable_write_text',
 ]
+
+_WRITE_ATTEMPTS = 6
+_WRITE_BASE_DELAY_SECONDS = 0.25
+_RETRYABLE_WRITE_ERRNOS = {
+    5,    # transient Drive/remote I/O failure
+    11,   # resource temporarily unavailable
+    16,   # device or resource busy
+    32,   # sharing violation on Windows-backed mounts
+    103,  # software caused connection abort
+    104,  # connection reset by peer
+    107,  # transport endpoint not connected
+    110,  # connection timed out
+    116,  # stale file handle
+}
 
 def _cfg(config: Any, path: list[str], default: Any = None) -> Any:
     current = config
@@ -134,9 +152,51 @@ def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _retryable_write_error(error: OSError) -> bool:
+    return (
+        isinstance(error, (ConnectionAbortedError, ConnectionResetError, TimeoutError))
+        or error.errno in _RETRYABLE_WRITE_ERRNOS
+        or getattr(error, "winerror", None) in {32, 53, 64, 121}
+    )
+
+def _durable_write_text(path: Path, text: str) -> None:
+    """Write text atomically with retries for flaky Drive-backed filesystems."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True), encoding="utf-8")
+    last_error: OSError | None = None
+    for attempt in range(_WRITE_ATTEMPTS):
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(text, encoding="utf-8")
+            temporary.replace(path)
+            return
+        except OSError as error:
+            last_error = error
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+            except OSError:
+                pass
+            if (
+                not _retryable_write_error(error)
+                or attempt + 1 >= _WRITE_ATTEMPTS
+            ):
+                break
+            sleep(min(_WRITE_BASE_DELAY_SECONDS * (2**attempt), 2.0))
+    assert last_error is not None
+    warnings.warn(
+        "Durable text write failed after retries. "
+        f"path={path} error={type(last_error).__name__}: {last_error}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    raise last_error
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    _durable_write_text(
+        path,
+        json.dumps(_json_ready(payload), indent=2, sort_keys=True),
+    )
 
 def _float(row: dict[str, Any], key: str, default: float = np.nan) -> float:
     value = row.get(key, default)

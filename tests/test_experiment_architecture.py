@@ -14,6 +14,7 @@ from yenibot.experiment import (
     run_experiment_matrix,
     write_experiment_diagnostics,
 )
+from yenibot.experiment.common import _write_json
 from yenibot.experiment.execution import WorkflowJournal, traced_workflow, workflow_checkpoint
 
 
@@ -122,6 +123,27 @@ def test_workflow_journal_retries_transient_drive_write_failure(tmp_path: Path) 
 
     assert calls["count"] == 3
     assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_common_json_writer_retries_transient_drive_write_failure(tmp_path: Path) -> None:
+    path = tmp_path / "report.json"
+    original_write_text = Path.write_text
+    calls = {"count": 0}
+
+    def flaky_write_text(path: Path, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise OSError(5, "temporary Drive I/O error")
+        return original_write_text(path, *args, **kwargs)
+
+    with (
+        patch("yenibot.experiment.common.Path.write_text", new=flaky_write_text),
+        patch("yenibot.experiment.common.sleep", return_value=None),
+    ):
+        _write_json(path, {"ok": True})
+
+    assert calls["count"] == 3
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
 
 
 def test_workflow_journal_warns_but_does_not_abort_after_retry_exhaustion(

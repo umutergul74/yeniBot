@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ __all__ = [
     "frozen_manifest_activation_state",
     "frozen_manifest_content_hash",
     "frozen_manifest_source_run_dir",
+    "normalize_frozen_manifest_verification",
     "verify_frozen_manifest_artifacts",
 ]
 
@@ -49,6 +51,44 @@ def frozen_manifest_content_hash(manifest: dict[str, Any]) -> str:
     }
     content = {key: value for key, value in manifest.items() if key not in excluded}
     return _hash_payload(content)
+
+
+def normalize_frozen_manifest_verification(
+    manifest: dict[str, Any],
+    *,
+    expected_manifest_hash: str,
+) -> dict[str, Any]:
+    """Repair stale verification fields without changing immutable content.
+
+    Early manifest-pin runs can leave a content-addressed manifest whose
+    immutable content hash is correct, but whose mutable verification wrapper
+    still says ``expected_manifest_hash_mismatch:<fill_after...>``.  This helper
+    only repairs that wrapper when the normalized content hash still matches the
+    recorded manifest hash and the config-pinned expected hash.
+    """
+
+    expected = str(expected_manifest_hash or "")
+    if not expected:
+        return manifest
+    recorded = str(manifest.get("manifest_hash", "") or "")
+    if recorded != expected:
+        return manifest
+
+    candidate = copy.deepcopy(manifest)
+    reasons = [str(item) for item in candidate.get("unavailable_reasons", []) or []]
+    candidate["expected_manifest_hash"] = expected
+    candidate["manifest_hash_verified"] = True
+    candidate["unavailable_reasons"] = [
+        reason
+        for reason in reasons
+        if not reason.startswith("expected_manifest_hash_mismatch:")
+    ]
+    if not candidate["unavailable_reasons"] and candidate.get("components"):
+        candidate["available"] = True
+
+    if frozen_manifest_content_hash(candidate) != recorded:
+        return manifest
+    return candidate
 
 
 def _entry_by_profile(entries: list[dict[str, Any]], *, fold_scope: str) -> dict[str, dict[str, Any]]:
@@ -484,6 +524,14 @@ def freeze_candidate_manifests(
         )
         if not immutable_path.exists():
             _write_json(immutable_path, manifest)
+        elif expected_manifest_hash:
+            existing = json.loads(immutable_path.read_text(encoding="utf-8"))
+            normalized = normalize_frozen_manifest_verification(
+                existing,
+                expected_manifest_hash=expected_manifest_hash,
+            )
+            if normalized != existing:
+                _write_json(immutable_path, normalized)
 
     index_rows = [
         {
