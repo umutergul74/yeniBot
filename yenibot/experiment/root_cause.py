@@ -1244,6 +1244,10 @@ def _phase1_decision_ladder_payload(
         and str(next_cycle.get("primary_hypothesis") or "")
         == str(adaptive.get("hypothesis_id") or "")
     )
+    adaptive_completed = bool(
+        str(adaptive.get("status") or "").startswith("completed_failed_")
+        and not bool(adaptive.get("enabled", False))
+    )
     seed_review_pending = any(
         item.startswith("seed_reproducibility_") or item.startswith("seed_audit_")
         for item in blocker_set
@@ -1305,6 +1309,9 @@ def _phase1_decision_ladder_payload(
     elif future_oos_failed and adaptive_preregistered:
         recommended_next_action = str(next_cycle.get("next_action"))
         research_cycle_followup_action = recommended_next_action
+    elif future_oos_failed and adaptive_completed:
+        recommended_next_action = str(next_cycle.get("next_action"))
+        research_cycle_followup_action = recommended_next_action
     elif future_oos_failed:
         recommended_next_action = RETIRE_FAILED_FUTURE_OOS_ACTION
         research_cycle_followup_action = (
@@ -1348,6 +1355,8 @@ def _phase1_decision_ladder_payload(
         if future_oos_failed and replacement_fit_complete
         else "04a"
         if future_oos_failed and adaptive_preregistered
+        else "none_until_distinct_mechanism_is_preregistered"
+        if future_oos_failed and adaptive_completed
         else "none_until_new_research_cycle_is_preregistered"
         if future_oos_failed
         else "04"
@@ -1391,6 +1400,7 @@ def _phase1_decision_ladder_payload(
         "seed_review_pending": seed_review_pending,
         "new_future_oos_anchor_required": bool(future_oos_failed or new_anchor_required),
         "adaptive_research_preregistered": adaptive_preregistered,
+        "adaptive_research_completed_failed": adaptive_completed,
         "why_no_04": (
             ""
             if run_04_required_now
@@ -1398,9 +1408,13 @@ def _phase1_decision_ladder_payload(
                 "failed candidate must be retired and a new historical-only research "
                 "hypothesis must be pre-registered before notebook 04"
             )
-            if future_oos_failed and not adaptive_preregistered
+            if future_oos_failed
+            and not adaptive_preregistered
+            and not adaptive_completed
             else "standard Notebook 04 remains unnecessary; run the zero-fit cached-policy Notebook 04a"
             if future_oos_failed and adaptive_preregistered
+            else "the adaptive policy failed its historical gates; no notebook is allowed until a materially distinct mechanism is preregistered"
+            if future_oos_failed and adaptive_completed
             else (
                 "replacement candidate must be chosen from historical CV evidence and "
                 "pre-registered before a new future-OOS anchor; current holdout cannot "

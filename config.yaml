@@ -2203,7 +2203,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: validation_adaptive_ensemble_preregistered
+    status: validation_adaptive_ensemble_completed_no_promotion
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2224,8 +2224,9 @@ experiments:
       - effective_orderflow_event_weighting_v2
       - multitask_return_head_fixed_sum_v1
       - primary_preserving_multitask_gradient_projection_v1
-    conclusion: "The preregistered control_recent3_equal_v2 candidate completed 1,524-row Future-OOS without refit and failed only rank_ic_lower_ci. The point Rank IC was positive, but its lower confidence bound was -0.0780. Retire the candidate; preserve the failed window for diagnosis only. Historical recency policies also produced no candidate that cleared every preregistered gate."
-    next_step: "Run only notebook 04a on the immutable pre-OOS cross-prediction cache. It evaluates the single preregistered recent6-validation-LCB-top3 policy without training. Do not run notebooks 05, 06, or 07 unless that historical confirmatory decision passes every gate and a replacement is explicitly configured."
+      - recent6_validation_lcb_top3_v1
+    conclusion: "The preregistered control_recent3_equal_v2 candidate failed Future-OOS rank_ic_lower_ci. The subsequent recent6_validation_lcb_top3_v1 historical-only confirmatory experiment also failed: mean Rank IC fell from 0.05157 to 0.04754, std worsened from 0.08178 to 0.09080, worst-five IC fell from -0.08311 to -0.09326, F1 fell from 0.39678 to 0.38672, and positive selected-return coverage fell by 10.5 percentage points. Common-window validation LCB model selection does not repair the instability."
+    next_step: "Archive recent6_validation_lcb_top3_v1 without tuning pool size, top-k, bootstrap confidence, or validation split. Do not run notebooks 04, 04a, 05, 06, or 07. Design and preregister one materially distinct mechanism before the next compute run."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2350,15 +2351,15 @@ experiments:
       failed_gates: [rank_ic_lower_ci]
       decision: "Retire this exact candidate. The completed window is diagnostic evidence only; never tune, reselect, or promote against it."
   next_research_cycle:
-    status: historical_validation_adaptive_ensemble_preregistered
+    status: historical_validation_adaptive_ensemble_failed
     source_failed_candidate_id: control_recent3_equal_v2
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
     primary_hypothesis: recent6_validation_lcb_top3_v1
-    next_action: "run_notebook_04a_historical_policy_research_only"
+    next_action: "archive_failed_adaptive_ensemble_and_design_distinct_mechanism"
     rolling_origin:
-      enabled: true
+      enabled: false
       train_bars: 5040
       val_bars: 1080
       test_bars: 720
@@ -2418,8 +2419,9 @@ experiments:
       failed_future_oos_use: diagnostics_only_no_policy_selection
       promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
     adaptive_ensemble:
-      enabled: true
+      enabled: false
       preregistered: true
+      status: completed_failed_historical_gates
       hypothesis_id: recent6_validation_lcb_top3_v1
       hypothesis: "Ranking instability is partly caused by using the most recent models without measuring which of them still ranks correctly in the current pre-deployment regime. Selecting three experts from a fixed six-model recent pool by their common-window, block-bootstrap validation Rank-IC lower bound should improve downside ranking stability while preserving diversity and top-score payoff."
       distinct_from_completed_work: "Unlike static recency, own-fold reliability filters, or seed ensembles, every eligible expert is compared on the same latest historical validation selector window; model selection and threshold calibration use disjoint chronological subsets."
@@ -2484,6 +2486,29 @@ experiments:
         automatic_freeze_allowed: false
         next_if_passed: explicit_replacement_fit_preregistration_with_new_anchor
         next_if_failed: archive_hypothesis_and_design_distinct_mechanism
+      outcome:
+        evaluated_at: "2026-08-24"
+        preregistration_commit: b7bfda0c9f037e07e8c01bb1ba041374320186d5
+        status: no_policy_cleared_historical_gates
+        candidate_ready_for_preregistration: false
+        source_run_id: "20260628_155057"
+        source_prediction_signature_hash: a615361116194c42b47185b9915fdea8cf356d2e3236e66980d729c0b156d6aa
+        fold_count: 38
+        control_mean_rank_ic: 0.05157047884020808
+        candidate_mean_rank_ic: 0.047541703027616976
+        mean_rank_ic_delta: -0.004028775812591104
+        control_std_rank_ic: 0.08178388205814972
+        candidate_std_rank_ic: 0.09079589967421308
+        std_rank_ic_delta: 0.009012017616063364
+        worst_5_rank_ic_delta: -0.01015326675655881
+        mean_top_10_lift_delta: -0.027327759620380032
+        mean_f1_delta: -0.010062722764805132
+        positive_selected_return_fraction_delta: -0.10526315789473684
+        paired_rank_ic_probability: 0.235
+        paired_rank_ic_win_rate: 0.43333333333333335
+        failed_future_oos_used_for_selection: false
+        fit_operations_performed: 0
+        decision: "Reject and do not tune this policy family. Preserve the immutable result bundle and require a distinct mechanism."
     replacement_candidate:
       enabled: false
       candidate_id: control_recent3_equal_v2
@@ -2508,6 +2533,7 @@ experiments:
     reject_retests: true
     allow_retest_profiles: []
     reference_notes:
+      recent6_validation_lcb_top3_v1: "Drive policy-research bundle dated 2026-08-24: the preregistered common-window validation LCB selector failed against recent-three equal weight across 38 historical folds. Mean IC, dispersion, worst folds, F1, top-decile lift, and positive selected-return coverage all worsened. Do not tune pool size, top-k, bootstrap confidence, selector length, or purge length."
       baseline_stable_multitask_return_head_conflict_projected: "Bundle 20260628_155057: primary-preserving projection found only 1.8% conflicting batches with mean primary/auxiliary cosine +0.61. The candidate improved triage mean IC by 0.0065 but worsened std, official F1, positive top-10 lift coverage, and failed bad-fold payoff gates. Close the multitask family."
       baseline_stable_multitask_return_head_light: "Bundle 20260628_093830: fixed-sum auxiliary return supervision was directionally useful but non-promotable. Paired triage mean IC improved +0.0084, PRAUC +0.0061, and top-10 lift +0.0429, but std worsened to 0.1032, official F1 fell from 0.4557 to 0.4497, and bad-fold top-10 lift remained 0.6406. Auxiliary-vs-P(Long) rank correlation was 0.921."
       baseline_stable_orderflow_event_weighted_loss_v2: "Bundle 20260627_232543: corrected order-flow event weights were demonstrably active (20% active rows, p90-p10 spread 0.1691, Kish ESS fraction 0.9936), but paired triage evidence failed. Mean IC improved only +0.0012, std and worst folds worsened, PRAUC fell, and top-10 lift dropped from 1.2276 to 1.1536. Close event-weight tuning."
@@ -2543,6 +2569,12 @@ experiments:
       blend_prob_mean_953a4ee825: "Retired frozen review selection from pre-holdout CV: control + long-pressure equal-probability blend. Clean holdout run 20260522_135424 failed the active top-10 policy because forward return was negative; keep only as a historical benchmark."
       blend_control_long_pressure_65_35: "Control-heavy blend retained only for future out-of-sample comparison. Clean holdout run 20260522_135424 also had negative top-10 forward return, so it must not be promoted from the same holdout."
       training_early_stop_stability_branch: "Do not blindly retry the May 21 training-stability branch. Commit 7b3fcac added val_loss early stopping, rolling Rank IC support, higher dropout, stronger weight decay, and longer validation windows; commit 88e3b57 restored baseline defaults after review. Keep default early_stop_metric=rank_ic unless a future pre-registered experiment isolates one training change at a time."
+    rejected_policy_hypotheses:
+      recent6_validation_lcb_top3_v1:
+        reason: "The single confirmatory test failed 11 committed gates. Mean Rank IC delta was -0.00403, std delta +0.00901, worst-five delta -0.01015, F1 delta -0.01006, and positive selected-return coverage delta -0.1053. Common-window validation LCB ranking did not predict the next test window reliably."
+        result_bundle: phase1_policy_research_recent6_validation_lcb_top3_v1.zip
+        preregistration_commit: b7bfda0c9f037e07e8c01bb1ba041374320186d5
+        retest_policy: "closed_without_parameter_search; require_materially_distinct_mechanism"
     rejected_profiles:
       baseline_stable_multitask_return_head_conflict_projected:
         reason: "Bundle 20260628_155057: gradient conflict was rare, so projection did not address the remaining fold instability. Triage std worsened from 0.1078 to 0.1086, official F1 fell from 0.4423 to 0.4214, positive top-10 lift coverage fell from 58.3% to 50%, and bad-fold top-10 lift remained 0.7885. Do not tune projection or auxiliary-task weights."

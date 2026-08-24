@@ -89,6 +89,9 @@ def build_phase1_current_status(
         and protocol_hypothesis != "not_yet_preregistered"
         and protocol_action.startswith("run_notebook_04a_")
     )
+    research_cycle_closed = bool(
+        protocol_action.startswith("archive_failed_adaptive_ensemble_")
+    )
 
     if phase2_ready:
         status = "phase2_ready_review_required"
@@ -100,6 +103,12 @@ def build_phase1_current_status(
         if research_preregistered:
             next_action = protocol_action
             status = "failed_future_oos_historical_research_preregistered"
+        elif research_cycle_closed:
+            next_action = protocol_action
+            status = str(
+                next_research_protocol.get("status")
+                or "failed_future_oos_new_research_cycle_required"
+            )
         else:
             next_action = str(
                 phase2_readiness.get("next_action")
@@ -159,11 +168,18 @@ def build_phase1_current_status(
     if research_preregistered:
         historical_research_result = "preregistered_policy_pending_historical_evaluation"
         historical_research_next_action = protocol_action
+    elif research_cycle_closed:
+        historical_research_result = "adaptive_policy_failed_no_promotion"
+        historical_research_next_action = protocol_action
 
     if frozen_failed and research_preregistered:
         run_04_required_now = False
         run_05_first = False
         next_notebook = "04a"
+    elif frozen_failed and research_cycle_closed:
+        run_04_required_now = False
+        run_05_first = False
+        next_notebook = "none_until_distinct_mechanism_is_preregistered"
     elif frozen_failed:
         run_04_required_now = False
         run_05_first = False

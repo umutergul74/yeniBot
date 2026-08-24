@@ -222,10 +222,10 @@ When `candidate_profiles` is empty, do not run notebook `04` merely to recreate
 the control. Use notebook `05` for reporting changes and wait until a distinct
 candidate is explicitly pre-registered.
 
-The current exception is the explicitly preregistered cached-policy study in
-Notebook 04a. It performs zero fit operations, keeps the source cache
-immutable, and writes `phase1_latest_policy_research_bundle.zip`. It must not
-be followed automatically by Notebook 05.
+Notebook 04a is reserved for an explicitly active cached-policy
+preregistration. Its current hypothesis has completed and failed, so it must
+not be rerun or followed by Notebook 05. The preserved result is
+`phase1_latest_policy_research_bundle.zip`.
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is

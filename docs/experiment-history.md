@@ -52,20 +52,23 @@ control passed the active historical evidence charter, but the subsequently
 completed `control_recent3_equal_v2` Future-OOS evaluation failed the frozen
 Rank-IC lower-confidence-bound gate. That exact candidate is retired.
 
-## Active Preregistered Mechanism
+## Completed Validation-Adaptive Mechanism
 
-`recent6_validation_lcb_top3_v1` is the only open confirmatory hypothesis. It
+`recent6_validation_lcb_top3_v1` was the only open confirmatory hypothesis. It
 does not add features, change the TCN+GRU, tune a seed ensemble, or repeat a
 static recency policy. At each historical target fold it compares the fixed
 six-model recent pool on one common, already-mature validation selector
 window; it selects three models by block-bootstrap Rank-IC lower bound and
 uses a disjoint post-purge validation segment for threshold calibration.
 
-The experiment reuses immutable cached predictions ending in December 2025.
+The experiment reused immutable cached predictions ending in December 2025.
 Neither failed Future-OOS window is eligible for model, threshold, or policy
-selection. The candidate must clear every committed ranking, dispersion,
-classification, and payoff gate against the recent-three benchmark. Passing
-historical gates only permits a separately reviewed fit at a new anchor.
+selection. Against the recent-three benchmark, the candidate lowered mean Rank
+IC by `0.00403`, worsened dispersion by `0.00901`, worsened worst-five Rank IC
+by `0.01015`, lowered F1 by `0.01006`, and reduced positive selected-return
+coverage by `10.5` percentage points. It failed 11 committed gates and is
+closed without parameter search. Common-window validation reliability did not
+predict the next test window well enough.
 
 ## Governance Rule
 

@@ -314,6 +314,10 @@ def research_protocol_payload(
         and str(cycle.get("primary_hypothesis") or "")
         == str(adaptive.get("hypothesis_id") or "")
     )
+    adaptive_completed = bool(
+        str(adaptive.get("status") or "").startswith("completed_failed_")
+        and not bool(adaptive.get("enabled", False))
+    )
     if not failed_candidate_id and configured_future_oos_failed:
         failed_candidate_id = configured_primary_id
     current_status = str(cycle.get("status", "not_configured"))
@@ -335,6 +339,9 @@ def research_protocol_payload(
         current_status = "failed_future_oos_replacement_manifest_pin_required"
         current_action = PIN_REPLACEMENT_MANIFEST_ACTION
     elif failed_future_oos and adaptive_preregistered:
+        current_status = str(cycle.get("status"))
+        current_action = str(cycle.get("next_action"))
+    elif failed_future_oos and adaptive_completed:
         current_status = str(cycle.get("status"))
         current_action = str(cycle.get("next_action"))
     elif failed_future_oos:
@@ -428,6 +435,8 @@ def research_protocol_payload(
             if failed_future_oos and replacement_fit_complete
             else "04a"
             if failed_future_oos and adaptive_preregistered
+            else "none_until_distinct_mechanism_is_preregistered"
+            if failed_future_oos and adaptive_completed
             else "none_until_new_research_cycle_is_preregistered"
             if failed_future_oos
             else None

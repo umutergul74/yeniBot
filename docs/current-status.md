@@ -95,25 +95,25 @@ strategy. Do not use Notebook 06 or 07 to repair the failed model result.
 
 ## Next Operator Run
 
-The next run is `04a_phase1_adaptive_ensemble_research.ipynb`. It performs no
-training and reads only the immutable historical cross-prediction cache from
-run `20260628_155057`.
+There is no notebook to run now. `recent6_validation_lcb_top3_v1` completed on
+the immutable historical cache and failed its confirmatory gates:
 
-The single preregistered candidate is `recent6_validation_lcb_top3_v1`:
+| Metric | Recent-3 control | Adaptive candidate | Delta |
+|---|---:|---:|---:|
+| Mean Rank IC | `0.05157` | `0.04754` | `-0.00403` |
+| Rank IC std | `0.08178` | `0.09080` | `+0.00901` |
+| Worst-five Rank IC | `-0.08311` | `-0.09326` | `-0.01015` |
+| Mean F1 | `0.39678` | `0.38672` | `-0.01006` |
+| Positive selected-return folds | `65.8%` | `55.3%` | `-10.5 pp` |
 
-1. Fix the eligible pool to the six most recent historical fold models.
-2. Use the first 720 validation hours to rank those models by the 90% lower
-   bound of 24-hour moving-block-bootstrap Rank IC.
-3. Select the best three and combine them at equal weight.
-4. Purge 24 hours, then select the threshold on the remaining validation rows.
-5. Compare with the fixed recent-three equal-weight benchmark on historical
-   test folds using the committed gates.
+The failure is broad, not a borderline single-gate miss. Do not tune the pool
+size, top-k, confidence level, validation split, or purge. The result is
+preserved in `phase1_latest_policy_research_bundle.zip` with zero fit
+operations and no failed-OOS selection rows.
 
-Both failed Future-OOS windows begin after the maximum permitted historical
-selection timestamp and are explicitly excluded by the executable contract.
-Notebook 04a writes `phase1_latest_policy_research_bundle.zip`. Do not run
-Notebook 05, 06, or 07 until that result is reviewed. A pass permits explicit
-replacement-fit preregistration; it does not freeze or promote automatically.
+Notebooks 04, 04a, 05, 06, and 07 remain blocked until one materially distinct
+mechanism is written and preregistered. The next design must not be another
+static/adaptive recency or validation-reliability weighting variation.
 
 The authoritative machine-readable instruction is
 `operator_next_step.json`. A completed evaluation must always supersede the

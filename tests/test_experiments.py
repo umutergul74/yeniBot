@@ -3413,13 +3413,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "validation_adaptive_ensemble_preregistered"
+        "validation_adaptive_ensemble_completed_no_promotion"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "historical_validation_adaptive_ensemble_preregistered"
+        "historical_validation_adaptive_ensemble_failed"
     )
     assert config["experiments"]["next_research_cycle"]["next_action"] == (
-        "run_notebook_04a_historical_policy_research_only"
+        "archive_failed_adaptive_ensemble_and_design_distinct_mechanism"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
@@ -3427,7 +3427,9 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     )
     assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is False
     adaptive = config["experiments"]["next_research_cycle"]["adaptive_ensemble"]
+    assert adaptive["enabled"] is False
     assert adaptive["preregistered"] is True
+    assert adaptive["status"] == "completed_failed_historical_gates"
     assert adaptive["hypothesis_id"] == "recent6_validation_lcb_top3_v1"
     assert adaptive["policy"]["pool_recent_k"] == 6
     assert adaptive["policy"]["select_top_k"] == 3
@@ -4271,15 +4273,13 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
 
     contract = validate_training_research_contract(config)
 
-    assert contract["research_cycle_status"] == (
-        "historical_validation_adaptive_ensemble_preregistered"
-    )
+    assert contract["research_cycle_status"] == "historical_validation_adaptive_ensemble_failed"
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "validation_adaptive_ensemble_preregistered"
+        "validation_adaptive_ensemble_completed_no_promotion"
     )
     assert contract["seed_audit_mode"] == "in_run"
-    assert contract["adaptive_ensemble_enabled"] is True
+    assert contract["adaptive_ensemble_enabled"] is False
     assert contract["adaptive_hypothesis_id"] == "recent6_validation_lcb_top3_v1"
 
     renamed = copy.deepcopy(config)
