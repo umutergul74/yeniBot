@@ -17,9 +17,16 @@ from yenibot.experiment.frozen import (
     normalize_frozen_manifest_verification,
     verify_frozen_manifest_artifacts,
 )
+from yenibot.experiment.lifecycle import (
+    RETIRE_FAILED_FUTURE_OOS_ACTION,
+    REVIEW_PASSED_FUTURE_OOS_ACTION,
+    future_oos_failed,
+    future_oos_passed,
+)
 
 __all__ = [
     "future_oos_preflight",
+    "reconcile_preflight_with_evaluation",
     "future_oos_preflight_markdown",
 ]
 
@@ -159,6 +166,8 @@ def future_oos_preflight(
             "invariants_passed": False,
             "ready_for_evaluation": False,
             "next_action": "select_and_preregister_replacement_before_new_oos_anchor",
+            "next_action_scope": "pre_evaluation_preflight_only",
+            "lifecycle_superseded": False,
             "required_notebook_sequence_when_refreshing": [],
             "forbidden_before_frozen_evaluation": [
                 "future_oos_scoring_without_preregistered_candidate",
@@ -367,6 +376,8 @@ def future_oos_preflight(
         "invariants_passed": invariants_passed,
         "ready_for_evaluation": bool(invariants_passed and enough_rows),
         "next_action": next_action,
+        "next_action_scope": "pre_evaluation_preflight_only",
+        "lifecycle_superseded": False,
         "required_notebook_sequence_when_refreshing": [
             "01_data_preparation.ipynb",
             "02_feature_engineering.ipynb",
@@ -410,6 +421,39 @@ def future_oos_preflight(
     }
 
 
+def reconcile_preflight_with_evaluation(
+    preflight: dict[str, Any],
+    readiness: dict[str, Any] | None,
+    *,
+    current_lifecycle_action: str | None = None,
+) -> dict[str, Any]:
+    """Mark a preflight action historical once evaluation has completed.
+
+    The original preflight state and action remain immutable audit evidence.  A
+    separate current lifecycle action prevents that pre-evaluation instruction
+    from being presented as the operator's next step after scoring.
+    """
+
+    result = dict(preflight)
+    result["next_action_scope"] = "pre_evaluation_preflight_only"
+    state = readiness or {}
+    completed = bool(state.get("evaluation_completed", False))
+    result["lifecycle_superseded"] = completed
+    result["superseded_by"] = "future_oos_evaluation" if completed else None
+    result["evaluation_state"] = state.get("evaluation_state")
+    result["evaluation_completed"] = completed
+    result["primary_candidate_passed"] = state.get("primary_candidate_passed")
+    if current_lifecycle_action:
+        result["current_lifecycle_action"] = current_lifecycle_action
+    elif future_oos_failed(state):
+        result["current_lifecycle_action"] = RETIRE_FAILED_FUTURE_OOS_ACTION
+    elif future_oos_passed(state):
+        result["current_lifecycle_action"] = REVIEW_PASSED_FUTURE_OOS_ACTION
+    else:
+        result["current_lifecycle_action"] = result.get("next_action")
+    return result
+
+
 def future_oos_preflight_markdown(preflight: dict[str, Any]) -> str:
     """Render a compact operator-facing preflight summary."""
 
@@ -438,7 +482,10 @@ def future_oos_preflight_markdown(preflight: dict[str, Any]) -> str:
             f"- Latest labeled timestamp: `{data.get('data_end')}`",
             f"- Failed checks: `{failed}`",
             f"- Artifact errors: `{integrity}`",
-            f"- Next action: `{preflight.get('next_action')}`",
+            f"- Pre-evaluation action: `{preflight.get('next_action')}`",
+            f"- Action scope: `{preflight.get('next_action_scope')}`",
+            f"- Superseded by completed evaluation: `{preflight.get('lifecycle_superseded')}`",
+            f"- Current lifecycle action: `{preflight.get('current_lifecycle_action')}`",
             "",
         ]
     )

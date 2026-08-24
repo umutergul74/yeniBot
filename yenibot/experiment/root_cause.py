@@ -22,6 +22,10 @@ from yenibot.experiment.common import (
 from yenibot.experiment.configuration import (
     _experiment_policy_guard,
 )
+from yenibot.experiment.lifecycle import (
+    PIN_REPLACEMENT_MANIFEST_ACTION,
+    RETIRE_FAILED_FUTURE_OOS_ACTION,
+)
 
 from yenibot.experiment.training import (
     _test_predictions,
@@ -1289,48 +1293,64 @@ def _phase1_decision_ladder_payload(
         replacement_fit.get("status") == "fit_complete_manifest_pin_required"
     )
     if future_oos_failed and replacement_fit_complete:
-        recommended_next_action = (
-            "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
-        )
-    elif future_oos_failed and recency_ready:
-        recommended_next_action = (
-            "explicitly_review_and_preregister_historical_recency_winner"
-        )
+        recommended_next_action = PIN_REPLACEMENT_MANIFEST_ACTION
+        research_cycle_followup_action = PIN_REPLACEMENT_MANIFEST_ACTION
     elif future_oos_failed:
-        recommended_next_action = (
-            "no_recency_policy_cleared_gates_design_new_pre_registered_hypothesis"
+        recommended_next_action = RETIRE_FAILED_FUTURE_OOS_ACTION
+        research_cycle_followup_action = (
+            "explicitly_review_and_preregister_historical_recency_winner"
+            if recency_ready
+            else "design_new_pre_registered_hypothesis_from_historical_cv_only"
         )
     elif seed_review_pending:
         recommended_next_action = (
             "complete_seed_reproducibility_review_before_replacement_preregistration"
         )
+        research_cycle_followup_action = recommended_next_action
     elif only_future_oos_blocked and frozen_manifest_missing and replacement_fit_complete:
-        recommended_next_action = (
-            "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
-        )
+        recommended_next_action = PIN_REPLACEMENT_MANIFEST_ACTION
+        research_cycle_followup_action = recommended_next_action
     elif only_future_oos_blocked and frozen_manifest_missing:
         recommended_next_action = (
             "select_and_preregister_replacement_candidate_from_historical_cv_only"
         )
+        research_cycle_followup_action = recommended_next_action
     elif only_future_oos_blocked:
         recommended_next_action = "wait_for_new_future_oos_rows"
+        research_cycle_followup_action = recommended_next_action
     elif run_04_now:
         recommended_next_action = "run_04_only_after_pre_registered_hypothesis"
+        research_cycle_followup_action = recommended_next_action
     elif threshold_transfer_blocker:
         recommended_next_action = "run_05_threshold_transfer_diagnostics_only"
+        research_cycle_followup_action = recommended_next_action
     elif score_reversal_blocker:
         recommended_next_action = "run_05_score_reversal_diagnostics_only"
+        research_cycle_followup_action = recommended_next_action
     else:
         recommended_next_action = "run_05_only_and_review_root_cause_reports"
+        research_cycle_followup_action = recommended_next_action
+
+    run_04_required_now = bool(run_04_now and not future_oos_failed)
+    run_05_first = not future_oos_failed
+    next_notebook = (
+        "none_until_replacement_manifest_is_pinned"
+        if future_oos_failed and replacement_fit_complete
+        else "none_until_new_research_cycle_is_preregistered"
+        if future_oos_failed
+        else "04"
+        if run_04_required_now
+        else "05"
+    )
     return {
         "phase2_allowed": bool(readiness.get("ready_for_phase2", False) or readiness.get("passed", False)),
         "blockers": blockers,
         "control_profile": control,
-        "run_05_first": True,
-        "run_04_required_now": run_04_now,
+        "run_05_first": run_05_first,
+        "run_04_required_now": run_04_required_now,
         "run_02_03_required_now": False,
         "full_zip_required_now": False,
-        "next_notebook": "04" if run_04_now else "05",
+        "next_notebook": next_notebook,
         "root_cause": (
             "failed_future_oos_ranking_and_payoff_breakdown"
             if future_oos_failed
@@ -1360,7 +1380,12 @@ def _phase1_decision_ladder_payload(
         "new_future_oos_anchor_required": bool(future_oos_failed or new_anchor_required),
         "why_no_04": (
             ""
-            if run_04_now or future_oos_failed
+            if run_04_required_now
+            else (
+                "failed candidate must be retired and a new historical-only research "
+                "hypothesis must be pre-registered before notebook 04"
+            )
+            if future_oos_failed
             else (
                 "replacement candidate must be chosen from historical CV evidence and "
                 "pre-registered before a new future-OOS anchor; current holdout cannot "
@@ -1377,6 +1402,7 @@ def _phase1_decision_ladder_payload(
             else "phase2_review_possible"
         ),
         "recommended_next_action": recommended_next_action,
+        "research_cycle_followup_action": research_cycle_followup_action,
     }
 
 def _phase1_blocker_root_cause_markdown(

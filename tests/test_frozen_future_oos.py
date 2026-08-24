@@ -406,6 +406,81 @@ def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) ->
     assert failure["fit_operations_performed"] == 0
 
 
+def test_future_oos_reuses_recorded_immutable_outcome_without_rescoring(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path, min_rows=20)
+    manifest_hash = "abc123"
+    config["experiments"]["frozen_candidate_outcomes"] = {
+        "control_v1": {
+            "status": "failed_future_oos_retired",
+            "manifest_hash": manifest_hash,
+        }
+    }
+    report = tmp_path / "report"
+    report.mkdir(parents=True)
+    (report / "future_oos_evaluation.json").write_text(
+        json.dumps(
+            {
+                "status": {
+                    "evaluation_completed": True,
+                    "evaluation_state": "evaluated_failed",
+                    "primary_candidate_id": "control_v1",
+                    "primary_candidate_passed": False,
+                },
+                "rows": [
+                    {
+                        "candidate_id": "control_v1",
+                        "evidence_passed": False,
+                        "manifest_hash": manifest_hash,
+                        "failed_gates": "rank_ic_lower_ci",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        future_oos_module,
+        "_profile_predictions",
+        lambda **_: (_ for _ in ()).throw(AssertionError("must not rescore")),
+    )
+
+    evaluation, status = evaluate_future_oos(
+        run_dir=tmp_path / "run",
+        report_dir=report,
+        config=config,
+        manifests=[],
+    )
+
+    assert len(evaluation) == 1
+    assert status["evaluation_state"] == "evaluated_failed"
+    assert status["evaluation_reused_from_recorded_outcome"] is True
+    assert status["rescore_operations_performed"] == 0
+    assert status["state_source"] == "recorded_immutable_future_oos_outcome"
+
+
+def test_future_oos_fails_closed_when_recorded_outcome_artifact_is_missing(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, min_rows=20)
+    config["experiments"]["frozen_candidate_outcomes"] = {
+        "control_v1": {
+            "status": "failed_future_oos_retired",
+            "manifest_hash": "abc123",
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="refusing to rescore an expanded window"):
+        evaluate_future_oos(
+            run_dir=tmp_path / "run",
+            report_dir=tmp_path / "report",
+            config=config,
+            manifests=[],
+        )
+
+
 def test_future_oos_disabled_protocol_writes_placeholder_artifacts(tmp_path: Path) -> None:
     config = _config(tmp_path, min_rows=20)
     config["experiments"]["future_oos_validation"]["enabled"] = False

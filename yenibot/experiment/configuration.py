@@ -339,8 +339,10 @@ def _experiment_policy_guard(
         "reason": reason,
         "allowed_benchmark_profiles": allowed,
         "primary_candidate_id": primary_candidate_id,
-        "primary_candidate_outcome": str(outcome.get("status", "")),
         **monitor_state,
+        "primary_candidate_outcome": str(outcome.get("status", "")),
+        "monitor_next_action": str(monitor_state.get("next_action", "")),
+        "next_action": action,
     }
 
 def _apply_experiment_policy_guard(settings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:

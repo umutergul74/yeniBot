@@ -2081,8 +2081,12 @@ def test_decision_ladder_routes_failed_future_oos_to_replacement_research() -> N
     assert ladder["recency_recommended_policy"] == "recent_3_equal"
     assert ladder["new_future_oos_anchor_required"] is True
     assert ladder["recommended_next_action"] == (
+        "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    )
+    assert ladder["research_cycle_followup_action"] == (
         "explicitly_review_and_preregister_historical_recency_winner"
     )
+    assert ladder["run_05_first"] is False
 
 
 def test_event_diagnostics_identify_event_and_sample_information() -> None:
@@ -3302,7 +3306,7 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert config["validation"]["charter"]["versions"]["v4_draft"]["status"] == "superseded_not_active"
     assert config["validation"]["charter"]["versions"]["v4_evidence"]["status"] == "active"
     frozen = config["experiments"]["frozen_candidates"]
-    assert frozen["lifecycle_state"] == "replacement_candidate_manifest_pinned_awaiting_future_oos"
+    assert frozen["lifecycle_state"] == "primary_candidate_failed_future_oos_retired"
     assert frozen["primary_candidate_id"] == "control_recent3_equal_v2"
     assert frozen["anchor_run_id"] == "20260621_075454"
     assert frozen["anchor_data_end"] == "2026-06-13T01:00:00+00:00"
@@ -3409,19 +3413,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "model_research_frozen_pending_future_oos"
+        "failed_future_oos_new_research_cycle_design_required"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "replacement_candidate_manifest_pinned_awaiting_future_oos"
+        "failed_future_oos_new_research_cycle_required"
     )
     assert config["experiments"]["next_research_cycle"]["next_action"] == (
-        "wait_for_new_future_oos_rows"
+        "retire_failed_frozen_candidate_and_open_new_research_anchor"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
-        "manifest_pinned_awaiting_future_oos"
+        "retired_after_failed_future_oos"
     )
-    assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is True
+    assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is False
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
     mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]
     combo_profile = config["features"]["profiles"]["baseline_stable_train_clip_and_reliability_mask"]
@@ -4260,12 +4264,10 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
 
     contract = validate_training_research_contract(config)
 
-    assert contract["research_cycle_status"] == (
-        "replacement_candidate_manifest_pinned_awaiting_future_oos"
-    )
+    assert contract["research_cycle_status"] == "failed_future_oos_new_research_cycle_required"
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "event_sample_information_diagnostics_preregistered"
+        "failed_future_oos_new_research_cycle_design_required"
     )
     assert contract["seed_audit_mode"] == "in_run"
 

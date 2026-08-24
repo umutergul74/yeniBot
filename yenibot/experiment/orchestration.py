@@ -86,17 +86,13 @@ from yenibot.experiment.seed_ensemble_research import (
 )
 from yenibot.experiment.seed_audit import run_in_run_seed_audits
 from yenibot.experiment.execution import diagnostics_status_path, traced_workflow, training_status_path, workflow_checkpoint
-from yenibot.experiment.evidence import (
-    _model_evidence_uncertainty_frame,
-    _probability_calibration_comparison_frames,
-    _write_model_evidence_uncertainty,
-    _write_probability_calibration_comparison,
-)
+from yenibot.experiment.evidence import _model_evidence_uncertainty_frame, _probability_calibration_comparison_frames, _write_model_evidence_uncertainty, _write_probability_calibration_comparison
 from yenibot.experiment.dashboard import attach_active_charter_status, write_model_performance_dashboard
 from yenibot.experiment.diagnostic_outputs import profile_dirs as _profile_dirs, prewrite_auto_review_inputs
 from yenibot.experiment.frozen import freeze_candidate_manifests
 from yenibot.experiment.future_oos import evaluate_future_oos
 from yenibot.experiment.oos_preflight import future_oos_preflight, future_oos_preflight_markdown
+from yenibot.experiment.lifecycle_reporting import reconcile_future_oos_lifecycle_reports
 from yenibot.experiment.folds import _fold_stability_forensics_frame, _fold_stability_summary_frame
 from yenibot.experiment.holdout import (
     _aggregate_holdout_predictions,
@@ -1201,24 +1197,12 @@ def write_experiment_diagnostics(
         report_dir,
         config=diagnostic_config,
     )
-    if (
-        replacement_candidate_fit.get("status") == "fit_complete_manifest_pin_required"
-        and future_oos_preflight_status.get("state") == "awaiting_replacement_preregistration"
-    ):
-        future_oos_preflight_status = dict(future_oos_preflight_status)
-        future_oos_preflight_status[
-            "next_action"
-        ] = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
-        warnings = list(future_oos_preflight_status.get("warnings", []) or [])
-        warnings.append(
-            "Replacement candidate fit is complete; pin its manifest hash and activate a new future-OOS anchor before scoring."
-        )
-        future_oos_preflight_status["warnings"] = warnings
-        _write_json(report_dir / "future_oos_preflight.json", future_oos_preflight_status)
-        (report_dir / "future_oos_preflight.md").write_text(
-            future_oos_preflight_markdown(future_oos_preflight_status),
-            encoding="utf-8",
-        )
+    future_oos_preflight_status = reconcile_future_oos_lifecycle_reports(
+        report_dir,
+        preflight=future_oos_preflight_status,
+        readiness=future_oos_readiness,
+        replacement_candidate_fit=replacement_candidate_fit,
+    )
     future_oos_candidate_plan = _future_oos_candidate_plan_frame(
         settings,
         diagnostic_config,
@@ -1471,6 +1455,17 @@ def write_experiment_diagnostics(
     decision["phase2_readiness_path"] = str(phase2_readiness_path)
     decision["phase2_readiness_md_path"] = str(phase2_readiness_md_path)
     decision["phase2_readiness"] = auto_review["review"].get("phase2_readiness", {})
+    if bool(future_oos_readiness.get("evaluation_completed", False)):
+        future_oos_preflight_status = reconcile_future_oos_lifecycle_reports(
+            report_dir,
+            preflight=future_oos_preflight_status,
+            readiness=future_oos_readiness,
+            replacement_candidate_fit=replacement_candidate_fit,
+            current_lifecycle_action=str(
+                decision["phase2_readiness"].get("next_action") or ""
+            )
+            or None,
+        )
     decision["phase1_transition_plan_path"] = str(phase1_transition_plan_path)
     decision["phase1_transition_plan_md_path"] = str(phase1_transition_plan_md_path)
     decision["phase1_transition_plan"] = auto_review["review"].get("phase1_transition_plan", {})

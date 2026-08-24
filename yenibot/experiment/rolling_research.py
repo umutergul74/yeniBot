@@ -18,6 +18,11 @@ from yenibot.experiment.common import (
     _rank_ic_for_frame,
     _write_json,
 )
+from yenibot.experiment.lifecycle import (
+    PIN_REPLACEMENT_MANIFEST_ACTION,
+    RETIRE_FAILED_FUTURE_OOS_ACTION,
+    future_oos_failed,
+)
 from yenibot.experiment.configuration import profile_config
 from yenibot.experiment.holdout import _predict_holdout_for_profile
 from yenibot.training import PurgedWalkForwardCV
@@ -29,6 +34,7 @@ __all__ = [
     "aggregate_recency_predictions",
     "research_protocol_payload",
     "publish_recency_research_reports",
+    "reconcile_recency_manifest_lifecycle",
     "run_recency_ensemble_research",
 ]
 
@@ -278,6 +284,31 @@ def research_protocol_payload(
         )
     )
     seed_ready = _same_seed_reproduced(seed_reproducibility_audit)
+    failed_future_oos = future_oos_failed(future_readiness, blockers)
+    failed_candidate_id = str(
+        future_readiness.get("primary_candidate_id")
+        or cycle.get("source_failed_candidate_id")
+        or ""
+    )
+    configured_replacement = dict(cycle.get("replacement_candidate", {}) or {})
+    configured_primary_id = str(
+        (
+            config.get("experiments", {}).get("frozen_candidates", {}) or {}
+        ).get("primary_candidate_id")
+        or ""
+    )
+    configured_outcome = (
+        (
+            config.get("experiments", {}).get("frozen_candidate_outcomes", {}) or {}
+        ).get(configured_primary_id, {})
+        or {}
+    )
+    configured_future_oos_failed = "failed" in str(
+        configured_outcome.get("status", "")
+    ).lower()
+    failed_future_oos = bool(failed_future_oos or configured_future_oos_failed)
+    if not failed_candidate_id and configured_future_oos_failed:
+        failed_candidate_id = configured_primary_id
     current_status = str(cycle.get("status", "not_configured"))
     current_action = cycle.get("next_action")
     if artifact_override and readiness.get("ready_for_phase2"):
@@ -293,9 +324,15 @@ def research_protocol_payload(
     ):
         current_status = "seed_reproducibility_review_required"
         current_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
+    elif failed_future_oos and replacement_fit_complete:
+        current_status = "failed_future_oos_replacement_manifest_pin_required"
+        current_action = PIN_REPLACEMENT_MANIFEST_ACTION
+    elif failed_future_oos:
+        current_status = "failed_future_oos_new_research_cycle_required"
+        current_action = RETIRE_FAILED_FUTURE_OOS_ACTION
     elif artifact_override and replacement_fit_complete and not frozen_available:
         current_status = "replacement_fit_complete_manifest_pin_required"
-        current_action = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+        current_action = PIN_REPLACEMENT_MANIFEST_ACTION
     elif artifact_override and (
         "frozen_candidate_manifest_unavailable" in blockers or not frozen_available
     ):
@@ -310,11 +347,37 @@ def research_protocol_payload(
     elif artifact_override and "future_unseen_oos_not_ready" in blockers and frozen_available:
         current_status = "replacement_manifest_pinned_waiting_for_future_oos_rows"
         current_action = "wait_for_new_future_oos_rows"
+    replacement_candidate = configured_replacement
+    configured_replacement_id = str(configured_replacement.get("candidate_id") or "")
+    if (
+        failed_future_oos
+        and not replacement_fit_complete
+        and configured_replacement_id
+        and configured_replacement_id == failed_candidate_id
+    ):
+        replacement_candidate = {
+            **configured_replacement,
+            "enabled": False,
+            "status": "retired_after_failed_future_oos",
+        }
+    replacement_candidate_id = (
+        replacement_fit.get("candidate_id")
+        if replacement_fit_complete
+        else None
+        if failed_future_oos
+        else configured_replacement.get("candidate_id")
+    )
+
     return {
         "status": current_status,
         "primary_hypothesis": cycle.get("primary_hypothesis"),
         "next_action": current_action,
-        "source_failed_candidate_id": cycle.get("source_failed_candidate_id"),
+        "source_failed_candidate_id": failed_candidate_id
+        or cycle.get("source_failed_candidate_id"),
+        "failed_candidate_id": failed_candidate_id or None,
+        "failed_candidate_status": (
+            "retired_after_failed_future_oos" if failed_future_oos else None
+        ),
         "failed_oos_role": cycle.get("failed_oos_role"),
         "current_state_source": (
             "diagnostics_artifacts_override_config"
@@ -328,20 +391,38 @@ def research_protocol_payload(
         "future_oos_ready_for_evaluation": bool(
             future_readiness.get("ready_for_evaluation", False)
         ),
+        "future_oos_evaluation_completed": bool(
+            future_readiness.get("evaluation_completed", False)
+        ),
+        "future_oos_primary_candidate_passed": future_readiness.get(
+            "primary_candidate_passed"
+        ),
+        "future_oos_failed": failed_future_oos,
         "same_window_selection_allowed": bool(
             cycle.get("same_window_selection_allowed", False)
         ),
         "new_future_oos_anchor_required": bool(
-            cycle.get("new_future_oos_anchor_required", True)
+            failed_future_oos
+            or cycle.get("new_future_oos_anchor_required", True)
+        ),
+        "new_research_cycle_required": bool(
+            failed_future_oos and not replacement_fit_complete
+        ),
+        "run_04_required_now": False if failed_future_oos else None,
+        "run_05_required_now": False if failed_future_oos else None,
+        "next_notebook": (
+            "none_until_replacement_manifest_is_pinned"
+            if failed_future_oos and replacement_fit_complete
+            else "none_until_new_research_cycle_is_preregistered"
+            if failed_future_oos
+            else None
         ),
         "rolling_origin": cycle.get("rolling_origin", {}),
         "recency_ensemble": cycle.get("recency_ensemble", {}),
-        "replacement_candidate": cycle.get("replacement_candidate", {}),
+        "configured_replacement_candidate": configured_replacement,
+        "replacement_candidate": replacement_candidate,
         "replacement_candidate_fit_status": replacement_fit.get("status"),
-        "replacement_candidate_id": replacement_fit.get(
-            "candidate_id",
-            (cycle.get("replacement_candidate", {}) or {}).get("candidate_id"),
-        ),
+        "replacement_candidate_id": replacement_candidate_id,
         "replacement_manifest_pin_required": bool(
             replacement_fit.get("manifest_pin_required", False) and not frozen_available
         ),
@@ -399,6 +480,32 @@ def publish_recency_research_reports(
         else {}
     )
     return summary, decision
+
+
+def reconcile_recency_manifest_lifecycle(
+    report_dir: str | Path,
+    *,
+    future_oos_readiness: dict[str, Any] | None,
+    current_lifecycle_action: str | None,
+) -> dict[str, Any]:
+    """Scope a copied recency manifest's old action to its historical run."""
+
+    path = Path(report_dir) / "recency_ensemble_manifest.json"
+    if not path.exists() or path.stat().st_size == 0:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    completed = bool(
+        (future_oos_readiness or {}).get("evaluation_completed", False)
+    )
+    payload["artifact_role"] = "historical_recency_research_snapshot"
+    payload["next_action_scope"] = "historical_research_generation_time_only"
+    payload["lifecycle_superseded"] = completed
+    payload["superseded_by"] = "future_oos_evaluation" if completed else None
+    payload["current_lifecycle_action"] = (
+        current_lifecycle_action if completed else payload.get("next_action")
+    )
+    _write_json(path, payload)
+    return payload
 
 
 def _load_compatible_cross_prediction_cache(

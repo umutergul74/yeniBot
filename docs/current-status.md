@@ -1,16 +1,17 @@
 # Current Phase 1 Status
 
-Last reviewed: **June 30, 2026**
+Last reviewed: **August 24, 2026**
 
 ## Decision
 
-The retained TCN+GRU control passes the active historical walk-forward evidence
-charter, but official/promotable Phase 2 remains blocked. Historical research and frozen future-OOS
-confirmation are separate tracks:
+The retained TCN+GRU control passed the historical walk-forward evidence
+charter, but its preregistered Future-OOS candidate failed the confirmation
+charter. Official/promotable Phase 2 therefore remains blocked.
 
-- Historical CV model research is frozen; no active candidate remains.
-- Frozen future-OOS candidates must remain prediction-only and immutable.
-- A historical candidate cannot be promoted from the rolling holdout.
+- `control_recent3_equal_v2` is retired after its completed Future-OOS result.
+- Its manifest, predictions, and failure result remain immutable audit evidence.
+- The failed window cannot be reused for threshold, ensemble, feature, or policy selection.
+- A new candidate requires historical-only research and a new preregistered OOS anchor.
 
 ## Retained Control
 
@@ -54,53 +55,59 @@ It still failed the pre-registered promotion gates:
 Gradient interference is not the remaining instability mechanism. The
 auxiliary multitask family is closed.
 
-## Model Research State
+## Completed Future-OOS Result
 
-Historical model research is frozen. `candidate_profiles` is empty. The
-retained control passes every active historical model-evidence gate, including
-same-seed reproducibility, leakage, stationarity, aggregate Rank IC,
-classification skill, and top-score payoff. It is suitable for Phase 2
-sandbox engineering; official evidence still requires frozen future-OOS
-confirmation.
+The August diagnostics evaluated 1,524 mature hourly rows from June 13 through
+August 15 without refitting or reselection. The candidate passed the observed
+F1, PR-AUC lift, precision lift, and point-estimate Rank IC gates, but failed
+the preregistered `rank_ic_lower_ci` gate:
+
+| Metric | Future-OOS result |
+|---|---:|
+| Rows | `1,524` |
+| F1 | `0.4896` |
+| PR-AUC lift | `1.1645` |
+| Precision lift | `1.1002` |
+| Rank IC | `0.0380` |
+| Rank IC lower confidence bound | `-0.0780` |
+| Top-decile forward return | `0.00220` |
+
+The point estimate is mildly positive, but the confidence interval includes a
+materially negative ranking outcome. Under the frozen charter this is a real
+failure, not a pending state and not a threshold-only issue.
 
 ## Frozen Future-OOS Track
 
-`control_recent3_equal_v2` remains pinned as historical frozen-candidate
-evidence. The latest reviewed diagnostics counted `348 / 720` mature labeled rows after
-its anchor. Model changes must not refit, replace, or tune that frozen
-candidate against its accumulating window.
-
-The failed June 13 candidate remains immutable historical evidence and cannot
-be retested on the same window.
+The old preflight state `ready_prediction_only` and its action
+`run_notebook_05_prediction_only` describe the moment before evaluation. Once
+`evaluation_completed=True`, they are superseded by the evaluation outcome.
+Generated reports now record this scope explicitly and expose the current
+lifecycle action separately. The evaluator also treats the recorded outcome as
+one-shot: it reuses the original verified artifact and refuses to rescore an
+expanded version of the same window.
 
 ## Phase 2 Sandbox Track
 
-The seen-window sandbox, cost model, forensic lab, fixed-fractional portfolio
-accounting, and clean-forward runner are implemented on
-`codex/phase2-sandbox`. Two strategy contracts are hash-locked for confirmation
-strictly after the frozen anchor. The primary is the lower-concentration
-`score_margin_04_atr_band_007_010_time_stop_6bar_tp15_sl4_v1`; the higher-return
-candidate is retained only as a challenger.
-
-The committed runner enforces zero fits, zero reselection, a `0.25%` equity
-risk budget per trade, no leverage, daily and portfolio loss locks, and
-numerical success gates. Existing sandbox decisions end before the anchor and
-are correctly rejected by the clean-forward boundary.
+The Phase 2 sandbox and clean-forward tooling remain useful engineering
+artifacts, but neither is promotable evidence after the Phase 1 candidate
+failure. The clean-forward run also did not establish a positive deployable
+strategy. Do not use Notebook 06 or 07 to repair the failed model result.
 
 ## Next Operator Run
 
-Do not run notebook 04. When at least 720 mature post-anchor rows are available:
+There is currently no notebook to run immediately. In particular, do not rerun
+Notebook 05 on the failed window and do not run Notebook 06 or 07 as a next
+step.
 
-1. `git pull`
-2. Colab `Runtime -> Restart session`
-3. `01_data_preparation.ipynb`
-4. `02_feature_engineering.ipynb`
-5. `03_labeling.ipynb`
-6. `05_diagnostics_validation.ipynb`
-7. `07_phase2_clean_forward_confirmation.ipynb`
+1. Retire the failed frozen candidate in the active research protocol while
+   preserving its artifacts.
+2. Define one materially distinct, causal hypothesis from historical CV and
+   the failure diagnostics only.
+3. Commit that preregistration and its historical gates.
+4. Only then run Notebook 04 for the new historical walk-forward experiment.
+5. Run Notebook 05 to review historical evidence and, only if the candidate
+   clears its preregistered gates, pin a new manifest with a new OOS anchor.
 
-Notebook 05 performs prediction-only frozen evaluation and writes the causal
-market columns required by Notebook 07. Notebook 07 applies only the committed
-candidate/risk lock; it cannot refit, reselect, or promote automatically. If
-the frozen Phase 1 evaluation fails, that failure becomes the only valid source
-for reopening model research.
+The authoritative machine-readable instruction is
+`operator_next_step.json`. A completed evaluation must always supersede the
+older preflight action in that report.

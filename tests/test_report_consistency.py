@@ -10,6 +10,7 @@ from yenibot.experiment.report_consistency import (
     build_report_consistency_audit,
     write_report_consistency_audit,
 )
+from yenibot.experiment.lifecycle import RETIRE_FAILED_FUTURE_OOS_ACTION
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -284,4 +285,105 @@ def test_report_consistency_detects_stale_future_oos_state_sources(
     assert "future_oos_remaining_rows_arithmetic" in failed
     assert "future_oos_min_ready_date_arithmetic" in failed
     assert "active_candidate_placeholder_wording" in failed
+    assert operator["consistency_status"] == "failed"
+
+
+def _write_failed_future_oos_report(path: Path) -> None:
+    _write_base_report(path)
+    blockers = ["future_unseen_oos_candidate_failed"]
+    auto_review = json.loads((path / "auto_review.json").read_text(encoding="utf-8"))
+    auto_review["next_action"] = {"action": RETIRE_FAILED_FUTURE_OOS_ACTION}
+    auto_review["phase2_readiness"]["blockers"] = blockers
+    _write_json(path / "auto_review.json", auto_review)
+    _write_json(
+        path / "phase2_readiness.json",
+        {
+            "ready_for_phase2": False,
+            "blockers": blockers,
+            "next_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+        },
+    )
+    _write_json(
+        path / "phase1_current_status.json",
+        {
+            "run_id": "run",
+            "current_status": "failed_future_oos_new_research_cycle_required",
+            "phase2_blockers": blockers,
+            "active_blocker": blockers[0],
+            "next_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+            "run_04_required_now": False,
+            "run_05_first": False,
+            "next_notebook": "none_until_new_research_cycle_is_preregistered",
+        },
+    )
+    _write_json(
+        path / "next_research_protocol.json",
+        {
+            "status": "failed_future_oos_new_research_cycle_required",
+            "next_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+            "failed_candidate_id": "control_recent3_equal_v2",
+            "failed_candidate_status": "retired_after_failed_future_oos",
+            "replacement_candidate_id": None,
+            "replacement_candidate_fit_status": "not_run_no_preregistered_replacement",
+            "replacement_manifest_pin_required": False,
+            "new_future_oos_anchor_required": True,
+        },
+    )
+    _write_json(
+        path / "future_oos_preflight.json",
+        {
+            "state": "ready_prediction_only",
+            "next_action": "run_notebook_05_prediction_only",
+            "next_action_scope": "pre_evaluation_preflight_only",
+            "lifecycle_superseded": True,
+            "current_lifecycle_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+            "invariants_passed": True,
+        },
+    )
+    _write_json(
+        path / "future_oos_readiness.json",
+        {
+            "ready_for_evaluation": True,
+            "evaluation_completed": True,
+            "evaluation_state": "evaluated_failed",
+            "primary_candidate_id": "control_recent3_equal_v2",
+            "primary_candidate_passed": False,
+        },
+    )
+    _write_json(
+        path / "replacement_candidate_fit.json",
+        {"status": "not_run_no_preregistered_replacement"},
+    )
+    _write_json(path / "frozen_candidate_manifest.json", {"available": True})
+
+
+def test_report_consistency_passes_completed_failed_future_oos_lifecycle(
+    tmp_path: Path,
+) -> None:
+    _write_failed_future_oos_report(tmp_path)
+
+    frame, operator = build_report_consistency_audit(tmp_path)
+
+    assert set(frame["status"]) == {"passed"}
+    assert operator["next_action"] == RETIRE_FAILED_FUTURE_OOS_ACTION
+    assert operator["run_05_first"] is False
+    assert operator["preflight_action_superseded"] is True
+
+
+def test_report_consistency_detects_waiting_state_after_failed_future_oos(
+    tmp_path: Path,
+) -> None:
+    _write_failed_future_oos_report(tmp_path)
+    protocol = json.loads(
+        (tmp_path / "next_research_protocol.json").read_text(encoding="utf-8")
+    )
+    protocol["status"] = "replacement_candidate_manifest_pinned_awaiting_future_oos"
+    protocol["next_action"] = "wait_for_new_future_oos_rows"
+    _write_json(tmp_path / "next_research_protocol.json", protocol)
+
+    frame, operator = build_report_consistency_audit(tmp_path)
+    failed = set(frame.loc[frame["status"].eq("failed"), "check"])
+
+    assert "next_action_consistency" in failed
+    assert "failed_future_oos_lifecycle_transition" in failed
     assert operator["consistency_status"] == "failed"

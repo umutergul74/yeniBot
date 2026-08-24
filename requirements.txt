@@ -14,3 +14,4 @@ matplotlib>=3.8
 seaborn>=0.13
 tqdm>=4.66
 pytest>=8.0
+tabulate>=0.9

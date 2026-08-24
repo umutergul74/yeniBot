@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -380,6 +381,78 @@ def evaluate_future_oos(
     label_maturity_horizon = int(
         _cfg(config, ["labeling", "max_holding_bars"], 0) or 0
     )
+    recorded_outcome = (
+        _cfg(
+            config,
+            ["experiments", "frozen_candidate_outcomes", primary_id],
+            {},
+        )
+        or {}
+    )
+    recorded_status = str(recorded_outcome.get("status", "")).lower()
+    recorded_completed = "failed" in recorded_status or "passed" in recorded_status
+    if recorded_completed:
+        evaluation_path = report_path / "future_oos_evaluation.json"
+        if not evaluation_path.exists() or evaluation_path.stat().st_size == 0:
+            raise RuntimeError(
+                "Immutable Future-OOS outcome is recorded in config but its evaluation "
+                "artifact is missing. Restore the original report bundle; refusing to "
+                "rescore an expanded window."
+            )
+        recorded_payload = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        recorded_rows = recorded_payload.get("rows", []) or []
+        evaluation = pd.DataFrame(recorded_rows)
+        primary = evaluation.loc[
+            evaluation.get(
+                "candidate_id",
+                pd.Series(index=evaluation.index, dtype=str),
+            )
+            .astype(str)
+            .eq(primary_id)
+        ]
+        expected_passed = "passed" in recorded_status and "failed" not in recorded_status
+        if primary.empty:
+            raise RuntimeError(
+                "Immutable Future-OOS evaluation does not contain the configured primary "
+                "candidate; refusing to rescore."
+            )
+        observed_passed = bool(primary.iloc[0].get("evidence_passed", False))
+        if observed_passed is not expected_passed:
+            raise RuntimeError(
+                "Immutable Future-OOS outcome disagrees with its evaluation artifact; "
+                "refusing to rescore."
+            )
+        expected_manifest_hash = str(recorded_outcome.get("manifest_hash", "") or "")
+        observed_manifest_hash = str(primary.iloc[0].get("manifest_hash", "") or "")
+        if expected_manifest_hash and observed_manifest_hash != expected_manifest_hash:
+            raise RuntimeError(
+                "Immutable Future-OOS manifest hash disagrees with the recorded outcome; "
+                "refusing to rescore."
+            )
+        status = dict(recorded_payload.get("status", {}) or {})
+        status.update(
+            {
+                "evaluation_completed": True,
+                "evaluation_state": (
+                    "evaluated_passed" if expected_passed else "evaluated_failed"
+                ),
+                "primary_candidate_id": primary_id,
+                "primary_candidate_passed": expected_passed,
+                "promotion_allowed": expected_passed,
+                "promotion_block_reason": (
+                    "" if expected_passed else "future_oos_candidate_failed"
+                ),
+                "fit_operations_performed": 0,
+                "rescore_operations_performed": 0,
+                "evaluation_reused_from_recorded_outcome": True,
+                "recorded_outcome_status": recorded_outcome.get("status"),
+                "state_source": "recorded_immutable_future_oos_outcome",
+            }
+        )
+        recorded_payload["status"] = status
+        _write_json(evaluation_path, recorded_payload)
+        _write_json(report_path / "future_oos_readiness.json", status)
+        return evaluation, status
     if not bool(future_cfg.get("enabled", False)) or not anchor_value:
         evaluation = pd.DataFrame(
             columns=["candidate_id", "rank_ic", "evidence_passed"]

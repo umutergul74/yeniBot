@@ -9,6 +9,11 @@ from typing import Any
 import pandas as pd
 
 from yenibot.experiment.common import _json_ready, _table_markdown, _write_json
+from yenibot.experiment.lifecycle import (
+    PIN_REPLACEMENT_MANIFEST_ACTION,
+    RETIRE_FAILED_FUTURE_OOS_ACTION,
+    future_oos_failed,
+)
 
 __all__ = [
     "build_report_consistency_audit",
@@ -16,7 +21,7 @@ __all__ = [
 ]
 
 
-PIN_MANIFEST_ACTION = "pin_replacement_candidate_manifest_and_activate_new_oos_anchor"
+PIN_MANIFEST_ACTION = PIN_REPLACEMENT_MANIFEST_ACTION
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -142,6 +147,7 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
     replacement = _read_json(path / "replacement_candidate_fit.json")
     frozen = _read_json(path / "frozen_candidate_manifest.json")
     failure_summary = _read_json(path / "future_oos_failure_summary.json")
+    recency_manifest = _read_json(path / "recency_ensemble_manifest.json")
     candidate_plan = _read_csv(path / "future_oos_candidate_plan.csv")
     scorecard = _read_csv(path / "model_performance_scorecard.csv")
     missing_selected = _read_csv(path / "missing_selected_profiles.csv")
@@ -149,13 +155,27 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
     memory = _read_csv(path / "experiment_memory_registry.csv")
 
     rows = _core_file_rows(path)
+    evaluation_completed = bool(readiness.get("evaluation_completed", False))
+    preflight_superseded = bool(
+        evaluation_completed or preflight.get("lifecycle_superseded", False)
+    )
     raw_actions = {
         "auto_review": _action_from_auto_review(auto_review),
         "phase2_readiness": str(phase2.get("next_action") or ""),
         "phase1_current_status": str(current.get("next_action") or ""),
         "next_research_protocol": str(protocol.get("next_action") or ""),
-        "future_oos_preflight": str(preflight.get("next_action") or ""),
     }
+    ignored_stage_actions: dict[str, str] = {}
+    if preflight_superseded:
+        ignored_stage_actions["future_oos_preflight"] = str(
+            preflight.get("next_action") or ""
+        )
+        if preflight.get("current_lifecycle_action"):
+            raw_actions["future_oos_preflight_current_lifecycle"] = str(
+                preflight.get("current_lifecycle_action") or ""
+            )
+    else:
+        raw_actions["future_oos_preflight"] = str(preflight.get("next_action") or "")
     actions = {key: _canonical_action(value) for key, value in raw_actions.items()}
     unique_actions = _unique_nonempty(actions)
     rows.append(
@@ -163,9 +183,13 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
             check="next_action_consistency",
             passed=len(unique_actions) <= 1,
             severity="error",
-            expected="all operator-facing next_action fields match",
+            expected="all current operator-facing next_action fields match",
             observed=json.dumps(
-                {"canonical": actions, "raw": raw_actions},
+                {
+                    "canonical": actions,
+                    "raw": raw_actions,
+                    "ignored_stage_actions": ignored_stage_actions,
+                },
                 sort_keys=True,
             ),
         )
@@ -219,6 +243,137 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
                 ),
             )
         )
+
+    failed_future_oos = future_oos_failed(readiness, phase2_blockers)
+    if failed_future_oos:
+        expected_failure_action = (
+            PIN_MANIFEST_ACTION
+            if replacement_fit_complete
+            else RETIRE_FAILED_FUTURE_OOS_ACTION
+        )
+        expected_protocol_status = (
+            "failed_future_oos_replacement_manifest_pin_required"
+            if replacement_fit_complete
+            else "failed_future_oos_new_research_cycle_required"
+        )
+        expected_current_status = (
+            "failed_future_oos_replacement_manifest_pin_required"
+            if replacement_fit_complete
+            else "failed_future_oos_new_research_cycle_required"
+        )
+        rows.append(
+            _row(
+                check="failed_future_oos_lifecycle_transition",
+                passed=(
+                    unique_actions == {expected_failure_action}
+                    and protocol.get("status") == expected_protocol_status
+                    and current.get("current_status") == expected_current_status
+                    and bool(protocol.get("new_future_oos_anchor_required", False))
+                    and not bool(current.get("run_04_required_now", False))
+                    and not bool(current.get("run_05_first", True))
+                ),
+                severity="error",
+                expected=(
+                    "failed candidate is retired, same-window notebook routing is disabled, "
+                    f"and current action is {expected_failure_action}"
+                ),
+                observed=(
+                    f"actions={json.dumps(actions, sort_keys=True)}; "
+                    f"protocol_status={protocol.get('status')}; "
+                    f"current_status={current.get('current_status')}; "
+                    f"new_anchor={protocol.get('new_future_oos_anchor_required')}; "
+                    f"run04={current.get('run_04_required_now')}; "
+                    f"run05_first={current.get('run_05_first')}"
+                ),
+            )
+        )
+        failed_candidate_id = str(readiness.get("primary_candidate_id") or "")
+        protocol_replacement_id = str(protocol.get("replacement_candidate_id") or "")
+        candidate_retired = bool(
+            replacement_fit_complete
+            or (
+                protocol.get("failed_candidate_status")
+                == "retired_after_failed_future_oos"
+                and str(protocol.get("failed_candidate_id") or "")
+                == failed_candidate_id
+                and protocol_replacement_id != failed_candidate_id
+            )
+        )
+        rows.append(
+            _row(
+                check="failed_candidate_not_reused_as_replacement",
+                passed=candidate_retired,
+                severity="error",
+                expected="failed frozen candidate is retired and not exposed as the active replacement",
+                observed=(
+                    f"failed_candidate_id={failed_candidate_id}; "
+                    f"failed_candidate_status={protocol.get('failed_candidate_status')}; "
+                    f"replacement_candidate_id={protocol_replacement_id or 'none'}"
+                ),
+            )
+        )
+
+    if evaluation_completed:
+        expected_current_action = (
+            PIN_MANIFEST_ACTION
+            if failed_future_oos and replacement_fit_complete
+            else RETIRE_FAILED_FUTURE_OOS_ACTION
+            if failed_future_oos
+            else str(phase2.get("next_action") or "")
+        )
+        rows.append(
+            _row(
+                check="completed_evaluation_supersedes_preflight_action",
+                passed=(
+                    preflight.get("next_action_scope")
+                    == "pre_evaluation_preflight_only"
+                    and bool(preflight.get("lifecycle_superseded", False))
+                    and str(preflight.get("current_lifecycle_action") or "")
+                    == expected_current_action
+                ),
+                severity="error",
+                expected=(
+                    "preflight action is audit-only and current_lifecycle_action reflects "
+                    "the completed evaluation"
+                ),
+                observed=(
+                    f"scope={preflight.get('next_action_scope')}; "
+                    f"superseded={preflight.get('lifecycle_superseded')}; "
+                    f"current={preflight.get('current_lifecycle_action')}; "
+                    f"expected_current={expected_current_action}"
+                ),
+            )
+        )
+        if recency_manifest:
+            rows.append(
+                _row(
+                    check="completed_evaluation_supersedes_recency_manifest_action",
+                    passed=(
+                        recency_manifest.get("artifact_role")
+                        == "historical_recency_research_snapshot"
+                        and recency_manifest.get("next_action_scope")
+                        == "historical_research_generation_time_only"
+                        and bool(
+                            recency_manifest.get("lifecycle_superseded", False)
+                        )
+                        and str(
+                            recency_manifest.get("current_lifecycle_action") or ""
+                        )
+                        == expected_current_action
+                    ),
+                    severity="error",
+                    expected=(
+                        "copied recency manifest action is historical-only after "
+                        "Future-OOS completes"
+                    ),
+                    observed=(
+                        f"role={recency_manifest.get('artifact_role')}; "
+                        f"scope={recency_manifest.get('next_action_scope')}; "
+                        f"superseded={recency_manifest.get('lifecycle_superseded')}; "
+                        f"current={recency_manifest.get('current_lifecycle_action')}"
+                    ),
+                )
+            )
 
     rows.append(
         _row(
@@ -542,6 +697,7 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
         "current_status": current.get("current_status"),
         "run_04_required_now": bool(current.get("run_04_required_now", False)),
         "run_05_first": bool(current.get("run_05_first", True)),
+        "next_notebook": current.get("next_notebook"),
         "replacement_candidate_id": replacement.get("candidate_id")
         or protocol.get("replacement_candidate_id"),
         "replacement_candidate_fit_status": replacement.get("status")
@@ -557,6 +713,12 @@ def build_report_consistency_audit(report_dir: str | Path) -> tuple[pd.DataFrame
         "future_oos_ready_for_evaluation": bool(
             readiness.get("ready_for_evaluation", False)
         ),
+        "future_oos_evaluation_completed": evaluation_completed,
+        "future_oos_evaluation_state": readiness.get("evaluation_state"),
+        "future_oos_primary_candidate_passed": readiness.get(
+            "primary_candidate_passed"
+        ),
+        "preflight_action_superseded": preflight_superseded,
     }
     return frame, operator
 
@@ -576,10 +738,13 @@ def _operator_markdown(payload: dict[str, Any]) -> str:
         f"- Historical research next action: `{payload.get('historical_research_next_action')}`",
         f"- Run 04 required now: `{payload.get('run_04_required_now')}`",
         f"- Run 05 first: `{payload.get('run_05_first')}`",
+        f"- Next notebook: `{payload.get('next_notebook')}`",
         f"- Replacement candidate: `{payload.get('replacement_candidate_id') or 'none'}`",
         f"- Replacement fit status: `{payload.get('replacement_candidate_fit_status') or 'none'}`",
         f"- Replacement manifest pin required: `{payload.get('replacement_manifest_pin_required')}`",
         f"- Future-OOS preflight state: `{payload.get('future_oos_preflight_state')}`",
+        f"- Future-OOS evaluation state: `{payload.get('future_oos_evaluation_state')}`",
+        f"- Preflight action superseded: `{payload.get('preflight_action_superseded')}`",
         "",
     ]
     failed = payload.get("failed_checks") or []

@@ -2203,7 +2203,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: model_research_frozen_pending_future_oos
+    status: failed_future_oos_new_research_cycle_design_required
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2224,8 +2224,8 @@ experiments:
       - effective_orderflow_event_weighting_v2
       - multitask_return_head_fixed_sum_v1
       - primary_preserving_multitask_gradient_projection_v1
-    conclusion: "Bundle 20260628_155057 closed the multitask family. Shared primary/auxiliary gradients conflicted in only 1.8% of 6,400 audited batches and had mean cosine +0.61, so gradient interference was not the instability mechanism. The projected candidate remained non-promotable: triage std worsened, official F1 fell, top-10 positive-lift coverage fell to 50%, and bad-fold top-10 lift stayed below one. The retained control nevertheless passes every active historical model-evidence gate."
-    next_step: "Freeze historical model research and preserve the retained control plus the pinned control_recent3_equal_v2 future-OOS candidate. Do not run notebook 04 or add profiles. Refresh data/features/labels and run notebook 05 only when enough mature post-anchor rows exist. Open Phase 2 implementation only after the frozen candidate completes and passes its pre-registered future-OOS evaluation."
+    conclusion: "The preregistered control_recent3_equal_v2 candidate completed 1,524-row Future-OOS without refit and failed only rank_ic_lower_ci. The point Rank IC was positive, but its lower confidence bound was -0.0780. Retire the candidate; preserve the failed window for diagnosis only. Historical recency policies also produced no candidate that cleared every preregistered gate."
+    next_step: "Do not rerun notebooks 05, 06, or 07 to repair the failed window. Design and commit one materially distinct historical-only hypothesis before running notebook 04. Any passing replacement must receive a new manifest and a new Future-OOS anchor."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2268,7 +2268,7 @@ experiments:
         - {name: pre_holdout_recent, start: "2025-04-01 00:00:00+00:00", end: "2025-11-14 08:00:00+00:00"}
   frozen_candidates:
     enabled: true
-    lifecycle_state: replacement_candidate_manifest_pinned_awaiting_future_oos
+    lifecycle_state: primary_candidate_failed_future_oos_retired
     protocol_version: v1
     anchor_run_id: "20260621_075454"
     anchor_data_end: "2026-06-13T01:00:00+00:00"
@@ -2298,7 +2298,7 @@ experiments:
           value: 0.42674046854178105
   future_oos_validation:
     enabled: true
-    pause_reason: "Replacement candidate manifest is pinned. Evaluation remains blocked until enough new rows mature after the new anchor."
+    pause_reason: "The pinned candidate completed and failed Future-OOS. Preserve the result; do not rescore for selection. A new evaluation requires a new preregistered candidate and anchor."
     min_rows: 720
     preferred_rows: 2160
     block_length: 24
@@ -2331,14 +2331,32 @@ experiments:
       selected_forward_return: -0.0030813
       pred_long_rate: 0.7937585
       decision: "Retire this exact candidate. Use the window for diagnosis only; never tune or promote against it."
+    control_recent3_equal_v2:
+      evaluated_at: "2026-08-16"
+      source_run_id: "20260621_075454"
+      manifest_hash: "baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857"
+      status: failed_future_oos_retired
+      rows: 1524
+      rank_ic: 0.03804296941161726
+      rank_ic_ci_low: -0.07800026201599031
+      f1: 0.48963210702341137
+      prauc_lift_vs_prevalence: 1.1645293084068604
+      precision_lift_vs_prevalence: 1.1001656804733726
+      f1_skill_vs_rate_random: 0.04457904300423987
+      top_10_lift: 1.245098039215686
+      top_10_forward_return: 0.002197550842538476
+      selected_forward_return: 0.00023814919404685497
+      pred_long_rate: 0.639763779527559
+      failed_gates: [rank_ic_lower_ci]
+      decision: "Retire this exact candidate. The completed window is diagnostic evidence only; never tune, reselect, or promote against it."
   next_research_cycle:
-    status: replacement_candidate_manifest_pinned_awaiting_future_oos
-    source_failed_candidate_id: control_fold_ensemble_v1
+    status: failed_future_oos_new_research_cycle_required
+    source_failed_candidate_id: control_recent3_equal_v2
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
-    primary_hypothesis: historical_cv_recency_replacement_preregistration
-    next_action: "wait_for_new_future_oos_rows"
+    primary_hypothesis: not_yet_preregistered
+    next_action: "retire_failed_frozen_candidate_and_open_new_research_anchor"
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2349,7 +2367,7 @@ experiments:
       embargo_bars: 6
       selection_rule: compare_only_on_historical_walk_forward_test_windows
     recency_ensemble:
-      enabled: true
+      enabled: false
       policies:
         - {name: all_eligible_equal, policy: equal_all_eligible}
         - {name: latest_only, policy: latest_only}
@@ -2416,7 +2434,7 @@ experiments:
       force_retrain: false
       failed_future_oos_use: fit_only_after_retirement_never_policy_selection
       require_recency_decision_ready: true
-      status: manifest_pinned_awaiting_future_oos
+      status: retired_after_failed_future_oos
       promotion_allowed: false
   experiment_memory:
     enabled: true

@@ -8,6 +8,11 @@ from typing import Any
 import pandas as pd
 
 from yenibot.experiment.common import _json_ready, _write_json
+from yenibot.experiment.lifecycle import (
+    PIN_REPLACEMENT_MANIFEST_ACTION,
+    RETIRE_FAILED_FUTURE_OOS_ACTION,
+    future_oos_failed,
+)
 
 __all__ = [
     "build_phase1_current_status",
@@ -61,6 +66,7 @@ def build_phase1_current_status(
     seed_status = _same_seed_status(seed_reproducibility_audit)
     seed_passed = _same_seed_passed(seed_reproducibility_audit)
     frozen_missing = "frozen_candidate_manifest_unavailable" in blockers
+    frozen_failed = future_oos_failed(future_oos_readiness, blockers)
     phase2_ready = bool(phase2_readiness.get("ready_for_phase2", False))
     model_evidence_passed = bool(
         model_performance_summary.get("model_evidence_passed", False)
@@ -81,6 +87,17 @@ def build_phase1_current_status(
     elif not seed_passed:
         status = "seed_reproducibility_review_required"
         next_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
+    elif frozen_failed:
+        next_action = str(
+            phase2_readiness.get("next_action")
+            or next_research_protocol.get("next_action")
+            or RETIRE_FAILED_FUTURE_OOS_ACTION
+        )
+        status = (
+            "failed_future_oos_replacement_manifest_pin_required"
+            if next_action == PIN_REPLACEMENT_MANIFEST_ACTION
+            else "failed_future_oos_new_research_cycle_required"
+        )
     elif frozen_missing:
         if ladder_next_action.startswith("pin_replacement_candidate_manifest"):
             status = "historical_model_evidence_passed_awaiting_replacement_manifest_pin"
@@ -127,6 +144,24 @@ def build_phase1_current_status(
         historical_research_result = "no_active_candidate"
         historical_research_next_action = "preregister_distinct_historical_mechanism"
 
+    if frozen_failed:
+        run_04_required_now = False
+        run_05_first = False
+        next_notebook = (
+            "none_until_replacement_manifest_is_pinned"
+            if next_action == PIN_REPLACEMENT_MANIFEST_ACTION
+            else "none_until_new_research_cycle_is_preregistered"
+        )
+    else:
+        run_04_required_now = bool(
+            phase1_decision_ladder.get("run_04_required_now", False)
+        )
+        run_05_first = bool(phase1_decision_ladder.get("run_05_first", True))
+        next_notebook = str(
+            phase1_decision_ladder.get("next_notebook")
+            or ("04" if run_04_required_now else "05")
+        )
+
     return {
         "run_id": run_id,
         "control_profile": control_profile,
@@ -158,9 +193,15 @@ def build_phase1_current_status(
         "future_oos_primary_candidate_passed": future_oos_readiness.get(
             "primary_candidate_passed"
         ),
+        "future_oos_failed": frozen_failed,
+        "new_research_cycle_required": bool(
+            frozen_failed and next_action != PIN_REPLACEMENT_MANIFEST_ACTION
+        ),
+        "new_future_oos_anchor_required": frozen_failed,
         "replacement_preregistration_required": frozen_missing,
-        "run_04_required_now": bool(phase1_decision_ladder.get("run_04_required_now", False)),
-        "run_05_first": bool(phase1_decision_ladder.get("run_05_first", True)),
+        "run_04_required_now": run_04_required_now,
+        "run_05_first": run_05_first,
+        "next_notebook": next_notebook,
         "promotion_allowed_now": phase2_ready,
         "phase2_code_allowed": phase2_ready,
         "training_executed_count": training_execution.get("training_executed_count"),
@@ -195,6 +236,9 @@ def _current_status_markdown(status: dict[str, Any]) -> str:
         f"- Frozen future-OOS evidence passed: `{status.get('frozen_future_oos_evidence_passed')}`",
         f"- Seed reproducibility: `{status.get('seed_reproducibility_status')}`",
         f"- Future-OOS preflight state: `{status.get('future_oos_preflight_state')}`",
+        f"- Future-OOS evaluation completed: `{status.get('future_oos_evaluation_completed')}`",
+        f"- Future-OOS candidate passed: `{status.get('future_oos_primary_candidate_passed')}`",
+        f"- Next notebook: `{status.get('next_notebook')}`",
         "",
         "## Guardrails",
         "",
