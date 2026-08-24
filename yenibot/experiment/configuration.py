@@ -180,6 +180,83 @@ def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any
         except (TypeError, ValueError):
             errors.append("adaptive historical/excluded timestamps must be valid")
 
+    trajectory = research.get("trajectory_weight_averaging", {}) or {}
+    if bool(trajectory.get("enabled", False)):
+        hypothesis_id = str(trajectory.get("hypothesis_id") or "").strip()
+        candidate_profile = str(trajectory.get("candidate_profile") or "").strip()
+        configured_candidates = [
+            str(profile)
+            for profile in experiments.get("candidate_profiles", []) or []
+        ]
+        if trajectory.get("preregistered") is not True:
+            errors.append(
+                "experiments.next_research_cycle.trajectory_weight_averaging."
+                "preregistered must be true"
+            )
+        preregistration_commit = str(
+            trajectory.get("preregistration_commit") or ""
+        ).strip()
+        if len(preregistration_commit) != 40 or any(
+            character not in "0123456789abcdef"
+            for character in preregistration_commit.lower()
+        ):
+            errors.append("trajectory SWA preregistration commit must be pinned")
+        if not hypothesis_id or str(research.get("primary_hypothesis") or "") != hypothesis_id:
+            errors.append(
+                "trajectory SWA hypothesis_id must equal "
+                "next_research_cycle.primary_hypothesis"
+            )
+        if configured_candidates != [candidate_profile]:
+            errors.append(
+                "trajectory SWA must be the only configured candidate profile"
+            )
+        if bool(adaptive.get("enabled", False)):
+            errors.append("adaptive ensemble must stay disabled during trajectory SWA")
+        if bool((research.get("recency_ensemble", {}) or {}).get("enabled", False)):
+            errors.append("recency research must stay disabled during trajectory SWA")
+        if bool((research.get("replacement_candidate", {}) or {}).get("enabled", False)):
+            errors.append("replacement fit must stay disabled until trajectory SWA passes")
+
+        profiles = _cfg(config, ["features", "profiles"], {}) or {}
+        profile = profiles.get(candidate_profile, {}) if isinstance(profiles, dict) else {}
+        overrides = profile.get("config_overrides", {}) if isinstance(profile, dict) else {}
+        configured = (
+            (overrides.get("training", {}) or {}).get("weight_averaging", {})
+            if isinstance(overrides, dict)
+            else {}
+        )
+        fixed = trajectory.get("fixed_parameters", {}) or {}
+        for key in (
+            "strategy",
+            "start_epoch",
+            "update_interval_epochs",
+            "min_snapshots",
+        ):
+            if configured.get(key) != fixed.get(key):
+                errors.append(
+                    f"trajectory SWA fixed parameter {key} does not match candidate profile"
+                )
+        if configured.get("enabled") is not True:
+            errors.append("trajectory SWA candidate profile must enable weight averaging")
+        comparison = trajectory.get("comparison", {}) or {}
+        if comparison.get("parameter_search_allowed") is not False:
+            errors.append("trajectory SWA parameter search must stay disabled")
+        if comparison.get("automatic_freeze_allowed") is not False:
+            errors.append("trajectory SWA automatic freeze must stay disabled")
+        if str(trajectory.get("failed_future_oos_use") or "") != (
+            "diagnostics_only_never_selection"
+        ):
+            errors.append("trajectory SWA cannot select against failed Future-OOS")
+        for window in trajectory.get("excluded_evaluation_windows", []) or []:
+            try:
+                start = pd.to_datetime(window.get("start"), utc=True, errors="raise")
+                end = pd.to_datetime(window.get("end"), utc=True, errors="raise")
+                if start > end:
+                    errors.append("trajectory SWA excluded OOS window start exceeds end")
+            except (TypeError, ValueError):
+                errors.append("trajectory SWA excluded OOS timestamps must be valid")
+                break
+
     if errors:
         details = "\n- ".join(errors)
         raise ValueError(f"Notebook 04 research contract is invalid:\n- {details}")
@@ -191,6 +268,15 @@ def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any
         "seed_audit_mode": str(seed_audit["mode"]),
         "adaptive_ensemble_enabled": bool(adaptive.get("enabled", False)),
         "adaptive_hypothesis_id": str(adaptive.get("hypothesis_id") or ""),
+        "trajectory_weight_averaging_enabled": bool(
+            trajectory.get("enabled", False)
+        ),
+        "trajectory_weight_averaging_hypothesis_id": str(
+            trajectory.get("hypothesis_id") or ""
+        ),
+        "trajectory_weight_averaging_preregistration_commit": str(
+            trajectory.get("preregistration_commit") or ""
+        ),
     }
 
 def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:

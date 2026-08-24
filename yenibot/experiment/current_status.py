@@ -84,10 +84,18 @@ def build_phase1_current_status(
         next_research_protocol.get("primary_hypothesis") or ""
     ).strip()
     protocol_action = str(next_research_protocol.get("next_action") or "").strip()
-    research_preregistered = bool(
+    adaptive_research_preregistered = bool(
         protocol_hypothesis
         and protocol_hypothesis != "not_yet_preregistered"
         and protocol_action.startswith("run_notebook_04a_")
+    )
+    trajectory_research_preregistered = bool(
+        protocol_hypothesis
+        and protocol_hypothesis != "not_yet_preregistered"
+        and protocol_action.startswith("run_notebook_04_then_notebook_05_")
+    )
+    research_preregistered = bool(
+        adaptive_research_preregistered or trajectory_research_preregistered
     )
     research_cycle_closed = bool(
         protocol_action.startswith("archive_failed_adaptive_ensemble_")
@@ -152,6 +160,14 @@ def build_phase1_current_status(
         str(profile) for profile in configured_candidate_profiles or []
     ]
     run_best_candidate = run_best_candidate or {}
+    configured_research_evaluated = bool(
+        configured_candidate_profiles
+        and training_execution.get("training_execution_metadata_available", True)
+        and (
+            training_execution.get("training_executed_count") is not None
+            or training_execution.get("all_training_scopes_reused") is not None
+        )
+    )
     if configured_candidate_profiles and run_best_candidate:
         historical_research_result = "candidate_passed_historical_promotion_gates"
         historical_research_next_action = (
@@ -165,14 +181,31 @@ def build_phase1_current_status(
     else:
         historical_research_result = "no_active_candidate"
         historical_research_next_action = "preregister_distinct_historical_mechanism"
-    if research_preregistered:
+    if adaptive_research_preregistered:
         historical_research_result = "preregistered_policy_pending_historical_evaluation"
+        historical_research_next_action = protocol_action
+    elif trajectory_research_preregistered and not configured_research_evaluated:
+        historical_research_result = "preregistered_training_candidate_pending_historical_evaluation"
         historical_research_next_action = protocol_action
     elif research_cycle_closed:
         historical_research_result = "adaptive_policy_failed_no_promotion"
         historical_research_next_action = protocol_action
 
-    if frozen_failed and research_preregistered:
+    if (
+        frozen_failed
+        and trajectory_research_preregistered
+        and configured_research_evaluated
+    ):
+        run_04_required_now = False
+        run_05_first = False
+        next_notebook = "none_review_notebook_05_bundle"
+        next_action = historical_research_next_action
+        status = "failed_future_oos_historical_candidate_review_required"
+    elif frozen_failed and trajectory_research_preregistered:
+        run_04_required_now = True
+        run_05_first = False
+        next_notebook = "04_then_05"
+    elif frozen_failed and adaptive_research_preregistered:
         run_04_required_now = False
         run_05_first = False
         next_notebook = "04a"
@@ -251,7 +284,7 @@ def build_phase1_current_status(
             "do_not_promote_from_seen_holdout",
             "do_not_write_phase2_code_until_phase2_ready",
             "do_not_repeat_rejected_direct_ablation_without_new_mechanism",
-            "do_not_run_notebook_05_before_adaptive_policy_review",
+            "do_not_rerun_completed_research_notebook_before_result_review",
         ],
     }
 

@@ -460,14 +460,138 @@ def write_multitask_gradient_audit(
     return combined
 
 
+def write_weight_averaging_audit(
+    entries: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> pd.DataFrame:
+    """Collect fold-level evidence that trajectory averaging was actually active."""
+
+    metric_columns = [
+        "fold",
+        "enabled",
+        "strategy",
+        "start_epoch",
+        "update_interval_epochs",
+        "min_snapshots",
+        "snapshots_collected",
+        "first_snapshot_epoch",
+        "last_snapshot_epoch",
+        "first_eligible_selection_epoch",
+        "selected_epoch",
+        "selected_early_stop_metric",
+        "selected_early_stop_value",
+        "selected_mean_abs_parameter_delta",
+        "single_checkpoint_output",
+    ]
+    columns = ["profile", "fold_scope", *metric_columns]
+    frames: list[pd.DataFrame] = []
+    for entry in entries:
+        scope_dir = Path(entry.get("scope_dir") or entry.get("output_dir") or "")
+        path = scope_dir / "weight_averaging_audit.csv"
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame.insert(0, "fold_scope", str(entry.get("fold_scope", "")))
+        frame.insert(0, "profile", str(entry.get("profile", "")))
+        frames.append(frame)
+
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=columns)
+    )
+    for column in columns:
+        if column not in combined.columns:
+            combined[column] = np.nan
+    combined = combined[columns]
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(target / "weight_averaging_audit.csv", index=False)
+    if combined.empty:
+        summary = pd.DataFrame(
+            columns=[
+                "profile",
+                "fold_scope",
+                "enabled",
+                "strategy",
+                "fold_count",
+                "min_snapshots_collected",
+                "mean_snapshots_collected",
+                "mean_selected_epoch",
+                "mean_selected_parameter_delta",
+                "all_single_checkpoint_output",
+            ]
+        )
+    else:
+        working = combined.copy()
+        for column in ("enabled", "single_checkpoint_output"):
+            working[column] = working[column].fillna(False).map(
+                lambda value: value
+                if isinstance(value, (bool, np.bool_))
+                else str(value).strip().lower() in {"1", "true", "yes"}
+            )
+        for column in (
+            "snapshots_collected",
+            "selected_epoch",
+            "selected_mean_abs_parameter_delta",
+        ):
+            working[column] = pd.to_numeric(working[column], errors="coerce")
+        summary = (
+            working.groupby(
+                ["profile", "fold_scope", "enabled", "strategy"],
+                observed=True,
+                dropna=False,
+            )
+            .agg(
+                fold_count=("fold", "nunique"),
+                min_snapshots_collected=("snapshots_collected", "min"),
+                mean_snapshots_collected=("snapshots_collected", "mean"),
+                mean_selected_epoch=("selected_epoch", "mean"),
+                mean_selected_parameter_delta=(
+                    "selected_mean_abs_parameter_delta",
+                    "mean",
+                ),
+                all_single_checkpoint_output=("single_checkpoint_output", "all"),
+            )
+            .reset_index()
+        )
+    summary.to_csv(target / "weight_averaging_audit_summary.csv", index=False)
+    summary.to_json(
+        target / "weight_averaging_audit_summary.json",
+        orient="records",
+        indent=2,
+    )
+    markdown = "# Trajectory Weight Averaging Audit\n\n"
+    markdown += (
+        "No trajectory weight-averaging decisions were recorded.\n"
+        if summary.empty
+        else summary.to_markdown(index=False) + "\n"
+    )
+    (target / "weight_averaging_audit_summary.md").write_text(
+        markdown,
+        encoding="utf-8",
+    )
+    return combined
+
+
 def write_training_input_audits(
     entries: list[dict[str, Any]],
     output_dir: str | Path,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Write all train-fold input audits used by diagnostics bundles."""
 
     preprocessing = write_preprocessing_audit(entries, output_dir)
     sample_weights = write_sample_weight_audit(entries, output_dir)
     auxiliary_tasks = write_auxiliary_task_audit(entries, output_dir)
     multitask_gradients = write_multitask_gradient_audit(entries, output_dir)
-    return preprocessing, sample_weights, auxiliary_tasks, multitask_gradients
+    weight_averaging = write_weight_averaging_audit(entries, output_dir)
+    return (
+        preprocessing,
+        sample_weights,
+        auxiliary_tasks,
+        multitask_gradients,
+        weight_averaging,
+    )

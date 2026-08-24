@@ -10,6 +10,7 @@ from yenibot.experiment.preprocessing_audit import (
     write_multitask_gradient_audit,
     write_preprocessing_audit,
     write_sample_weight_audit,
+    write_weight_averaging_audit,
 )
 from yenibot.training.preprocessing import CausalFoldPreprocessor
 
@@ -219,3 +220,41 @@ def test_multitask_gradient_audit_collects_conflict_evidence(tmp_path) -> None:
     )
     assert summary.iloc[0]["mean_conflict_fraction"] == 0.40
     assert summary.iloc[0]["mean_auxiliary_to_primary_grad_norm_ratio"] == 0.25
+
+
+def test_weight_averaging_audit_collects_activation_evidence(tmp_path) -> None:
+    scope = tmp_path / "run" / "profile" / "triage"
+    scope.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "fold": 7,
+                "enabled": True,
+                "strategy": "swa",
+                "start_epoch": 10,
+                "update_interval_epochs": 1,
+                "min_snapshots": 3,
+                "snapshots_collected": 8,
+                "first_snapshot_epoch": 10,
+                "last_snapshot_epoch": 17,
+                "first_eligible_selection_epoch": 12,
+                "selected_epoch": 15,
+                "selected_early_stop_metric": "rank_ic",
+                "selected_early_stop_value": 0.08,
+                "selected_mean_abs_parameter_delta": 0.002,
+                "single_checkpoint_output": True,
+            }
+        ]
+    ).to_csv(scope / "weight_averaging_audit.csv", index=False)
+
+    report = write_weight_averaging_audit(
+        [{"profile": "candidate", "fold_scope": "triage", "output_dir": scope}],
+        tmp_path / "reports",
+    )
+
+    assert report.iloc[0]["profile"] == "candidate"
+    summary = pd.read_csv(
+        tmp_path / "reports" / "weight_averaging_audit_summary.csv"
+    )
+    assert summary.iloc[0]["min_snapshots_collected"] == 8
+    assert bool(summary.iloc[0]["all_single_checkpoint_output"])

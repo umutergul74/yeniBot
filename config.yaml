@@ -379,6 +379,17 @@ features:
             target_clip: 5.0
             huber_beta: 1.0
             gradient_strategy: primary_preserving_projection
+    baseline_stable_trajectory_swa_v1:
+      description: "Optimization-stability candidate: preserve the control features, labels, TCN+GRU architecture, loss, seed, and causal folds while replacing the single noisy terminal trajectory point with one training-only equal-weight average of post-burn-in checkpoints. Validation chooses only among averaged checkpoints and inference still uses one model."
+      inherit: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      config_overrides:
+        training:
+          weight_averaging:
+            enabled: true
+            strategy: swa
+            start_epoch: 10
+            update_interval_epochs: 1
+            min_snapshots: 3
     baseline_control_plus_futures_context:
       description: Broad historical futures-context profile from run 20260524_072602; kept for diagnostics only because it improved holdout top-10 but damaged CV stability.
       inherit: baseline_plus_4h_bounded_whale
@@ -1996,6 +2007,12 @@ training:
     target_clip: 5.0
     huber_beta: 1.0
     gradient_strategy: sum
+  weight_averaging:
+    enabled: false
+    strategy: swa
+    start_epoch: 10
+    update_interval_epochs: 1
+    min_snapshots: 3
   loss:
     focal_gamma: 2.0
     focal_alpha: 0.6
@@ -2193,7 +2210,8 @@ experiments:
   mode: staged
   run_id: null
   control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
-  candidate_profiles: []
+  candidate_profiles:
+    - baseline_stable_trajectory_swa_v1
   triage_fold_ids: [6, 7, 8, 9, 18, 20, 22, 26, 30, 31, 32, 35]
   full_cv_profiles: auto
   always_full_profiles:
@@ -2203,7 +2221,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: validation_adaptive_ensemble_completed_no_promotion
+    status: trajectory_swa_v1_preregistered_awaiting_historical_triage
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2225,8 +2243,8 @@ experiments:
       - multitask_return_head_fixed_sum_v1
       - primary_preserving_multitask_gradient_projection_v1
       - recent6_validation_lcb_top3_v1
-    conclusion: "The preregistered control_recent3_equal_v2 candidate failed Future-OOS rank_ic_lower_ci. The subsequent recent6_validation_lcb_top3_v1 historical-only confirmatory experiment also failed: mean Rank IC fell from 0.05157 to 0.04754, std worsened from 0.08178 to 0.09080, worst-five IC fell from -0.08311 to -0.09326, F1 fell from 0.39678 to 0.38672, and positive selected-return coverage fell by 10.5 percentage points. Common-window validation LCB model selection does not repair the instability."
-    next_step: "Archive recent6_validation_lcb_top3_v1 without tuning pool size, top-k, bootstrap confidence, or validation split. Do not run notebooks 04, 04a, 05, 06, or 07. Design and preregister one materially distinct mechanism before the next compute run."
+    conclusion: "The failed recent6_validation_lcb_top3_v1 result closes validation-based expert selection. Seed sensitivity and the control's cosine-restart training trajectory motivate a distinct optimization-stability test: average post-burn-in weights inside each train fold, without changing features, labels, architecture, loss, thresholds, fold boundaries, or using either failed Future-OOS window."
+    next_step: "Run Notebook 04 once for the preregistered baseline_stable_trajectory_swa_v1 triage. Full CV may run only through the existing automatic promotion gates. Then run Notebook 05 once for immutable diagnostics; do not run 04a, 06, or 07."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2351,13 +2369,13 @@ experiments:
       failed_gates: [rank_ic_lower_ci]
       decision: "Retire this exact candidate. The completed window is diagnostic evidence only; never tune, reselect, or promote against it."
   next_research_cycle:
-    status: historical_validation_adaptive_ensemble_failed
+    status: trajectory_swa_v1_preregistered_awaiting_historical_triage
     source_failed_candidate_id: control_recent3_equal_v2
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
-    primary_hypothesis: recent6_validation_lcb_top3_v1
-    next_action: "archive_failed_adaptive_ensemble_and_design_distinct_mechanism"
+    primary_hypothesis: trajectory_swa_v1
+    next_action: "run_notebook_04_then_notebook_05_once"
     rolling_origin:
       enabled: false
       train_bars: 5040
@@ -2509,6 +2527,52 @@ experiments:
         failed_future_oos_used_for_selection: false
         fit_operations_performed: 0
         decision: "Reject and do not tune this policy family. Preserve the immutable result bundle and require a distinct mechanism."
+    trajectory_weight_averaging:
+      enabled: true
+      preregistered: true
+      preregistration_commit: null
+      status: awaiting_historical_triage
+      hypothesis_id: trajectory_swa_v1
+      candidate_profile: baseline_stable_trajectory_swa_v1
+      control_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
+      hypothesis: "A material part of the control's fold and seed instability comes from selecting one noisy point on the AdamW cosine-restart trajectory. Equal-weight averaging of post-burn-in trajectory checkpoints should reduce estimator variance and improve downside Rank IC while preserving classification skill and top-decile payoff."
+      distinct_from_completed_work: "This changes neither features nor examples, loss terms, model width, seed composition, recency policy, or inference-time expert weights. It produces one averaged checkpoint per fold from a single training trajectory; prior seed and adaptive ensembles averaged predictions from separately fitted models."
+      selection_data_role: immutable_pre_failed_oos_historical_walk_forward_only
+      failed_future_oos_use: diagnostics_only_never_selection
+      excluded_evaluation_windows:
+        - candidate_id: control_fold_ensemble_v1
+          start: "2026-05-13T09:00:00+00:00"
+          end: "2026-06-13T01:00:00+00:00"
+        - candidate_id: control_recent3_equal_v2
+          start: "2026-06-13T02:00:00+00:00"
+          end: "2026-08-15T13:00:00+00:00"
+      fixed_parameters:
+        strategy: swa
+        start_epoch: 10
+        update_interval_epochs: 1
+        min_snapshots: 3
+        validation_selection: best_rank_ic_among_averaged_checkpoints_only
+        inference: single_averaged_checkpoint
+      unchanged_components:
+        - feature_profile
+        - labels
+        - tcn_gru_architecture
+        - focal_and_rank_ic_loss
+        - adamw_optimizer
+        - cosine_restart_scheduler
+        - random_seed
+        - walk_forward_boundaries
+        - phase1_thresholds
+      comparison:
+        scope: preregistered_triage_then_automatic_full_only_if_all_triage_gates_pass
+        gates_source: experiments.promotion_gates
+        parameter_search_allowed: false
+        automatic_freeze_allowed: false
+      execution:
+        notebook: 04_training_walk_forward.ipynb
+        diagnostics_notebook: 05_diagnostics_validation.ipynb
+        next_if_passed: explicit_replacement_fit_preregistration_with_new_anchor
+        next_if_failed: archive_without_tuning_and_design_distinct_mechanism
     replacement_candidate:
       enabled: false
       candidate_id: control_recent3_equal_v2

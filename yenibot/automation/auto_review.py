@@ -209,6 +209,8 @@ def _missing_required_files(
         "auxiliary_task_audit_summary.csv",
         "multitask_gradient_audit.csv",
         "multitask_gradient_audit_summary.csv",
+        "weight_averaging_audit.csv",
+        "weight_averaging_audit_summary.csv",
         "phase1_blocker_root_cause.csv",
         "threshold_oracle_gap.csv",
         "threshold_score_quantile_review.csv",

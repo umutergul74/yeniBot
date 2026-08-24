@@ -4273,14 +4273,19 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
 
     contract = validate_training_research_contract(config)
 
-    assert contract["research_cycle_status"] == "historical_validation_adaptive_ensemble_failed"
+    assert contract["research_cycle_status"] == (
+        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
+    )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "validation_adaptive_ensemble_completed_no_promotion"
+        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
     )
     assert contract["seed_audit_mode"] == "in_run"
     assert contract["adaptive_ensemble_enabled"] is False
     assert contract["adaptive_hypothesis_id"] == "recent6_validation_lcb_top3_v1"
+    assert contract["trajectory_weight_averaging_enabled"] is True
+    assert contract["trajectory_weight_averaging_hypothesis_id"] == "trajectory_swa_v1"
+    assert len(contract["trajectory_weight_averaging_preregistration_commit"]) == 40
 
     renamed = copy.deepcopy(config)
     renamed["experiments"]["next_research_cycle"]["status"] = "future_research_stage_name"

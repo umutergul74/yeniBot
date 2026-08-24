@@ -30,6 +30,12 @@ from yenibot.training.preprocessing import CausalFoldPreprocessor
 from yenibot.training.sample_weights import AUDIT_COLUMNS as SAMPLE_WEIGHT_AUDIT_COLUMNS
 from yenibot.training.sample_weights import build_sample_weights
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
+from yenibot.training.weight_averaging import (
+    TrajectoryWeightAverager,
+    clone_model_with_state,
+    validate_weight_averaging_horizon,
+    weight_averaging_settings,
+)
 
 
 AUXILIARY_TASK_AUDIT_COLUMNS = [
@@ -58,6 +64,24 @@ MULTITASK_GRADIENT_AUDIT_COLUMNS = [
     "mean_primary_shared_grad_norm",
     "mean_weighted_auxiliary_shared_grad_norm",
     "mean_auxiliary_to_primary_grad_norm_ratio",
+]
+
+WEIGHT_AVERAGING_AUDIT_COLUMNS = [
+    "fold",
+    "enabled",
+    "strategy",
+    "start_epoch",
+    "update_interval_epochs",
+    "min_snapshots",
+    "snapshots_collected",
+    "first_snapshot_epoch",
+    "last_snapshot_epoch",
+    "first_eligible_selection_epoch",
+    "selected_epoch",
+    "selected_early_stop_metric",
+    "selected_early_stop_value",
+    "selected_mean_abs_parameter_delta",
+    "single_checkpoint_output",
 ]
 
 
@@ -463,10 +487,16 @@ def train_one_fold(
     best_state: dict[str, torch.Tensor] | None = None
     patience = int(_cfg(train_cfg, ["early_stop_patience"], 15))
     epochs = int(_cfg(train_cfg, ["epochs"], 100))
+    averaging_settings = weight_averaging_settings(config)
+    validate_weight_averaging_horizon(averaging_settings, epochs=epochs)
+    weight_averager = TrajectoryWeightAverager(averaging_settings)
+    averaged_eval_model = copy.deepcopy(model) if averaging_settings.enabled else None
     grad_clip = float(_cfg(train_cfg, ["grad_clip"], 1.0))
     stale_epochs = 0
     history: list[dict[str, float]] = []
     gradient_audit_rows: list[dict[str, Any]] = []
+    selected_epoch: int | None = None
+    selected_parameter_delta = np.nan
 
     for epoch in range(epochs):
         model.train()
@@ -529,8 +559,24 @@ def train_one_fold(
             losses.append(float(loss.detach().cpu()))
         scheduler.step(epoch + 1)
 
+        epoch_number = epoch + 1
+        if weight_averager.should_update(epoch_number):
+            weight_averager.update(model, epoch=epoch_number)
+        selection_model = model
+        selection_model_source = "live"
+        selection_ready = not averaging_settings.enabled
+        parameter_delta = np.nan
+        if averaging_settings.enabled and weight_averager.ready:
+            if averaged_eval_model is None:  # pragma: no cover - construction invariant
+                raise RuntimeError("Averaged evaluation model was not initialized")
+            weight_averager.copy_to(averaged_eval_model)
+            selection_model = averaged_eval_model
+            selection_model_source = "swa"
+            selection_ready = True
+            parameter_delta = weight_averager.mean_absolute_parameter_delta(model)
+
         val_metrics = _evaluate(
-            model,
+            selection_model,
             val_dataset,
             val_part,
             config,
@@ -547,20 +593,32 @@ def train_one_fold(
         )
 
         smoothing_epochs = max(1, int(_cfg(train_cfg, ["rank_ic_smoothing_epochs"], 5)))
-        previous_rank_ics = [] if smoothing_epochs == 1 else [h["rank_ic"] for h in history[-(smoothing_epochs - 1):]]
+        same_source_history = [
+            h
+            for h in history
+            if h.get("selection_model_source") == selection_model_source
+        ]
+        previous_rank_ics = (
+            []
+            if smoothing_epochs == 1
+            else [
+                h["rank_ic"]
+                for h in same_source_history[-(smoothing_epochs - 1) :]
+            ]
+        )
         recent_rank_ics = previous_rank_ics + [val_metrics["rank_ic"]]
         val_rank_ic_rolling = float(np.mean(recent_rank_ics))
         val_metrics["val_rank_ic_rolling"] = val_rank_ic_rolling
 
         if early_stop_metric == "val_loss":
             current_metric = val_metrics.get("val_loss", np.inf)
-            improved = current_metric < best_metric
+            improved = selection_ready and current_metric < best_metric
         elif early_stop_metric == "val_rank_ic_rolling":
             current_metric = val_rank_ic_rolling
-            improved = current_metric > best_metric
+            improved = selection_ready and current_metric > best_metric
         else:  # default "rank_ic"
             current_metric = val_metrics["rank_ic"]
-            improved = current_metric > best_metric
+            improved = selection_ready and current_metric > best_metric
 
         history.append(
             {
@@ -568,19 +626,32 @@ def train_one_fold(
                 "train_loss": float(np.mean(losses)),
                 "early_stop_metric": early_stop_metric,
                 "early_stop_value": float(current_metric),
+                "selection_model_source": selection_model_source,
+                "weight_averaging_ready": bool(weight_averager.ready),
+                "weight_averaging_snapshots": int(weight_averager.snapshot_count),
+                "weight_averaging_mean_abs_parameter_delta": float(parameter_delta),
                 **val_metrics,
             }
         )
 
         if improved:
             best_metric = current_metric
-            best_state = copy.deepcopy(model.state_dict())
+            best_state = copy.deepcopy(selection_model.state_dict())
+            selected_epoch = int(epoch_number)
+            selected_parameter_delta = float(parameter_delta)
             stale_epochs = 0
-        else:
+        elif selection_ready:
             stale_epochs += 1
             if stale_epochs >= patience:
                 break
 
+    if averaging_settings.enabled and not weight_averager.ready:
+        raise RuntimeError(
+            "Weight averaging finished without the preregistered minimum snapshots: "
+            f"{weight_averager.snapshot_count}/{averaging_settings.min_snapshots}"
+        )
+    if averaging_settings.enabled and best_state is None:
+        raise RuntimeError("Weight averaging produced no selectable validation checkpoint")
     if best_state is not None:
         model.load_state_dict(best_state)
 
@@ -709,6 +780,40 @@ def train_one_fold(
             columns=MULTITASK_GRADIENT_AUDIT_COLUMNS,
         )
 
+    first_eligible_selection_epoch = (
+        averaging_settings.start_epoch
+        + (averaging_settings.min_snapshots - 1)
+        * averaging_settings.update_interval_epochs
+        if averaging_settings.enabled
+        else np.nan
+    )
+    weight_averaging_audit = pd.DataFrame(
+        [
+            {
+                "fold": int(fold.fold),
+                "enabled": bool(averaging_settings.enabled),
+                "strategy": averaging_settings.strategy,
+                "start_epoch": int(averaging_settings.start_epoch),
+                "update_interval_epochs": int(
+                    averaging_settings.update_interval_epochs
+                ),
+                "min_snapshots": int(averaging_settings.min_snapshots),
+                "snapshots_collected": int(weight_averager.snapshot_count),
+                "first_snapshot_epoch": weight_averager.first_snapshot_epoch,
+                "last_snapshot_epoch": weight_averager.last_snapshot_epoch,
+                "first_eligible_selection_epoch": first_eligible_selection_epoch,
+                "selected_epoch": selected_epoch,
+                "selected_early_stop_metric": early_stop_metric,
+                "selected_early_stop_value": (
+                    float(best_metric) if selected_epoch is not None else np.nan
+                ),
+                "selected_mean_abs_parameter_delta": selected_parameter_delta,
+                "single_checkpoint_output": True,
+            }
+        ],
+        columns=WEIGHT_AVERAGING_AUDIT_COLUMNS,
+    )
+
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -718,6 +823,7 @@ def train_one_fold(
                 "model_state_dict": model.state_dict(),
                 "feature_columns": feature_columns,
                 "config_model": _cfg(config, ["model"], {}),
+                "config_training": _cfg(config, ["training"], {}),
                 "random_seed": fold_seed,
                 "deterministic": _deterministic(config),
                 "training_code_signature": training_code_signature_payload(include_files=False),
@@ -740,6 +846,10 @@ def train_one_fold(
             output_dir / f"multitask_gradient_audit_fold_{fold.fold:03d}.csv",
             index=False,
         )
+        weight_averaging_audit.to_csv(
+            output_dir / f"weight_averaging_audit_fold_{fold.fold:03d}.csv",
+            index=False,
+        )
 
     return {
         "fold": fold.fold,
@@ -751,6 +861,7 @@ def train_one_fold(
         "sample_weight_audit": sample_weight_audit,
         "auxiliary_task_audit": auxiliary_task_audit,
         "multitask_gradient_audit": multitask_gradient_audit,
+        "weight_averaging_audit": weight_averaging_audit,
         "predictions": predictions,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -788,6 +899,7 @@ def run_walk_forward_training(
     sample_weight_audits = []
     auxiliary_task_audits = []
     multitask_gradient_audits = []
+    weight_averaging_audits = []
     selected_fold_ids = {int(fold_id) for fold_id in fold_ids} if fold_ids is not None else None
     for fold in cv.split(len(frame)):
         if selected_fold_ids is not None and int(fold.fold) not in selected_fold_ids:
@@ -812,6 +924,8 @@ def run_walk_forward_training(
             auxiliary_task_audits.append(result["auxiliary_task_audit"])
         if not result["multitask_gradient_audit"].empty:
             multitask_gradient_audits.append(result["multitask_gradient_audit"])
+        if not result["weight_averaging_audit"].empty:
+            weight_averaging_audits.append(result["weight_averaging_audit"])
 
     if not predictions:
         raise ValueError("No folds were produced; check dataset length and CV configuration")
@@ -837,6 +951,11 @@ def run_walk_forward_training(
         if multitask_gradient_audits
         else pd.DataFrame(columns=MULTITASK_GRADIENT_AUDIT_COLUMNS)
     )
+    weight_averaging_audit = (
+        pd.concat(weight_averaging_audits, ignore_index=True)
+        if weight_averaging_audits
+        else pd.DataFrame(columns=WEIGHT_AVERAGING_AUDIT_COLUMNS)
+    )
     if checkpoint_dir is not None:
         output_dir = Path(checkpoint_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -848,6 +967,10 @@ def run_walk_forward_training(
             output_dir / "multitask_gradient_audit.csv",
             index=False,
         )
+        weight_averaging_audit.to_csv(
+            output_dir / "weight_averaging_audit.csv",
+            index=False,
+        )
     report = phase1_report(all_predictions[all_predictions["split"] == "test"], config)
     return {
         "fold_results": fold_results,
@@ -856,5 +979,6 @@ def run_walk_forward_training(
         "sample_weight_audit": sample_weight_audit,
         "auxiliary_task_audit": auxiliary_task_audit,
         "multitask_gradient_audit": multitask_gradient_audit,
+        "weight_averaging_audit": weight_averaging_audit,
         "report": report,
     }

@@ -25,6 +25,7 @@ TRAINING_CODE_RELATIVE_PATHS = (
     "yenibot/training/sample_weights.py",
     "yenibot/training/trainer.py",
     "yenibot/training/walk_forward.py",
+    "yenibot/training/weight_averaging.py",
     "yenibot/experiment/training.py",
 )
 

@@ -5,6 +5,7 @@ import copy
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from yenibot.features import build_feature_matrix
 from yenibot.training.sample_weights import build_sample_weights, label_uniqueness_weights
@@ -173,6 +174,56 @@ def test_train_one_fold_supports_conflict_projected_auxiliary_return_head(
     assert result["multitask_gradient_audit"]["batch_count"].gt(0).all()
     assert (tmp_path / "auxiliary_task_audit_fold_000.csv").exists()
     assert (tmp_path / "multitask_gradient_audit_fold_000.csv").exists()
+
+
+def test_train_one_fold_uses_single_preregistered_swa_checkpoint(
+    synthetic_klines,
+    tiny_config,
+    tmp_path,
+) -> None:
+    config = copy.deepcopy(tiny_config)
+    config["training"]["epochs"] = 3
+    config["training"]["early_stop_patience"] = 2
+    config["training"]["weight_averaging"] = {
+        "enabled": True,
+        "strategy": "swa",
+        "start_epoch": 1,
+        "update_interval_epochs": 1,
+        "min_snapshots": 2,
+    }
+    primary = synthetic_klines(190, "1h")
+    htf = synthetic_klines(60, "4h")
+    features = build_feature_matrix(primary, htf, config)
+    frame = features.frame.copy().reset_index(drop=True)
+    frame["label"] = (np.arange(len(frame)) % 3 == 0).astype(int)
+    frame["fwd_return_10h"] = frame["close"].shift(-10) / frame["close"] - 1.0
+    frame = frame.dropna(subset=["fwd_return_10h"]).reset_index(drop=True)
+    fold = next(PurgedWalkForwardCV(**config["walk_forward"]).split(len(frame)))
+
+    result = train_one_fold(
+        frame,
+        fold,
+        features.feature_columns,
+        config,
+        checkpoint_dir=tmp_path,
+        device="cpu",
+    )
+
+    audit = result["weight_averaging_audit"].iloc[0]
+    assert bool(audit["enabled"])
+    assert audit["strategy"] == "swa"
+    assert audit["snapshots_collected"] >= 2
+    assert audit["selected_epoch"] >= 2
+    assert audit["selected_mean_abs_parameter_delta"] > 0.0
+    assert bool(audit["single_checkpoint_output"])
+    assert set(result["history"].loc[1:, "selection_model_source"]) == {"swa"}
+    assert (tmp_path / "weight_averaging_audit_fold_000.csv").exists()
+    checkpoint = torch.load(
+        tmp_path / "model_fold_000.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert checkpoint["config_training"]["weight_averaging"]["enabled"] is True
 
 
 def test_label_uniqueness_weights_downweight_overlapping_events() -> None:

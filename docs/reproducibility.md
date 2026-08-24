@@ -50,9 +50,11 @@ because imported modules remain cached.
   -> 04 fold artifacts, historical recency research, and run handoff
   -> 05 diagnostics, manifests, and bundles for that exact run
 
-04a immutable cached historical cross-predictions
-  -> one preregistered adaptive-policy decision bundle
-  -> explicit review before any replacement fit or Notebook 05 run
+04 train-fold-only trajectory snapshots
+  -> one preregistered SWA checkpoint per fold
+  -> triage gates before automatic full CV
+05 immutable diagnostic bundle
+  -> explicit review before any replacement fit
 ```
 
 Do not rerun more expensive stages unless their inputs changed:
@@ -60,7 +62,7 @@ Do not rerun more expensive stages unless their inputs changed:
 | Changed input | Minimum rerun |
 |---|---|
 | Diagnostics code only | `05` |
-| Current validation-adaptive policy preregistration | `04a` only; no training |
+| Current trajectory-SWA preregistration | `04`, followed by `05`; one fitted trajectory and one output checkpoint per fold |
 | Training/model/profile selection | `04 -> 05` |
 | Labels or ATR semantics | `03 -> 04 -> 05` |
 | Feature formulas or columns | `02 -> 03 -> 04 -> 05` |

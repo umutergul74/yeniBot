@@ -70,6 +70,22 @@ coverage by `10.5` percentage points. It failed 11 committed gates and is
 closed without parameter search. Common-window validation reliability did not
 predict the next test window well enough.
 
+## Preregistered Optimization-Stability Mechanism
+
+`trajectory_swa_v1` is the next single confirmatory mechanism. It targets the
+remaining seed/fold sensitivity without reopening rejected feature, loss,
+capacity, recency, or prediction-ensemble families. Starting at epoch 10, each
+fold collects equal-weight snapshots at one-epoch intervals. Validation cannot
+select a live model: it becomes eligible only after at least three averaged
+snapshots and chooses among averaged checkpoints. Inference and artifact
+freezing still use one checkpoint.
+
+The candidate is compared with the unchanged control on the pre-failed-OOS
+historical walk-forward sample. Existing triage/full promotion gates are
+unchanged. Parameters may not be searched after observing the result, and a
+historical pass requires a separate replacement-fit preregistration plus a new
+Future-OOS anchor.
+
 ## Governance Rule
 
 Do not rerun a rejected profile because its name looks promising. A retest

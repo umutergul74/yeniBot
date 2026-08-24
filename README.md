@@ -216,16 +216,17 @@ Rerun rules:
 | Locked clean-forward confirmation | `07` after `05` writes post-anchor Future-OOS predictions |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
-| Preregistered cached adaptive-ensemble experiment | `04a` only; review its bundle before any other notebook |
+| Preregistered trajectory-SWA experiment | `04`, then `05`; triage must pass before automatic full CV |
 
 When `candidate_profiles` is empty, do not run notebook `04` merely to recreate
 the control. Use notebook `05` for reporting changes and wait until a distinct
 candidate is explicitly pre-registered.
 
-Notebook 04a is reserved for an explicitly active cached-policy
-preregistration. Its current hypothesis has completed and failed, so it must
-not be rerun or followed by Notebook 05. The preserved result is
-`phase1_latest_policy_research_bundle.zip`.
+Notebook 04a is retained only for the completed cached-policy audit and is not
+part of the active run. The current `trajectory_swa_v1` candidate runs through
+Notebook 04 and emits a single averaged checkpoint per fold; Notebook 05 then
+writes the immutable diagnostic bundle. It cannot activate a replacement
+candidate automatically.
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is

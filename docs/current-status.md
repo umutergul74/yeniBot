@@ -95,8 +95,8 @@ strategy. Do not use Notebook 06 or 07 to repair the failed model result.
 
 ## Next Operator Run
 
-There is no notebook to run now. `recent6_validation_lcb_top3_v1` completed on
-the immutable historical cache and failed its confirmatory gates:
+`recent6_validation_lcb_top3_v1` completed on the immutable historical cache
+and failed its confirmatory gates:
 
 | Metric | Recent-3 control | Adaptive candidate | Delta |
 |---|---:|---:|---:|
@@ -106,14 +106,23 @@ the immutable historical cache and failed its confirmatory gates:
 | Mean F1 | `0.39678` | `0.38672` | `-0.01006` |
 | Positive selected-return folds | `65.8%` | `55.3%` | `-10.5 pp` |
 
-The failure is broad, not a borderline single-gate miss. Do not tune the pool
-size, top-k, confidence level, validation split, or purge. The result is
-preserved in `phase1_latest_policy_research_bundle.zip` with zero fit
+The failure is broad, not a borderline single-gate miss. The pool size, top-k,
+confidence level, validation split, and purge remain closed to tuning. The
+result is preserved in `phase1_latest_policy_research_bundle.zip` with zero fit
 operations and no failed-OOS selection rows.
 
-Notebooks 04, 04a, 05, 06, and 07 remain blocked until one materially distinct
-mechanism is written and preregistered. The next design must not be another
-static/adaptive recency or validation-reliability weighting variation.
+The materially distinct `trajectory_swa_v1` mechanism is now preregistered.
+It preserves the control features, labels, TCN+GRU widths, primary loss, seed,
+fold boundaries, and thresholds. Inside each train fold it averages one
+post-burn-in optimization trajectory and emits one checkpoint. This is not a
+seed ensemble, recency ensemble, validation expert selector, or inference-time
+blend.
+
+Run Notebook 04 once. The candidate first runs only on the committed triage
+folds and reaches full CV only if every existing triage gate passes. Then run
+Notebook 05 once to create the review bundle. Do not run Notebook 04a, 06, or
+07 in this cycle. The two failed Future-OOS windows remain excluded from
+selection, and even a historical pass cannot auto-freeze a replacement.
 
 The authoritative machine-readable instruction is
 `operator_next_step.json`. A completed evaluation must always supersede the

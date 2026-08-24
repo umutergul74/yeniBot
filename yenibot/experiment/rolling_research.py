@@ -318,6 +318,14 @@ def research_protocol_payload(
         str(adaptive.get("status") or "").startswith("completed_failed_")
         and not bool(adaptive.get("enabled", False))
     )
+    trajectory = dict(cycle.get("trajectory_weight_averaging", {}) or {})
+    trajectory_preregistered = bool(
+        trajectory.get("enabled", False)
+        and trajectory.get("preregistered") is True
+        and str(cycle.get("primary_hypothesis") or "")
+        == str(trajectory.get("hypothesis_id") or "")
+        and len(str(trajectory.get("preregistration_commit") or "")) == 40
+    )
     if not failed_candidate_id and configured_future_oos_failed:
         failed_candidate_id = configured_primary_id
     current_status = str(cycle.get("status", "not_configured"))
@@ -338,7 +346,7 @@ def research_protocol_payload(
     elif failed_future_oos and replacement_fit_complete:
         current_status = "failed_future_oos_replacement_manifest_pin_required"
         current_action = PIN_REPLACEMENT_MANIFEST_ACTION
-    elif failed_future_oos and adaptive_preregistered:
+    elif failed_future_oos and (adaptive_preregistered or trajectory_preregistered):
         current_status = str(cycle.get("status"))
         current_action = str(cycle.get("next_action"))
     elif failed_future_oos and adaptive_completed:
@@ -426,13 +434,18 @@ def research_protocol_payload(
             failed_future_oos
             and not replacement_fit_complete
             and not adaptive_preregistered
+            and not trajectory_preregistered
         ),
-        "run_04_required_now": False if failed_future_oos else None,
+        "run_04_required_now": bool(
+            failed_future_oos and trajectory_preregistered
+        ) if failed_future_oos else None,
         "run_04a_required_now": bool(failed_future_oos and adaptive_preregistered),
         "run_05_required_now": False if failed_future_oos else None,
         "next_notebook": (
             "none_until_replacement_manifest_is_pinned"
             if failed_future_oos and replacement_fit_complete
+            else "04"
+            if failed_future_oos and trajectory_preregistered
             else "04a"
             if failed_future_oos and adaptive_preregistered
             else "none_until_distinct_mechanism_is_preregistered"
@@ -444,6 +457,7 @@ def research_protocol_payload(
         "rolling_origin": cycle.get("rolling_origin", {}),
         "recency_ensemble": cycle.get("recency_ensemble", {}),
         "adaptive_ensemble": adaptive,
+        "trajectory_weight_averaging": trajectory,
         "configured_replacement_candidate": configured_replacement,
         "replacement_candidate": replacement_candidate,
         "replacement_candidate_fit_status": replacement_fit.get("status"),
