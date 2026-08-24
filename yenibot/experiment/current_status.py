@@ -80,6 +80,15 @@ def build_phase1_current_status(
     ladder_next_action = str(
         phase1_decision_ladder.get("recommended_next_action") or ""
     )
+    protocol_hypothesis = str(
+        next_research_protocol.get("primary_hypothesis") or ""
+    ).strip()
+    protocol_action = str(next_research_protocol.get("next_action") or "").strip()
+    research_preregistered = bool(
+        protocol_hypothesis
+        and protocol_hypothesis != "not_yet_preregistered"
+        and protocol_action.startswith("run_notebook_04a_")
+    )
 
     if phase2_ready:
         status = "phase2_ready_review_required"
@@ -88,16 +97,20 @@ def build_phase1_current_status(
         status = "seed_reproducibility_review_required"
         next_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
     elif frozen_failed:
-        next_action = str(
-            phase2_readiness.get("next_action")
-            or next_research_protocol.get("next_action")
-            or RETIRE_FAILED_FUTURE_OOS_ACTION
-        )
-        status = (
-            "failed_future_oos_replacement_manifest_pin_required"
-            if next_action == PIN_REPLACEMENT_MANIFEST_ACTION
-            else "failed_future_oos_new_research_cycle_required"
-        )
+        if research_preregistered:
+            next_action = protocol_action
+            status = "failed_future_oos_historical_research_preregistered"
+        else:
+            next_action = str(
+                phase2_readiness.get("next_action")
+                or next_research_protocol.get("next_action")
+                or RETIRE_FAILED_FUTURE_OOS_ACTION
+            )
+            status = (
+                "failed_future_oos_replacement_manifest_pin_required"
+                if next_action == PIN_REPLACEMENT_MANIFEST_ACTION
+                else "failed_future_oos_new_research_cycle_required"
+            )
     elif frozen_missing:
         if ladder_next_action.startswith("pin_replacement_candidate_manifest"):
             status = "historical_model_evidence_passed_awaiting_replacement_manifest_pin"
@@ -143,8 +156,15 @@ def build_phase1_current_status(
     else:
         historical_research_result = "no_active_candidate"
         historical_research_next_action = "preregister_distinct_historical_mechanism"
+    if research_preregistered:
+        historical_research_result = "preregistered_policy_pending_historical_evaluation"
+        historical_research_next_action = protocol_action
 
-    if frozen_failed:
+    if frozen_failed and research_preregistered:
+        run_04_required_now = False
+        run_05_first = False
+        next_notebook = "04a"
+    elif frozen_failed:
         run_04_required_now = False
         run_05_first = False
         next_notebook = (
@@ -170,7 +190,10 @@ def build_phase1_current_status(
         "phase2_blockers": blockers,
         "active_blocker": blockers[0] if blockers else "",
         "next_action": next_action,
-        "phase2_track_next_action": next_action,
+        "phase2_track_next_action": (
+            RETIRE_FAILED_FUTURE_OOS_ACTION if frozen_failed else next_action
+        ),
+        "research_track_next_action": next_action,
         "next_action_source": "phase1_current_status_artifact_state",
         "historical_research_mode": str(research_focus.get("mode") or ""),
         "historical_research_status": str(research_focus.get("status") or ""),
@@ -195,7 +218,9 @@ def build_phase1_current_status(
         ),
         "future_oos_failed": frozen_failed,
         "new_research_cycle_required": bool(
-            frozen_failed and next_action != PIN_REPLACEMENT_MANIFEST_ACTION
+            frozen_failed
+            and not research_preregistered
+            and next_action != PIN_REPLACEMENT_MANIFEST_ACTION
         ),
         "new_future_oos_anchor_required": frozen_failed,
         "replacement_preregistration_required": frozen_missing,
@@ -210,6 +235,7 @@ def build_phase1_current_status(
             "do_not_promote_from_seen_holdout",
             "do_not_write_phase2_code_until_phase2_ready",
             "do_not_repeat_rejected_direct_ablation_without_new_mechanism",
+            "do_not_run_notebook_05_before_adaptive_policy_review",
         ],
     }
 

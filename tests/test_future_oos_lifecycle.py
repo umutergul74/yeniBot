@@ -118,6 +118,59 @@ def test_failed_evaluation_disables_stale_notebook_routing() -> None:
     assert status["next_notebook"] == "none_until_new_research_cycle_is_preregistered"
 
 
+def test_preregistered_adaptive_cycle_routes_only_to_notebook_04a() -> None:
+    config = load_config("config.yaml")
+    protocol = research_protocol_payload(
+        config,
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["future_unseen_oos_candidate_failed"],
+            "next_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+        },
+        future_oos_preflight={"state": "ready_prediction_only"},
+        future_oos_readiness=_failed_readiness(),
+        frozen_candidate_index=pd.DataFrame(
+            [{"candidate_id": "control_recent3_equal_v2", "available": True}]
+        ),
+        seed_reproducibility_audit=_seed_audit(),
+        replacement_candidate_fit={"status": "not_run_no_preregistered_replacement"},
+    )
+
+    assert protocol["status"] == (
+        "historical_validation_adaptive_ensemble_preregistered"
+    )
+    assert protocol["next_action"] == (
+        "run_notebook_04a_historical_policy_research_only"
+    )
+    assert protocol["run_04a_required_now"] is True
+    assert protocol["run_05_required_now"] is False
+    assert protocol["next_notebook"] == "04a"
+    assert protocol["new_research_cycle_required"] is False
+
+    status = build_phase1_current_status(
+        run_id="run",
+        control_profile="control",
+        phase2_readiness={
+            "ready_for_phase2": False,
+            "blockers": ["future_unseen_oos_candidate_failed"],
+            "next_action": RETIRE_FAILED_FUTURE_OOS_ACTION,
+        },
+        model_performance_summary={},
+        phase1_decision_ladder={},
+        next_research_protocol=protocol,
+        future_oos_preflight={"state": "ready_prediction_only"},
+        future_oos_readiness=_failed_readiness(),
+        seed_reproducibility_audit=_seed_audit(),
+        training_execution={"training_executed_count": 0},
+    )
+    assert status["current_status"] == (
+        "failed_future_oos_historical_research_preregistered"
+    )
+    assert status["next_notebook"] == "04a"
+    assert status["run_04_required_now"] is False
+    assert status["run_05_first"] is False
+
+
 def test_failed_evaluation_keeps_research_hint_separate_from_lifecycle_action() -> None:
     ladder = _phase1_decision_ladder_payload(
         phase1_blocker_root_cause=pd.DataFrame(),

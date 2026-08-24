@@ -307,6 +307,13 @@ def research_protocol_payload(
         configured_outcome.get("status", "")
     ).lower()
     failed_future_oos = bool(failed_future_oos or configured_future_oos_failed)
+    adaptive = dict(cycle.get("adaptive_ensemble", {}) or {})
+    adaptive_preregistered = bool(
+        adaptive.get("enabled", False)
+        and adaptive.get("preregistered") is True
+        and str(cycle.get("primary_hypothesis") or "")
+        == str(adaptive.get("hypothesis_id") or "")
+    )
     if not failed_candidate_id and configured_future_oos_failed:
         failed_candidate_id = configured_primary_id
     current_status = str(cycle.get("status", "not_configured"))
@@ -327,6 +334,9 @@ def research_protocol_payload(
     elif failed_future_oos and replacement_fit_complete:
         current_status = "failed_future_oos_replacement_manifest_pin_required"
         current_action = PIN_REPLACEMENT_MANIFEST_ACTION
+    elif failed_future_oos and adaptive_preregistered:
+        current_status = str(cycle.get("status"))
+        current_action = str(cycle.get("next_action"))
     elif failed_future_oos:
         current_status = "failed_future_oos_new_research_cycle_required"
         current_action = RETIRE_FAILED_FUTURE_OOS_ACTION
@@ -406,19 +416,25 @@ def research_protocol_payload(
             or cycle.get("new_future_oos_anchor_required", True)
         ),
         "new_research_cycle_required": bool(
-            failed_future_oos and not replacement_fit_complete
+            failed_future_oos
+            and not replacement_fit_complete
+            and not adaptive_preregistered
         ),
         "run_04_required_now": False if failed_future_oos else None,
+        "run_04a_required_now": bool(failed_future_oos and adaptive_preregistered),
         "run_05_required_now": False if failed_future_oos else None,
         "next_notebook": (
             "none_until_replacement_manifest_is_pinned"
             if failed_future_oos and replacement_fit_complete
+            else "04a"
+            if failed_future_oos and adaptive_preregistered
             else "none_until_new_research_cycle_is_preregistered"
             if failed_future_oos
             else None
         ),
         "rolling_origin": cycle.get("rolling_origin", {}),
         "recency_ensemble": cycle.get("recency_ensemble", {}),
+        "adaptive_ensemble": adaptive,
         "configured_replacement_candidate": configured_replacement,
         "replacement_candidate": replacement_candidate,
         "replacement_candidate_fit_status": replacement_fit.get("status"),
@@ -903,6 +919,42 @@ def _paired_policy_comparison(
             ),
         }
         top_10_control = float(control["mean_top_10_lift"])
+        if "min_mean_top_10_lift" in strict_gates:
+            strict_checks["top_10_lift_absolute"] = bool(
+                float(candidate["mean_top_10_lift"])
+                >= float(strict_gates["min_mean_top_10_lift"])
+            )
+        if "min_mean_top_10_lift_ratio" in strict_gates:
+            strict_checks["top_10_lift_noninferiority"] = bool(
+                top_10_control > 0
+                and float(candidate["mean_top_10_lift"]) / top_10_control
+                >= float(strict_gates["min_mean_top_10_lift_ratio"])
+            )
+        if "min_mean_f1" in strict_gates:
+            strict_checks["mean_f1_absolute"] = bool(
+                float(candidate["mean_f1"])
+                >= float(strict_gates["min_mean_f1"])
+            )
+        if "min_mean_f1_delta" in strict_gates:
+            strict_checks["mean_f1_delta"] = bool(
+                float(candidate["mean_f1"] - control["mean_f1"])
+                >= float(strict_gates["min_mean_f1_delta"])
+            )
+        if "min_mean_prauc_lift" in strict_gates:
+            strict_checks["mean_prauc_lift"] = bool(
+                float(candidate["mean_prauc_lift"])
+                >= float(strict_gates["min_mean_prauc_lift"])
+            )
+        if "min_positive_top_10_return_fraction" in strict_gates:
+            strict_checks["positive_top_10_return_fraction"] = bool(
+                float(candidate["positive_top_10_return_fraction"])
+                >= float(strict_gates["min_positive_top_10_return_fraction"])
+            )
+        if "max_mean_pred_long_rate" in strict_gates:
+            strict_checks["mean_pred_long_rate"] = bool(
+                float(candidate["mean_pred_long_rate"])
+                <= float(strict_gates["max_mean_pred_long_rate"])
+            )
         balanced_checks = {
             "mean_rank_ic_delta": (
                 float(candidate["mean_rank_ic"] - control["mean_rank_ic"])

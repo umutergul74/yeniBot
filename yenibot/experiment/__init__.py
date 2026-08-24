@@ -33,6 +33,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "rolling_research",
         "run_recency_ensemble_research",
     ),
+    "run_cached_adaptive_ensemble_research": (
+        "cached_policy_research",
+        "run_cached_adaptive_ensemble_research",
+    ),
     "publish_replacement_candidate_reports": (
         "replacement",
         "publish_replacement_candidate_reports",

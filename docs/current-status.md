@@ -95,18 +95,25 @@ strategy. Do not use Notebook 06 or 07 to repair the failed model result.
 
 ## Next Operator Run
 
-There is currently no notebook to run immediately. In particular, do not rerun
-Notebook 05 on the failed window and do not run Notebook 06 or 07 as a next
-step.
+The next run is `04a_phase1_adaptive_ensemble_research.ipynb`. It performs no
+training and reads only the immutable historical cross-prediction cache from
+run `20260628_155057`.
 
-1. Retire the failed frozen candidate in the active research protocol while
-   preserving its artifacts.
-2. Define one materially distinct, causal hypothesis from historical CV and
-   the failure diagnostics only.
-3. Commit that preregistration and its historical gates.
-4. Only then run Notebook 04 for the new historical walk-forward experiment.
-5. Run Notebook 05 to review historical evidence and, only if the candidate
-   clears its preregistered gates, pin a new manifest with a new OOS anchor.
+The single preregistered candidate is `recent6_validation_lcb_top3_v1`:
+
+1. Fix the eligible pool to the six most recent historical fold models.
+2. Use the first 720 validation hours to rank those models by the 90% lower
+   bound of 24-hour moving-block-bootstrap Rank IC.
+3. Select the best three and combine them at equal weight.
+4. Purge 24 hours, then select the threshold on the remaining validation rows.
+5. Compare with the fixed recent-three equal-weight benchmark on historical
+   test folds using the committed gates.
+
+Both failed Future-OOS windows begin after the maximum permitted historical
+selection timestamp and are explicitly excluded by the executable contract.
+Notebook 04a writes `phase1_latest_policy_research_bundle.zip`. Do not run
+Notebook 05, 06, or 07 until that result is reviewed. A pass permits explicit
+replacement-fit preregistration; it does not freeze or promote automatically.
 
 The authoritative machine-readable instruction is
 `operator_next_step.json`. A completed evaluation must always supersede the

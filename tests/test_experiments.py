@@ -3413,19 +3413,26 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "failed_future_oos_new_research_cycle_design_required"
+        "validation_adaptive_ensemble_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "failed_future_oos_new_research_cycle_required"
+        "historical_validation_adaptive_ensemble_preregistered"
     )
     assert config["experiments"]["next_research_cycle"]["next_action"] == (
-        "retire_failed_frozen_candidate_and_open_new_research_anchor"
+        "run_notebook_04a_historical_policy_research_only"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
         "retired_after_failed_future_oos"
     )
     assert config["experiments"]["next_research_cycle"]["recency_ensemble"]["enabled"] is False
+    adaptive = config["experiments"]["next_research_cycle"]["adaptive_ensemble"]
+    assert adaptive["preregistered"] is True
+    assert adaptive["hypothesis_id"] == "recent6_validation_lcb_top3_v1"
+    assert adaptive["policy"]["pool_recent_k"] == 6
+    assert adaptive["policy"]["select_top_k"] == 3
+    assert adaptive["policy"]["selector_rows"] == 720
+    assert adaptive["policy"]["purge_rows"] == 24
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
     mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]
     combo_profile = config["features"]["profiles"]["baseline_stable_train_clip_and_reliability_mask"]
@@ -4264,12 +4271,16 @@ def test_training_research_contract_validates_invariants_not_lifecycle_names() -
 
     contract = validate_training_research_contract(config)
 
-    assert contract["research_cycle_status"] == "failed_future_oos_new_research_cycle_required"
+    assert contract["research_cycle_status"] == (
+        "historical_validation_adaptive_ensemble_preregistered"
+    )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
     assert contract["research_focus_status"] == (
-        "failed_future_oos_new_research_cycle_design_required"
+        "validation_adaptive_ensemble_preregistered"
     )
     assert contract["seed_audit_mode"] == "in_run"
+    assert contract["adaptive_ensemble_enabled"] is True
+    assert contract["adaptive_hypothesis_id"] == "recent6_validation_lcb_top3_v1"
 
     renamed = copy.deepcopy(config)
     renamed["experiments"]["next_research_cycle"]["status"] = "future_research_stage_name"

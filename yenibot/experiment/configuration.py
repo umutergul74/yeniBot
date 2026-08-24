@@ -127,6 +127,59 @@ def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any
     if research.get("new_future_oos_anchor_required") is not True:
         errors.append("experiments.next_research_cycle.new_future_oos_anchor_required must be true")
 
+    adaptive = research.get("adaptive_ensemble", {}) or {}
+    if bool(adaptive.get("enabled", False)):
+        policy = adaptive.get("policy", {}) or {}
+        control = adaptive.get("control", {}) or {}
+        replacement = research.get("replacement_candidate", {}) or {}
+        recency = research.get("recency_ensemble", {}) or {}
+        hypothesis_id = str(adaptive.get("hypothesis_id") or "").strip()
+        if adaptive.get("preregistered") is not True:
+            errors.append(
+                "experiments.next_research_cycle.adaptive_ensemble.preregistered must be true"
+            )
+        if not hypothesis_id or str(research.get("primary_hypothesis") or "") != hypothesis_id:
+            errors.append(
+                "adaptive hypothesis_id must equal next_research_cycle.primary_hypothesis"
+            )
+        if bool(recency.get("enabled", False)):
+            errors.append("static recency research must stay disabled during adaptive research")
+        if bool(replacement.get("enabled", False)):
+            errors.append("replacement fit must stay disabled until adaptive research passes")
+        if str(policy.get("policy") or "") != "validation_lcb_top_k":
+            errors.append("adaptive policy must be validation_lcb_top_k")
+        if str(control.get("policy") or "") != "equal_recent_k":
+            errors.append("adaptive control must be equal_recent_k")
+        if int(policy.get("pool_recent_k", 0) or 0) < int(
+            policy.get("select_top_k", 0) or 0
+        ):
+            errors.append("adaptive pool_recent_k must be >= select_top_k")
+        if int(policy.get("selector_rows", 0) or 0) <= 0:
+            errors.append("adaptive selector_rows must be positive")
+        if int(policy.get("purge_rows", -1)) < 0:
+            errors.append("adaptive purge_rows must be non-negative")
+        if int(policy.get("min_calibration_rows", 0) or 0) < 256:
+            errors.append("adaptive min_calibration_rows must be at least 256")
+        source_signature = str(
+            adaptive.get("source_prediction_signature_hash") or ""
+        )
+        if len(source_signature) != 64 or "<" in source_signature:
+            errors.append("adaptive source prediction signature must be pinned")
+        try:
+            selection_end = pd.to_datetime(
+                adaptive.get("historical_selection_end"), utc=True, errors="raise"
+            )
+            for window in adaptive.get("excluded_evaluation_windows", []) or []:
+                if selection_end >= pd.to_datetime(
+                    window.get("start"), utc=True, errors="raise"
+                ):
+                    errors.append(
+                        "adaptive historical selection must end before every excluded OOS window"
+                    )
+                    break
+        except (TypeError, ValueError):
+            errors.append("adaptive historical/excluded timestamps must be valid")
+
     if errors:
         details = "\n- ".join(errors)
         raise ValueError(f"Notebook 04 research contract is invalid:\n- {details}")
@@ -136,6 +189,8 @@ def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any
         "research_focus_mode": str(research_focus["mode"]),
         "research_focus_status": research_focus_status,
         "seed_audit_mode": str(seed_audit["mode"]),
+        "adaptive_ensemble_enabled": bool(adaptive.get("enabled", False)),
+        "adaptive_hypothesis_id": str(adaptive.get("hypothesis_id") or ""),
     }
 
 def profile_config(config: dict[str, Any], profile: str) -> dict[str, Any]:

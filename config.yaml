@@ -2203,7 +2203,7 @@ experiments:
   force_retrain: false
   research_focus:
     mode: walk_forward_cv_repair
-    status: failed_future_oos_new_research_cycle_design_required
+    status: validation_adaptive_ensemble_preregistered
     base_run_id: "20260526_185416"
     base_profile: baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility
     primary_failure_mechanism: score_ranking_reversal_not_label_balance
@@ -2225,7 +2225,7 @@ experiments:
       - multitask_return_head_fixed_sum_v1
       - primary_preserving_multitask_gradient_projection_v1
     conclusion: "The preregistered control_recent3_equal_v2 candidate completed 1,524-row Future-OOS without refit and failed only rank_ic_lower_ci. The point Rank IC was positive, but its lower confidence bound was -0.0780. Retire the candidate; preserve the failed window for diagnosis only. Historical recency policies also produced no candidate that cleared every preregistered gate."
-    next_step: "Do not rerun notebooks 05, 06, or 07 to repair the failed window. Design and commit one materially distinct historical-only hypothesis before running notebook 04. Any passing replacement must receive a new manifest and a new Future-OOS anchor."
+    next_step: "Run only notebook 04a on the immutable pre-OOS cross-prediction cache. It evaluates the single preregistered recent6-validation-LCB-top3 policy without training. Do not run notebooks 05, 06, or 07 unless that historical confirmatory decision passes every gate and a replacement is explicitly configured."
   profile_blends:
     include_auto_equal_weight: false
     include_auto_rank_mean: false
@@ -2350,15 +2350,15 @@ experiments:
       failed_gates: [rank_ic_lower_ci]
       decision: "Retire this exact candidate. The completed window is diagnostic evidence only; never tune, reselect, or promote against it."
   next_research_cycle:
-    status: failed_future_oos_new_research_cycle_required
+    status: historical_validation_adaptive_ensemble_preregistered
     source_failed_candidate_id: control_recent3_equal_v2
     failed_oos_role: diagnostic_and_future_training_data_only
     same_window_selection_allowed: false
     new_future_oos_anchor_required: true
-    primary_hypothesis: not_yet_preregistered
-    next_action: "retire_failed_frozen_candidate_and_open_new_research_anchor"
+    primary_hypothesis: recent6_validation_lcb_top3_v1
+    next_action: "run_notebook_04a_historical_policy_research_only"
     rolling_origin:
-      enabled: false
+      enabled: true
       train_bars: 5040
       val_bars: 1080
       test_bars: 720
@@ -2417,6 +2417,73 @@ experiments:
       selection_data: pre_new_anchor_walk_forward_only
       failed_future_oos_use: diagnostics_only_no_policy_selection
       promotion_rule: freeze_winner_before_collecting_a_new_future_oos_window
+    adaptive_ensemble:
+      enabled: true
+      preregistered: true
+      hypothesis_id: recent6_validation_lcb_top3_v1
+      hypothesis: "Ranking instability is partly caused by using the most recent models without measuring which of them still ranks correctly in the current pre-deployment regime. Selecting three experts from a fixed six-model recent pool by their common-window, block-bootstrap validation Rank-IC lower bound should improve downside ranking stability while preserving diversity and top-score payoff."
+      distinct_from_completed_work: "Unlike static recency, own-fold reliability filters, or seed ensembles, every eligible expert is compared on the same latest historical validation selector window; model selection and threshold calibration use disjoint chronological subsets."
+      source_run_id: "20260628_155057"
+      source_prediction_signature_hash: a615361116194c42b47185b9915fdea8cf356d2e3236e66980d729c0b156d6aa
+      historical_selection_end: "2025-12-26T09:00:00+00:00"
+      selection_data_role: immutable_pre_oos_historical_walk_forward_only
+      failed_future_oos_use: diagnostics_only_never_selection
+      excluded_evaluation_windows:
+        - candidate_id: control_fold_ensemble_v1
+          start: "2026-05-13T09:00:00+00:00"
+          end: "2026-06-13T01:00:00+00:00"
+        - candidate_id: control_recent3_equal_v2
+          start: "2026-06-13T02:00:00+00:00"
+          end: "2026-08-15T13:00:00+00:00"
+      control:
+        name: recent_3_equal_historical_benchmark
+        policy: equal_recent_k
+        recent_k: 3
+      policy:
+        name: recent6_validation_lcb_top3_v1
+        policy: validation_lcb_top_k
+        pool_recent_k: 6
+        select_top_k: 3
+        selector_rows: 720
+        purge_rows: 24
+        min_calibration_rows: 256
+        bootstrap_block_length: 24
+        bootstrap_repeats: 200
+        confidence_level: 0.90
+        random_seed: 42
+        aggregation: equal_weight_selected_models
+        fallback: select_available_top_k_by_same_preregistered_order
+      comparison:
+        control_policy: recent_3_equal_historical_benchmark
+        bootstrap_repeats: 5000
+        block_length_folds: 3
+        confidence_level: 0.95
+        random_seed: 42
+        gates:
+          min_mean_rank_ic_delta: 0.005
+          max_std_rank_ic_delta: 0.000
+          min_positive_ic_fraction_delta: 0.000
+          min_worst_5_rank_ic_delta: 0.000
+          min_mean_top_10_lift_delta: 0.000
+          min_positive_selected_return_fraction_delta: 0.000
+          min_rank_ic_delta_probability: 0.80
+          min_rank_ic_win_rate: 0.55
+          min_mean_top_10_lift: 1.10
+          min_mean_top_10_lift_ratio: 0.95
+          min_mean_f1: 0.43
+          min_mean_f1_delta: -0.005
+          min_mean_prauc_lift: 1.05
+          min_positive_top_10_return_fraction: 0.65
+          max_mean_pred_long_rate: 0.70
+        selection_tracks:
+          strict_dominance: "The single candidate must improve mean and downside Rank IC without worsening dispersion, positive-fold coverage, classification skill, or top-score payoff."
+        phase1_thresholds_unchanged: true
+      execution:
+        notebook: 04a_phase1_adaptive_ensemble_research.ipynb
+        fit_operations_performed: 0
+        automatic_freeze_allowed: false
+        next_if_passed: explicit_replacement_fit_preregistration_with_new_anchor
+        next_if_failed: archive_hypothesis_and_design_distinct_mechanism
     replacement_candidate:
       enabled: false
       candidate_id: control_recent3_equal_v2

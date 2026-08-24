@@ -11,10 +11,11 @@ NOTEBOOK_NAMES = [
     "02_feature_engineering.ipynb",
     "03_labeling.ipynb",
     "04_training_walk_forward.ipynb",
+    "04a_phase1_adaptive_ensemble_research.ipynb",
     "05_diagnostics_validation.ipynb",
     "06_phase2_sandbox_backtest.ipynb",
 ]
-RESEARCH_BRANCH = "codex/phase2-sandbox"
+RESEARCH_BRANCH = "codex/phase1-research-v2"
 
 
 def _load_notebook(name: str) -> dict:
@@ -42,6 +43,7 @@ def test_all_phase1_notebooks_pin_and_verify_the_research_branch() -> None:
 def test_research_notebooks_follow_the_post_oos_contract() -> None:
     combined = _source(_load_notebook("00_phase1_auto_run.ipynb"))
     training = _source(_load_notebook("04_training_walk_forward.ipynb"))
+    adaptive = _source(_load_notebook("04a_phase1_adaptive_ensemble_research.ipynb"))
     diagnostics = _source(_load_notebook("05_diagnostics_validation.ipynb"))
     phase2 = _source(_load_notebook("06_phase2_sandbox_backtest.ipynb"))
 
@@ -56,6 +58,12 @@ def test_research_notebooks_follow_the_post_oos_contract() -> None:
         assert "Failed future OOS used for policy selection: False" in source or (
             "same_window_selection_allowed" in source
         )
+
+    assert "run_cached_adaptive_ensemble_research" in adaptive
+    assert "Fit operations performed:" in adaptive
+    assert "Failed Future-OOS used for selection:" in adaptive
+    assert "Do not run Notebook 05 yet" in adaptive
+    assert "phase1_latest_policy_research_bundle.zip" in adaptive
 
     assert "Notebook 04 remains forbidden" not in diagnostics
     assert "seed_audit_source_run_id" in diagnostics

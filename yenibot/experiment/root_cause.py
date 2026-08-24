@@ -1237,6 +1237,13 @@ def _phase1_decision_ladder_payload(
     blocker_set = set(blockers)
     next_cycle = settings.get("next_research_cycle", {}) or {}
     new_anchor_required = bool(next_cycle.get("new_future_oos_anchor_required", False))
+    adaptive = next_cycle.get("adaptive_ensemble", {}) or {}
+    adaptive_preregistered = bool(
+        adaptive.get("enabled", False)
+        and adaptive.get("preregistered") is True
+        and str(next_cycle.get("primary_hypothesis") or "")
+        == str(adaptive.get("hypothesis_id") or "")
+    )
     seed_review_pending = any(
         item.startswith("seed_reproducibility_") or item.startswith("seed_audit_")
         for item in blocker_set
@@ -1295,6 +1302,9 @@ def _phase1_decision_ladder_payload(
     if future_oos_failed and replacement_fit_complete:
         recommended_next_action = PIN_REPLACEMENT_MANIFEST_ACTION
         research_cycle_followup_action = PIN_REPLACEMENT_MANIFEST_ACTION
+    elif future_oos_failed and adaptive_preregistered:
+        recommended_next_action = str(next_cycle.get("next_action"))
+        research_cycle_followup_action = recommended_next_action
     elif future_oos_failed:
         recommended_next_action = RETIRE_FAILED_FUTURE_OOS_ACTION
         research_cycle_followup_action = (
@@ -1336,6 +1346,8 @@ def _phase1_decision_ladder_payload(
     next_notebook = (
         "none_until_replacement_manifest_is_pinned"
         if future_oos_failed and replacement_fit_complete
+        else "04a"
+        if future_oos_failed and adaptive_preregistered
         else "none_until_new_research_cycle_is_preregistered"
         if future_oos_failed
         else "04"
@@ -1378,6 +1390,7 @@ def _phase1_decision_ladder_payload(
         "frozen_candidate_manifest_missing": frozen_manifest_missing,
         "seed_review_pending": seed_review_pending,
         "new_future_oos_anchor_required": bool(future_oos_failed or new_anchor_required),
+        "adaptive_research_preregistered": adaptive_preregistered,
         "why_no_04": (
             ""
             if run_04_required_now
@@ -1385,7 +1398,9 @@ def _phase1_decision_ladder_payload(
                 "failed candidate must be retired and a new historical-only research "
                 "hypothesis must be pre-registered before notebook 04"
             )
-            if future_oos_failed
+            if future_oos_failed and not adaptive_preregistered
+            else "standard Notebook 04 remains unnecessary; run the zero-fit cached-policy Notebook 04a"
+            if future_oos_failed and adaptive_preregistered
             else (
                 "replacement candidate must be chosen from historical CV evidence and "
                 "pre-registered before a new future-OOS anchor; current holdout cannot "

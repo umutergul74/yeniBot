@@ -185,7 +185,7 @@ All production research notebooks run on Google Colab with source code from
 GitHub and data/checkpoints stored on Google Drive.
 
 The current Phase 1/Phase 2 sandbox workflow is isolated on
-`codex/phase2-sandbox`. Every notebook fetches, checks out, and verifies
+`codex/phase1-research-v2`. Every notebook fetches, checks out, and verifies
 that branch by default, then prints the exact commit. Override
 `YENIBOT_REPO_BRANCH` only for a deliberate reviewed run.
 
@@ -195,9 +195,10 @@ Run in strict order:
 2. [`02_feature_engineering.ipynb`](notebooks/02_feature_engineering.ipynb)
 3. [`03_labeling.ipynb`](notebooks/03_labeling.ipynb)
 4. [`04_training_walk_forward.ipynb`](notebooks/04_training_walk_forward.ipynb)
-5. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
-6. [`06_phase2_sandbox_backtest.ipynb`](notebooks/06_phase2_sandbox_backtest.ipynb)
-7. [`07_phase2_clean_forward_confirmation.ipynb`](notebooks/07_phase2_clean_forward_confirmation.ipynb)
+5. [`04a_phase1_adaptive_ensemble_research.ipynb`](notebooks/04a_phase1_adaptive_ensemble_research.ipynb), only when its exact cached-policy hypothesis is active
+6. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
+7. [`06_phase2_sandbox_backtest.ipynb`](notebooks/06_phase2_sandbox_backtest.ipynb)
+8. [`07_phase2_clean_forward_confirmation.ipynb`](notebooks/07_phase2_clean_forward_confirmation.ipynb)
 
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
@@ -215,10 +216,16 @@ Rerun rules:
 | Locked clean-forward confirmation | `07` after `05` writes post-anchor Future-OOS predictions |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
+| Preregistered cached adaptive-ensemble experiment | `04a` only; review its bundle before any other notebook |
 
 When `candidate_profiles` is empty, do not run notebook `04` merely to recreate
 the control. Use notebook `05` for reporting changes and wait until a distinct
 candidate is explicitly pre-registered.
+
+The current exception is the explicitly preregistered cached-policy study in
+Notebook 04a. It performs zero fit operations, keeps the source cache
+immutable, and writes `phase1_latest_policy_research_bundle.zip`. It must not
+be followed automatically by Notebook 05.
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is
