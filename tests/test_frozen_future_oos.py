@@ -461,6 +461,69 @@ def test_future_oos_reuses_recorded_immutable_outcome_without_rescoring(
     assert status["state_source"] == "recorded_immutable_future_oos_outcome"
 
 
+def test_future_oos_restores_verified_recorded_artifact_family_from_sibling_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path, min_rows=20)
+    manifest_hash = "abc123"
+    config["experiments"]["frozen_candidate_outcomes"] = {
+        "control_v1": {
+            "status": "failed_future_oos_retired",
+            "manifest_hash": manifest_hash,
+        }
+    }
+    reports = tmp_path / "reports" / "experiments"
+    source = reports / "prior_run"
+    source.mkdir(parents=True)
+    payload = {
+        "status": {
+            "evaluation_completed": True,
+            "evaluation_state": "evaluated_failed",
+            "primary_candidate_id": "control_v1",
+            "primary_candidate_passed": False,
+        },
+        "rows": [
+            {
+                "candidate_id": "control_v1",
+                "evidence_passed": False,
+                "manifest_hash": manifest_hash,
+                "failed_gates": "rank_ic_lower_ci",
+            }
+        ],
+    }
+    for filename in future_oos_module._IMMUTABLE_FUTURE_OOS_ARTIFACTS:
+        path = source / filename
+        if filename == "future_oos_evaluation.json":
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        elif filename.endswith(".json"):
+            path.write_text("{}", encoding="utf-8")
+        else:
+            path.write_bytes(b"immutable\n")
+    monkeypatch.setattr(
+        future_oos_module,
+        "_profile_predictions",
+        lambda **_: (_ for _ in ()).throw(AssertionError("must not rescore")),
+    )
+
+    current = reports / "current_run"
+    evaluation, status = evaluate_future_oos(
+        run_dir=tmp_path / "run",
+        report_dir=current,
+        config=config,
+        manifests=[],
+    )
+
+    assert len(evaluation) == 1
+    assert status["evaluation_artifact_restored"] is True
+    assert status["evaluation_artifact_source_run_id"] == "prior_run"
+    assert status["rescore_operations_performed"] == 0
+    assert all(
+        (current / filename).is_file()
+        for filename in future_oos_module._IMMUTABLE_FUTURE_OOS_ARTIFACTS
+    )
+
+
 def test_future_oos_fails_closed_when_recorded_outcome_artifact_is_missing(
     tmp_path: Path,
 ) -> None:

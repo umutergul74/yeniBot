@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,101 @@ from yenibot.experiment.holdout import _aggregate_holdout_predictions, _predict_
 from yenibot.phase2.adapter import attach_phase2_market_columns
 
 __all__ = ["evaluate_future_oos"]
+
+
+_IMMUTABLE_FUTURE_OOS_ARTIFACTS = (
+    "future_oos_evaluation.csv",
+    "future_oos_evaluation.md",
+    "future_oos_evaluation.json",
+    "future_oos_readiness.json",
+    "future_oos_prediction_sample.csv",
+    "future_oos_predictions.parquet",
+    "future_oos_temporal_blocks.csv",
+    "future_oos_score_bands.csv",
+    "future_oos_regime_metrics.csv",
+    "future_oos_ensemble_disagreement.csv",
+    "future_oos_model_metrics.csv",
+    "future_oos_failure_summary.json",
+    "future_oos_failure_summary.md",
+)
+
+
+def _recorded_evaluation_matches(
+    path: Path,
+    *,
+    primary_id: str,
+    recorded_status: str,
+    expected_manifest_hash: str,
+) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = pd.DataFrame(payload.get("rows", []) or [])
+    except (OSError, ValueError, TypeError):
+        return False
+    if rows.empty or "candidate_id" not in rows.columns:
+        return False
+    primary = rows.loc[rows["candidate_id"].astype(str).eq(primary_id)]
+    if primary.empty:
+        return False
+    expected_passed = "passed" in recorded_status and "failed" not in recorded_status
+    observed_passed = bool(primary.iloc[0].get("evidence_passed", False))
+    if observed_passed is not expected_passed:
+        return False
+    observed_manifest_hash = str(primary.iloc[0].get("manifest_hash", "") or "")
+    return not expected_manifest_hash or observed_manifest_hash == expected_manifest_hash
+
+
+def _restore_recorded_future_oos_artifacts(
+    report_path: Path,
+    *,
+    primary_id: str,
+    recorded_status: str,
+    expected_manifest_hash: str,
+) -> Path | None:
+    """Restore a verified immutable outcome into a new historical-research report.
+
+    A new model-research run has a new report directory, while the completed
+    Future-OOS outcome belongs to the frozen candidate and must never be scored
+    again. Search sibling experiment reports for a complete, matching artifact
+    family and copy it forward only after candidate, decision, and manifest-hash
+    verification. The evaluation JSON is copied last so an interrupted copy
+    cannot masquerade as a complete restoration.
+    """
+
+    evaluation_path = report_path / "future_oos_evaluation.json"
+    if evaluation_path.exists() and evaluation_path.stat().st_size > 0:
+        return None
+    parent = report_path.parent
+    if not parent.exists():
+        return None
+    candidates = sorted(
+        (
+            path
+            for path in parent.iterdir()
+            if path.is_dir() and path.resolve() != report_path.resolve()
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for source in candidates:
+        source_evaluation = source / "future_oos_evaluation.json"
+        if not source_evaluation.exists() or not _recorded_evaluation_matches(
+            source_evaluation,
+            primary_id=primary_id,
+            recorded_status=recorded_status,
+            expected_manifest_hash=expected_manifest_hash,
+        ):
+            continue
+        if any(not (source / name).is_file() for name in _IMMUTABLE_FUTURE_OOS_ARTIFACTS):
+            continue
+        report_path.mkdir(parents=True, exist_ok=True)
+        for name in _IMMUTABLE_FUTURE_OOS_ARTIFACTS:
+            if name == "future_oos_evaluation.json":
+                continue
+            shutil.copy2(source / name, report_path / name)
+        shutil.copy2(source_evaluation, evaluation_path)
+        return source
+    return None
 
 
 def _moving_block_sample_indices(
@@ -393,11 +489,19 @@ def evaluate_future_oos(
     recorded_completed = "failed" in recorded_status or "passed" in recorded_status
     if recorded_completed:
         evaluation_path = report_path / "future_oos_evaluation.json"
+        expected_manifest_hash = str(recorded_outcome.get("manifest_hash", "") or "")
+        restored_from = _restore_recorded_future_oos_artifacts(
+            report_path,
+            primary_id=primary_id,
+            recorded_status=recorded_status,
+            expected_manifest_hash=expected_manifest_hash,
+        )
         if not evaluation_path.exists() or evaluation_path.stat().st_size == 0:
             raise RuntimeError(
                 "Immutable Future-OOS outcome is recorded in config but its evaluation "
-                "artifact is missing. Restore the original report bundle; refusing to "
-                "rescore an expanded window."
+                "artifact is missing and no complete verified sibling report could be "
+                "restored. Restore the original report bundle; refusing to rescore an "
+                "expanded window."
             )
         recorded_payload = json.loads(evaluation_path.read_text(encoding="utf-8"))
         recorded_rows = recorded_payload.get("rows", []) or []
@@ -422,7 +526,6 @@ def evaluate_future_oos(
                 "Immutable Future-OOS outcome disagrees with its evaluation artifact; "
                 "refusing to rescore."
             )
-        expected_manifest_hash = str(recorded_outcome.get("manifest_hash", "") or "")
         observed_manifest_hash = str(primary.iloc[0].get("manifest_hash", "") or "")
         if expected_manifest_hash and observed_manifest_hash != expected_manifest_hash:
             raise RuntimeError(
@@ -445,6 +548,10 @@ def evaluate_future_oos(
                 "fit_operations_performed": 0,
                 "rescore_operations_performed": 0,
                 "evaluation_reused_from_recorded_outcome": True,
+                "evaluation_artifact_restored": restored_from is not None,
+                "evaluation_artifact_source_run_id": (
+                    restored_from.name if restored_from is not None else report_path.name
+                ),
                 "recorded_outcome_status": recorded_outcome.get("status"),
                 "state_source": "recorded_immutable_future_oos_outcome",
             }
