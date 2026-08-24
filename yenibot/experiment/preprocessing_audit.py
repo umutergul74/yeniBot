@@ -518,11 +518,15 @@ def write_weight_averaging_audit(
                 "enabled",
                 "strategy",
                 "fold_count",
+                "configured_min_snapshots",
                 "min_snapshots_collected",
                 "mean_snapshots_collected",
                 "mean_selected_epoch",
                 "mean_selected_parameter_delta",
                 "all_single_checkpoint_output",
+                "all_min_snapshots_satisfied",
+                "all_selection_after_activation",
+                "contract_passed",
             ]
         )
     else:
@@ -535,10 +539,26 @@ def write_weight_averaging_audit(
             )
         for column in (
             "snapshots_collected",
+            "min_snapshots",
+            "first_eligible_selection_epoch",
             "selected_epoch",
             "selected_mean_abs_parameter_delta",
         ):
             working[column] = pd.to_numeric(working[column], errors="coerce")
+        working["min_snapshots_satisfied"] = (
+            ~working["enabled"]
+            | (
+                working["snapshots_collected"]
+                >= working["min_snapshots"]
+            )
+        )
+        working["selection_after_activation"] = (
+            ~working["enabled"]
+            | (
+                working["selected_epoch"]
+                >= working["first_eligible_selection_epoch"]
+            )
+        )
         summary = (
             working.groupby(
                 ["profile", "fold_scope", "enabled", "strategy"],
@@ -547,6 +567,7 @@ def write_weight_averaging_audit(
             )
             .agg(
                 fold_count=("fold", "nunique"),
+                configured_min_snapshots=("min_snapshots", "max"),
                 min_snapshots_collected=("snapshots_collected", "min"),
                 mean_snapshots_collected=("snapshots_collected", "mean"),
                 mean_selected_epoch=("selected_epoch", "mean"),
@@ -555,8 +576,15 @@ def write_weight_averaging_audit(
                     "mean",
                 ),
                 all_single_checkpoint_output=("single_checkpoint_output", "all"),
+                all_min_snapshots_satisfied=("min_snapshots_satisfied", "all"),
+                all_selection_after_activation=("selection_after_activation", "all"),
             )
             .reset_index()
+        )
+        summary["contract_passed"] = (
+            summary["all_single_checkpoint_output"]
+            & summary["all_min_snapshots_satisfied"]
+            & summary["all_selection_after_activation"]
         )
     summary.to_csv(target / "weight_averaging_audit_summary.csv", index=False)
     summary.to_json(

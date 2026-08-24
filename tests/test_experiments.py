@@ -3233,7 +3233,20 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["candidate_profiles"] == [
+        "baseline_stable_trajectory_swa_v1"
+    ]
+    trajectory = config["features"]["profiles"][
+        "baseline_stable_trajectory_swa_v1"
+    ]
+    assert trajectory["inherit"] == config["experiments"]["control_profile"]
+    assert trajectory["config_overrides"]["training"]["weight_averaging"] == {
+        "enabled": True,
+        "strategy": "swa",
+        "start_epoch": 10,
+        "update_interval_epochs": 1,
+        "min_snapshots": 3,
+    }
     multitask = config["features"]["profiles"][
         "baseline_stable_multitask_return_head_conflict_projected"
     ]
@@ -3413,13 +3426,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "validation_adaptive_ensemble_completed_no_promotion"
+        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "historical_validation_adaptive_ensemble_failed"
+        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
     )
     assert config["experiments"]["next_research_cycle"]["next_action"] == (
-        "archive_failed_adaptive_ensemble_and_design_distinct_mechanism"
+        "run_notebook_04_then_notebook_05_once"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
@@ -3435,6 +3448,18 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert adaptive["policy"]["select_top_k"] == 3
     assert adaptive["policy"]["selector_rows"] == 720
     assert adaptive["policy"]["purge_rows"] == 24
+    trajectory_cycle = config["experiments"]["next_research_cycle"][
+        "trajectory_weight_averaging"
+    ]
+    assert trajectory_cycle["enabled"] is True
+    assert trajectory_cycle["preregistered"] is True
+    assert trajectory_cycle["hypothesis_id"] == "trajectory_swa_v1"
+    assert trajectory_cycle["candidate_profile"] == (
+        "baseline_stable_trajectory_swa_v1"
+    )
+    assert len(trajectory_cycle["preregistration_commit"]) == 40
+    assert trajectory_cycle["comparison"]["parameter_search_allowed"] is False
+    assert trajectory_cycle["comparison"]["automatic_freeze_allowed"] is False
     clip_profile = config["features"]["profiles"]["baseline_stable_train_clip_4h_large_trade"]
     mask_profile = config["features"]["profiles"]["baseline_stable_train_reliability_mask_4h_flow"]
     combo_profile = config["features"]["profiles"]["baseline_stable_train_clip_and_reliability_mask"]

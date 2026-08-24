@@ -258,3 +258,6 @@ def test_weight_averaging_audit_collects_activation_evidence(tmp_path) -> None:
     )
     assert summary.iloc[0]["min_snapshots_collected"] == 8
     assert bool(summary.iloc[0]["all_single_checkpoint_output"])
+    assert bool(summary.iloc[0]["all_min_snapshots_satisfied"])
+    assert bool(summary.iloc[0]["all_selection_after_activation"])
+    assert bool(summary.iloc[0]["contract_passed"])

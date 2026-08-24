@@ -2530,7 +2530,7 @@ experiments:
     trajectory_weight_averaging:
       enabled: true
       preregistered: true
-      preregistration_commit: null
+      preregistration_commit: fccb81783c8ed2eacc4be6634c55a0c54efb670a
       status: awaiting_historical_triage
       hypothesis_id: trajectory_swa_v1
       candidate_profile: baseline_stable_trajectory_swa_v1

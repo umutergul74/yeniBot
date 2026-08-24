@@ -32,7 +32,6 @@ from yenibot.training.sample_weights import build_sample_weights
 from yenibot.training.walk_forward import FoldIndices, PurgedWalkForwardCV
 from yenibot.training.weight_averaging import (
     TrajectoryWeightAverager,
-    clone_model_with_state,
     validate_weight_averaging_horizon,
     weight_averaging_settings,
 )

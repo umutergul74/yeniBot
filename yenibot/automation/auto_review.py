@@ -196,6 +196,7 @@ def _missing_required_files(
     report_dir: Path,
     *,
     future_oos_evaluated: bool = False,
+    weight_averaging_evaluated: bool = False,
 ) -> list[str]:
     required = [
         "profile_comparison.csv",
@@ -209,8 +210,6 @@ def _missing_required_files(
         "auxiliary_task_audit_summary.csv",
         "multitask_gradient_audit.csv",
         "multitask_gradient_audit_summary.csv",
-        "weight_averaging_audit.csv",
-        "weight_averaging_audit_summary.csv",
         "phase1_blocker_root_cause.csv",
         "threshold_oracle_gap.csv",
         "threshold_score_quantile_review.csv",
@@ -254,6 +253,13 @@ def _missing_required_files(
         "classification_quality.png",
         "score_band_payoff.png",
     ]
+    if weight_averaging_evaluated:
+        required.extend(
+            [
+                "weight_averaging_audit.csv",
+                "weight_averaging_audit_summary.csv",
+            ]
+        )
     if future_oos_evaluated:
         required.extend(
             [
@@ -1232,6 +1238,14 @@ def review_experiment_report(report_dir: str | Path) -> dict[str, Any]:
         report_path,
         future_oos_evaluated=bool(
             future_oos_readiness.get("evaluation_completed", False)
+        ),
+        weight_averaging_evaluated=(
+            not comparison.empty
+            and "profile" in comparison.columns
+            and comparison["profile"]
+            .astype(str)
+            .str.contains("trajectory_swa", regex=False)
+            .any()
         ),
     )
     missing_profiles = _selected_missing_profiles(report_path)

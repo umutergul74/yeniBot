@@ -721,6 +721,27 @@ def test_auto_review_waits_for_future_oos_when_no_cv_candidate(tmp_path) -> None
     assert "do_not_start_phase2_backtest" in review["phase1_transition_plan"]["blocked_actions"]
 
 
+def test_auto_review_requires_weight_averaging_audit_for_trajectory_swa(
+    tmp_path,
+) -> None:
+    _write_minimal_report(tmp_path)
+    comparison_path = tmp_path / "profile_comparison.csv"
+    comparison = pd.read_csv(comparison_path)
+    comparison.loc[
+        comparison["profile"].eq("candidate_profile"), "profile"
+    ] = "baseline_stable_trajectory_swa_v1"
+    comparison.to_csv(comparison_path, index=False)
+
+    review = review_experiment_report(tmp_path)
+
+    assert "weight_averaging_audit.csv" in review["report_completeness"][
+        "missing_required_files"
+    ]
+    assert "weight_averaging_audit_summary.csv" in review["report_completeness"][
+        "missing_required_files"
+    ]
+
+
 def test_auto_review_uses_guarded_f1_when_selected_threshold_is_too_broad(tmp_path) -> None:
     _write_minimal_report(tmp_path)
     comparison = pd.read_csv(tmp_path / "profile_comparison.csv")
