@@ -80,6 +80,7 @@ class FoldExecutionCache:
             "completed_trade_compounded_return": compounded,
             "max_drawdown": max_drawdown,
             "trade_count": int(values.size),
+            "mean_net_return": float(values.mean()) if values.size else 0.0,
             "selected_signal_count": selected_count,
             "profit_factor": profit_factor,
             "hit_rate": hit_rate,
