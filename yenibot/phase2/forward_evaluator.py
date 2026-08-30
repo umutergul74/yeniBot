@@ -365,6 +365,14 @@ def evaluate_complete_shadow_block(
         "candidate_id": checked["candidate_id"],
         "block_id": checked["block"]["block_id"],
         "block_ordinal": int(checked["block"]["ordinal"]),
+        "context_start_inclusive": checked["block"]["context_start_inclusive"],
+        "context_end_inclusive": (
+            _utc(checked["block"]["context_start_inclusive"])
+            + pd.Timedelta(hours=int(checked["block"]["context_block_hours"]) - 1)
+        ).isoformat(),
+        "context_block_hours": int(checked["block"]["context_block_hours"]),
+        "evidence_start_inclusive": checked["block"]["evidence_start_inclusive"],
+        "evidence_end_inclusive": checked["block"]["evidence_end_inclusive"],
         "manifest_hash": checked["manifest_hash"],
         "registration_hash": registration["registration_hash"],
         "preflight": preflight,
@@ -390,3 +398,240 @@ def evaluate_complete_shadow_block(
         "live_trading_allowed": False,
     }
     return ForwardBlockEvaluation(report, trades, equity, opportunities)
+
+
+def moving_block_rank_ic_interval(
+    block_frames: list[pd.DataFrame],
+    *,
+    block_hours: int,
+    replicates: int,
+    seed: int,
+) -> dict[str, float]:
+    """Resample within evidence blocks, never across their 63-hour burn-in gaps."""
+
+    arrays = []
+    for frame in block_frames:
+        required = ["score_percentile", "adverse_opportunity_net_return"]
+        if any(column not in frame for column in required):
+            raise ValueError("Rank-IC bootstrap frame is incomplete")
+        values = frame[required].apply(pd.to_numeric, errors="coerce").to_numpy()
+        values = values[np.isfinite(values).all(axis=1)]
+        if len(values) < block_hours:
+            raise ValueError("Rank-IC block length exceeds a mature evidence block")
+        arrays.append(values)
+    if not arrays or replicates < 100 or block_hours <= 0:
+        raise ValueError("Invalid moving-block Rank-IC bootstrap inputs")
+    actual_values = np.concatenate(arrays)
+    actual = rank_ic(actual_values[:, 0], actual_values[:, 1])
+    rng = np.random.default_rng(seed)
+    offsets = np.arange(block_hours)
+    draws = np.empty(replicates)
+    for replicate in range(replicates):
+        sampled = []
+        for values in arrays:
+            count = int(np.ceil(len(values) / block_hours))
+            starts = rng.integers(0, len(values), size=count)
+            indices = (
+                (starts[:, None] + offsets) % len(values)
+            ).ravel()[: len(values)]
+            sampled.append(values[indices])
+        combined = np.concatenate(sampled)
+        draws[replicate] = rank_ic(combined[:, 0], combined[:, 1])
+    if not np.isfinite(draws).all() or not np.isfinite(actual):
+        raise ValueError("Rank-IC bootstrap produced a degenerate statistic")
+    return {
+        "actual_rank_ic": float(actual),
+        "lower95": float(np.quantile(draws, 0.025)),
+        "upper95": float(np.quantile(draws, 0.975)),
+    }
+
+
+def _aggregate_policy(reports: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    rows = [report["policies"][key] for report in reports]
+    block_returns = np.asarray(
+        [row["compounded_return"] for row in rows], dtype=float
+    )
+    wins = float(sum(row["winning_return_sum"] for row in rows))
+    losses = float(sum(row["losing_return_abs_sum"] for row in rows))
+    occupied = float(sum(row["occupied_hours"] for row in rows))
+    net = float(sum(row["net_return_sum"] for row in rows))
+    return {
+        "block_returns": block_returns.tolist(),
+        "compounded_return": float(np.prod(1.0 + block_returns) - 1.0),
+        "profit_factor": float(wins / losses) if losses > 0 else None,
+        "trade_count": int(sum(row["trade_count"] for row in rows)),
+        "occupied_hours": occupied,
+        "net_bps_per_occupied_hour": (
+            net * 10_000.0 / occupied if occupied > 0 else None
+        ),
+        "all_data_contracts_complete": all(
+            row["data_contract_complete"] for row in rows
+        ),
+        "all_positions_mature": all(row["censored_position_count"] == 0 for row in rows),
+    }
+
+
+def concatenated_marked_drawdown(equity_frames: list[pd.DataFrame]) -> float:
+    scale = 1.0
+    path = []
+    for frame in equity_frames:
+        if "equity" not in frame or frame.empty:
+            raise ValueError("Marked equity path is missing")
+        values = pd.to_numeric(frame.equity, errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(values).all() or (values <= 0).any():
+            raise ValueError("Marked equity path is invalid")
+        path.extend((scale * values).tolist())
+        scale *= float(values[-1])
+    values = np.asarray(path)
+    peaks = np.maximum.accumulate(np.maximum(values, 1.0))
+    return float(np.min(values / peaks - 1.0))
+
+
+def evaluate_forward_confirmation(
+    block_reports: list[dict[str, Any]],
+    opportunity_frames: list[pd.DataFrame],
+    candidate_adverse_equity: list[pd.DataFrame],
+    *,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply the fixed conjunctive gate; fewer than 12 blocks are monitoring only."""
+
+    if not block_reports or len(block_reports) != len(opportunity_frames):
+        raise ValueError("Confirmation needs aligned block reports and opportunities")
+    reports = sorted(block_reports, key=lambda row: int(row["block_ordinal"]))
+    if len(candidate_adverse_equity) != len(reports):
+        raise ValueError("Confirmation needs one adverse marked equity path per block")
+    ordinals = [int(report["block_ordinal"]) for report in reports]
+    if ordinals != list(range(ordinals[0], ordinals[0] + len(ordinals))):
+        raise ValueError("Forward confirmation blocks must be ordinal-contiguous")
+    if any(
+        report.get("status") != "complete_forward_shadow_block_evaluated"
+        or not report.get("preflight", {}).get(
+            "ready_for_complete_block_evaluation", False
+        )
+        for report in reports
+    ):
+        raise ValueError("Only complete, integrity-passed blocks enter confirmation")
+    for previous, current in zip(reports, reports[1:]):
+        expected = _utc(previous["context_end_inclusive"]) + pd.Timedelta(hours=1)
+        if _utc(current["context_start_inclusive"]) != expected:
+            raise ValueError("Forward context blocks are not chronologically contiguous")
+    confirmation = spec.get("confirmation", {}) or {}
+    block_count = len(reports)
+    coverage_days = sum(int(row["context_block_hours"]) for row in reports) / 24.0
+    policies = {
+        key: _aggregate_policy(reports, key)
+        for key in (
+            "candidate_base",
+            "candidate_adverse",
+            "atr_only_base",
+            "atr_only_adverse",
+        )
+    }
+    seed = int(confirmation["bootstrap_seed"])
+    replicates = int(confirmation["paired_bootstrap_replicates"])
+    paired = {}
+    for scenario in ("base", "adverse"):
+        differences = np.asarray(
+            [
+                report["candidate_minus_atr_block_return"][scenario]
+                for report in reports
+            ],
+            dtype=float,
+        )
+        paired[scenario] = {
+            str(length): circular_block_mean_interval(
+                differences,
+                block_length=int(length),
+                replicates=replicates,
+                seed=seed,
+            )
+            for length in confirmation["paired_bootstrap_block_lengths"]
+            if int(length) <= len(differences)
+        }
+    rank_intervals = {
+        str(length): moving_block_rank_ic_interval(
+            opportunity_frames,
+            block_hours=int(length),
+            replicates=replicates,
+            seed=seed,
+        )
+        for length in confirmation["rank_ic_bootstrap_block_hours"]
+    }
+    drawdown = concatenated_marked_drawdown(candidate_adverse_equity)
+    candidate_adverse = policies["candidate_adverse"]
+    gates = {
+        "minimum_blocks": block_count >= int(confirmation["minimum_blocks"]),
+        "minimum_coverage_days": coverage_days
+        >= float(confirmation["minimum_coverage_days"]),
+        "minimum_completed_candidate_trades": candidate_adverse["trade_count"]
+        >= int(confirmation["minimum_completed_candidate_trades"]),
+        "candidate_base_return_positive": policies["candidate_base"][
+            "compounded_return"
+        ]
+        > 0,
+        "candidate_adverse_return_positive": candidate_adverse["compounded_return"]
+        > 0,
+        "candidate_base_profit_factor_at_least_1_10": (
+            policies["candidate_base"]["profit_factor"] is not None
+            and policies["candidate_base"]["profit_factor"] >= 1.10
+        ),
+        "candidate_adverse_profit_factor_at_least_1_05": (
+            candidate_adverse["profit_factor"] is not None
+            and candidate_adverse["profit_factor"] >= 1.05
+        ),
+        "candidate_adverse_positive_block_fraction_at_least_two_thirds": float(
+            np.mean(np.asarray(candidate_adverse["block_returns"]) > 0)
+        )
+        >= 2.0 / 3.0,
+        "candidate_minus_atr_base_paired_block_lower95_positive": bool(
+            paired["base"]
+            and all(row["lower95"] > 0 for row in paired["base"].values())
+        ),
+        "candidate_minus_atr_adverse_paired_block_lower95_positive": bool(
+            paired["adverse"]
+            and all(row["lower95"] > 0 for row in paired["adverse"].values())
+        ),
+        "candidate_score_payoff_rank_ic_moving_block_lower95_positive": all(
+            row["lower95"] > 0 for row in rank_intervals.values()
+        ),
+        "candidate_adverse_net_bps_per_occupied_hour_not_below_atr_control": (
+            candidate_adverse["net_bps_per_occupied_hour"] is not None
+            and policies["atr_only_adverse"]["net_bps_per_occupied_hour"] is not None
+            and candidate_adverse["net_bps_per_occupied_hour"]
+            >= policies["atr_only_adverse"]["net_bps_per_occupied_hour"]
+        ),
+        "hourly_marked_drawdown_not_worse_than_minus_15_percent": drawdown >= -0.15,
+        "all_integrity_and_common_cohort_checks_pass": all(
+            policy["all_data_contracts_complete"]
+            and policy["all_positions_mature"]
+            for policy in policies.values()
+        ),
+    }
+    minimum_reached = (
+        gates["minimum_blocks"]
+        and gates["minimum_coverage_days"]
+        and gates["minimum_completed_candidate_trades"]
+    )
+    passed = minimum_reached and all(gates.values())
+    if not minimum_reached:
+        status = "monitoring_only_minimum_confirmation_horizon_not_reached"
+    elif passed:
+        status = "forward_confirmation_passed_review_required"
+    else:
+        status = "forward_confirmation_failed_candidate_process_retired"
+    return {
+        "status": status,
+        "block_count": block_count,
+        "coverage_days": coverage_days,
+        "interim_look": block_count in set(confirmation["interim_looks_blocks"]),
+        "interim_success_allowed": False,
+        "policies": policies,
+        "paired_candidate_minus_atr_intervals": paired,
+        "score_payoff_rank_ic_intervals": rank_intervals,
+        "candidate_adverse_concatenated_hourly_marked_drawdown": drawdown,
+        "gates": gates,
+        "all_required_gates_passed": passed,
+        "automatic_promotion_allowed": False,
+        "live_trading_allowed": False,
+    }

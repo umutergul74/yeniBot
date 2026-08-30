@@ -9,7 +9,9 @@ import pytest
 
 from yenibot.phase2.forward_evaluator import (
     circular_block_mean_interval,
+    evaluate_forward_confirmation,
     evaluate_complete_shadow_block,
+    moving_block_rank_ic_interval,
     rank_ic,
     shadow_block_preflight,
 )
@@ -166,3 +168,107 @@ def test_rank_ic_and_circular_block_interval_are_deterministic():
     )
     assert first == second
     assert first["lower95"] <= first["actual_mean"] <= first["upper95"]
+
+
+def _confirmation_inputs(blocks=3):
+    reports = []
+    opportunities = []
+    equity = []
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    for ordinal in range(blocks):
+        context_start = start + pd.Timedelta(hours=4 * ordinal)
+        policy = {
+            "trade_count": 40,
+            "compounded_return": 0.02,
+            "completed_trade_compounded_return": 0.02,
+            "profit_factor": 2.0,
+            "max_hourly_marked_drawdown": -0.01,
+            "net_return_sum": 0.02,
+            "winning_return_sum": 0.04,
+            "losing_return_abs_sum": 0.02,
+            "occupied_hours": 10.0,
+            "net_bps_per_occupied_hour": 20.0,
+            "data_contract_complete": True,
+            "censored_position_count": 0,
+        }
+        control = {
+            **policy,
+            "compounded_return": 0.005,
+            "completed_trade_compounded_return": 0.005,
+            "net_return_sum": 0.005,
+            "winning_return_sum": 0.015,
+            "losing_return_abs_sum": 0.01,
+            "occupied_hours": 10.0,
+            "net_bps_per_occupied_hour": 5.0,
+        }
+        reports.append(
+            {
+                "status": "complete_forward_shadow_block_evaluated",
+                "block_ordinal": ordinal,
+                "context_start_inclusive": context_start.isoformat(),
+                "context_end_inclusive": (
+                    context_start + pd.Timedelta(hours=3)
+                ).isoformat(),
+                "context_block_hours": 4,
+                "preflight": {"ready_for_complete_block_evaluation": True},
+                "policies": {
+                    "candidate_base": policy,
+                    "candidate_adverse": policy,
+                    "atr_only_base": control,
+                    "atr_only_adverse": control,
+                },
+                "candidate_minus_atr_block_return": {
+                    "base": 0.015,
+                    "adverse": 0.015,
+                },
+            }
+        )
+        scores = np.linspace(0, 1, 20)
+        opportunities.append(
+            pd.DataFrame(
+                {
+                    "score_percentile": scores,
+                    "adverse_opportunity_net_return": scores * 0.01,
+                }
+            )
+        )
+        equity.append(pd.DataFrame({"equity": np.linspace(1.0, 1.02, 20)}))
+    return reports, opportunities, equity
+
+
+def test_confirmation_gate_is_conjunctive_and_has_no_early_success():
+    reports, opportunities, equity = _confirmation_inputs()
+    spec = {
+        "confirmation": {
+            "bootstrap_seed": 7,
+            "paired_bootstrap_replicates": 200,
+            "paired_bootstrap_block_lengths": [2, 3],
+            "rank_ic_bootstrap_block_hours": [4, 8],
+            "minimum_blocks": 3,
+            "minimum_coverage_days": 0.5,
+            "minimum_completed_candidate_trades": 100,
+            "interim_looks_blocks": [1, 2],
+        }
+    }
+    passed = evaluate_forward_confirmation(
+        reports, opportunities, equity, spec=spec
+    )
+    assert passed["status"] == "forward_confirmation_passed_review_required"
+    assert passed["all_required_gates_passed"] is True
+    assert passed["automatic_promotion_allowed"] is False
+    early = evaluate_forward_confirmation(
+        reports[:2], opportunities[:2], equity[:2], spec=spec
+    )
+    assert early["status"] == (
+        "monitoring_only_minimum_confirmation_horizon_not_reached"
+    )
+    assert early["all_required_gates_passed"] is False
+
+
+def test_moving_rank_interval_preserves_block_boundaries():
+    _, frames, _ = _confirmation_inputs(blocks=2)
+    interval = moving_block_rank_ic_interval(
+        frames, block_hours=4, replicates=200, seed=9
+    )
+    assert interval["actual_rank_ic"] == pytest.approx(1.0)
+    assert interval["lower95"] == pytest.approx(1.0)

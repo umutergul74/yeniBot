@@ -80,6 +80,9 @@ count as timely confirmation evidence.
 `yenibot.automation.phase2_forward_shadow_evaluate` stays read-only with respect
 to model/policy state and refuses a complete-block result unless all 657 rows
 were timely and the next ten hourly outcome bars are contiguous and mature.
+`yenibot.automation.phase2_forward_shadow_confirm` then verifies every block
+report artifact and applies the single conjunctive 12-block gate. Interim reports
+can monitor progress but the code never emits an early success or live approval.
 
 ## Decision horizon and gates
 
