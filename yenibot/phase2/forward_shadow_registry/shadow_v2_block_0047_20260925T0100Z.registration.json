@@ -1,0 +1,14 @@
+{
+  "block_id": "shadow_v2_block_0047_20260925T0100Z",
+  "candidate_id": "block_prequential_forward_shadow_v2::shadow_v2_block_0047_20260925T0100Z",
+  "git_branch": "codex/phase1-research-v2",
+  "git_remote": "origin",
+  "manifest_git_commit": "92724375a281e4bc0ddbe278b1c651025bcb2158",
+  "manifest_hash": "ad8c770094fc5dfe50c04b0dba22141454645855a7a2f5dbe514577b366469b6",
+  "manifest_registry_path": "yenibot/phase2/forward_shadow_registry/shadow_v2_block_0047_20260925T0100Z.json",
+  "process_id": "block_prequential_forward_shadow_v2",
+  "registered_at_utc": "2026-08-30T20:16:08.054650+00:00",
+  "registration_hash": "1eb173c446373fd6ead8b3da79a2c461c7feed8b1cb9958eb792928cf063e31c",
+  "registration_version": "forward_shadow_registration_v2",
+  "remote_commit_verified": true
+}

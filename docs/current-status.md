@@ -226,6 +226,18 @@ started. The next operator action is exactly one GPU `prepare` run of
 candidate. Codex must then copy the exact manifest into Git, push it, and create
 the Drive registration before `score` is allowed.
 
+That operator step completed on August 30. Block 47 is now sealed and
+registered: manifest `ad8c770094fc5dfe50c04b0dba22141454645855a7a2f5dbe514577b366469b6`,
+manifest commit `92724375a281e4bc0ddbe278b1c651025bcb2158`, and registration
+`1eb173c446373fd6ead8b3da79a2c461c7feed8b1cb9958eb792928cf063e31c`.
+All four deployment artifact hashes and exact label-free parity passed. The
+720-hour context starts `2026-09-25 01:00 UTC`; its first 63 hours are burn-in,
+and the 657-hour evidence clock starts `2026-09-27 16:00 UTC` and ends
+`2026-10-25 00:00 UTC`. Before evidence starts, `score` correctly has no row to
+record. From the evidence start onward, Notebook 08 `score` must run shortly
+after each hourly close; any missed/late hour is permanently marked replay and
+prevents that block from being called a complete timely confirmation block.
+
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.
 
