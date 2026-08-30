@@ -16,10 +16,13 @@ from yenibot.phase2.forward_shadow import (
     build_shadow_scores,
     canonical_shadow_manifest_hash,
     empirical_cdf_right,
+    fit_initial_shadow_payoff,
     load_shadow_manifest,
+    plan_shadow_block,
     predict_label_free_model,
     read_shadow_ledger,
     seal_shadow_manifest,
+    select_shadow_training_window,
     validate_shadow_manifest,
 )
 from yenibot.training.dataset import SequenceDataset
@@ -66,6 +69,10 @@ def _manifest(tmp_path: Path):
                 "block_id": "block_046",
                 "ordinal": 46,
                 "locked_at_utc": "2026-08-30T00:30:00Z",
+                "context_block_hours": 657,
+                "sequence_burn_in_hours": 0,
+                "evidence_hours": 657,
+                "context_start_inclusive": "2026-08-30T02:00:00Z",
                 "evidence_start_inclusive": "2026-08-30T02:00:00Z",
                 "evidence_end_inclusive": "2026-09-26T10:00:00Z",
             },
@@ -100,6 +107,93 @@ def _raw_rows():
             "forward_return": [-99.0, 99.0, -99.0, 99.0],
         }
     )
+
+
+def _spec():
+    return {
+        "source_evidence": {
+            "historical_confirmation_cutoff": "2025-12-31T00:00:00Z"
+        },
+        "model_schedule": {
+            "block_hours": 720,
+            "evidence_hours_per_block": 657,
+            "sequence_burn_in_hours_per_block": 63,
+            "train_bars": 10,
+            "purge_bars": 2,
+            "validation_bars": 5,
+            "embargo_bars": 1,
+            "post_fit_audit_bars": 3,
+            "minimum_registration_lead_hours": 72,
+            "block_ordinal_anchor": "2022-11-15T01:00:00Z",
+        },
+        "payoff_layer": {"ridge_alpha": 10.0, "minimum_fit_rows": 1000},
+    }
+
+
+def test_block_plan_is_grid_aligned_and_preserves_burn_in():
+    spec = _spec()
+    block = plan_shadow_block(spec, prepared_at="2026-08-30T05:15:00Z")
+    anchor = pd.Timestamp(spec["model_schedule"]["block_ordinal_anchor"])
+    context = pd.Timestamp(block["context_start_inclusive"])
+    evidence = pd.Timestamp(block["evidence_start_inclusive"])
+    end = pd.Timestamp(block["evidence_end_inclusive"])
+    assert context >= pd.Timestamp("2026-09-02T05:15:00Z")
+    assert context == anchor + pd.Timedelta(hours=720 * block["ordinal"])
+    assert evidence - context == pd.Timedelta(hours=63)
+    assert end - context == pd.Timedelta(hours=719)
+    assert block["block_id"].startswith(
+        f"shadow_v2_block_{block['ordinal']:04d}_"
+    )
+
+
+def test_training_window_is_latest_contiguous_and_has_exact_boundaries():
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=30, freq="h", tz="UTC"),
+            "value": np.arange(30),
+        }
+    )
+    selected, fold = select_shadow_training_window(
+        frame, spec=_spec(), block_ordinal=47
+    )
+    assert len(selected) == 21
+    assert selected.value.tolist() == list(range(9, 30))
+    assert fold.fold == 47
+    assert fold.train.tolist() == list(range(10))
+    assert fold.val.tolist() == list(range(12, 17))
+    assert fold.test.tolist() == [18, 19, 20]
+    broken = frame.copy()
+    broken.loc[20, "timestamp"] += pd.Timedelta(minutes=1)
+    with pytest.raises(ValueError, match="not hourly contiguous"):
+        select_shadow_training_window(broken, spec=_spec(), block_ordinal=47)
+
+
+def test_initial_payoff_fit_uses_only_frozen_mature_oof_rows():
+    rows = 1200
+    decision = pd.date_range("2025-01-01", periods=rows, freq="h", tz="UTC")
+    percentile = np.linspace(0, 1, rows)
+    atr = 0.01 + np.arange(rows) / 1_000_000
+    targets = pd.DataFrame(
+        {
+            "decision_time": decision,
+            "outcome_time_conservative": decision + pd.Timedelta(hours=10),
+            "source_split": "test",
+            "fit_eligible": True,
+            "adverse_net_target": 0.002 * percentile - 0.0005,
+            "frozen_score_percentile": percentile,
+            "decision_atr_close_fraction": atr,
+            "score_atr_product": percentile * atr,
+        }
+    )
+    fitted = fit_initial_shadow_payoff(targets, spec=_spec())
+    assert fitted["candidate_fit"]["fit_rows"] == rows
+    assert fitted["atr_only_fit"]["fit_rows"] == rows
+    assert fitted["source_audit"]["current_or_future_shadow_outcomes_used"] is False
+    assert len(fitted["source_audit"]["training_membership_sha256"]) == 64
+    changed = targets.copy()
+    changed.loc[0, "outcome_time_conservative"] = "2026-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="beyond its frozen cutoff"):
+        fit_initial_shadow_payoff(changed, spec=_spec())
 
 
 def test_manifest_hash_and_artifacts_fail_closed(tmp_path):

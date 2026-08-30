@@ -17,8 +17,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from yenibot.experiment.configuration import profile_config
 from yenibot.phase2.full_oof import file_sha256
-from yenibot.phase2.net_utility import predict_ridge_payoff, utility_to_score
+from yenibot.phase2.net_utility import (
+    fit_ridge_payoff,
+    predict_ridge_payoff,
+    utility_to_score,
+)
 from yenibot.training.trainer import _add_regime_probs, _build_model, _device
+from yenibot.training.walk_forward import FoldIndices
 
 
 SHADOW_PROCESS_ID = "block_prequential_forward_shadow_v2"
@@ -43,6 +48,187 @@ def _canonical_json(value: Any) -> bytes:
         ensure_ascii=True,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def plan_shadow_block(spec: dict[str, Any], *, prepared_at: Any) -> dict[str, Any]:
+    """Choose the first preregistered grid block after the registration lead."""
+
+    schedule = spec.get("model_schedule", {}) or {}
+    block_hours = int(schedule.get("block_hours", 0))
+    burn_in = int(schedule.get("sequence_burn_in_hours_per_block", -1))
+    evidence_hours = int(schedule.get("evidence_hours_per_block", 0))
+    lead_hours = int(schedule.get("minimum_registration_lead_hours", 0))
+    if (
+        block_hours <= 0
+        or burn_in < 0
+        or evidence_hours <= 0
+        or burn_in + evidence_hours != block_hours
+        or lead_hours < 24
+    ):
+        raise ValueError("Invalid forward-shadow block/registration schedule")
+    anchor = _utc(schedule.get("block_ordinal_anchor"))
+    prepared = _utc(prepared_at)
+    not_before = prepared + pd.Timedelta(hours=lead_hours)
+    elapsed_hours = (not_before - anchor) / pd.Timedelta(hours=1)
+    ordinal = max(0, int(np.ceil(float(elapsed_hours) / block_hours)))
+    context_start = anchor + pd.Timedelta(hours=ordinal * block_hours)
+    if context_start < not_before:
+        raise RuntimeError("Forward-shadow block grid calculation failed")
+    evidence_start = context_start + pd.Timedelta(hours=burn_in)
+    evidence_end = evidence_start + pd.Timedelta(hours=evidence_hours - 1)
+    return {
+        "block_id": (
+            f"shadow_v2_block_{ordinal:04d}_"
+            f"{context_start.strftime('%Y%m%dT%H00Z')}"
+        ),
+        "ordinal": ordinal,
+        "planned_at_utc": prepared.isoformat(),
+        "minimum_registration_lead_hours": lead_hours,
+        "context_block_hours": block_hours,
+        "sequence_burn_in_hours": burn_in,
+        "evidence_hours": evidence_hours,
+        "context_start_inclusive": context_start.isoformat(),
+        "evidence_start_inclusive": evidence_start.isoformat(),
+        "evidence_end_inclusive": evidence_end.isoformat(),
+    }
+
+
+def select_shadow_training_window(
+    frame: pd.DataFrame,
+    *,
+    spec: dict[str, Any],
+    block_ordinal: int,
+) -> tuple[pd.DataFrame, FoldIndices]:
+    """Select one latest, contiguous and fixed-size mature deployment window."""
+
+    schedule = spec.get("model_schedule", {}) or {}
+    train_bars = int(schedule.get("train_bars", 0))
+    purge_bars = int(schedule.get("purge_bars", 0))
+    validation_bars = int(schedule.get("validation_bars", 0))
+    embargo_bars = int(schedule.get("embargo_bars", 0))
+    audit_bars = int(schedule.get("post_fit_audit_bars", 0))
+    required_rows = train_bars + purge_bars + validation_bars + embargo_bars + audit_bars
+    if min(train_bars, validation_bars, audit_bars) <= 0 or min(
+        purge_bars, embargo_bars
+    ) < 0:
+        raise ValueError("Invalid forward-shadow training window sizes")
+    if int(block_ordinal) < 0:
+        raise ValueError("Block ordinal must be non-negative")
+    if "timestamp" not in frame or len(frame) < required_rows:
+        raise ValueError(
+            f"Forward-shadow training needs at least {required_rows} labeled rows"
+        )
+    working = frame.copy()
+    working["timestamp"] = pd.to_datetime(
+        working.timestamp, utc=True, errors="raise"
+    )
+    if (
+        working.timestamp.isna().any()
+        or working.timestamp.duplicated().any()
+        or not working.timestamp.is_monotonic_increasing
+    ):
+        raise ValueError("Training timestamps must be unique and ordered")
+    selected = working.iloc[-required_rows:].copy().reset_index(drop=True)
+    if not selected.timestamp.diff().iloc[1:].eq(pd.Timedelta(hours=1)).all():
+        raise ValueError("Selected forward-shadow training window is not hourly contiguous")
+    train_end = train_bars
+    val_start = train_end + purge_bars
+    val_end = val_start + validation_bars
+    audit_start = val_end + embargo_bars
+    fold = FoldIndices(
+        fold=int(block_ordinal),
+        train=np.arange(0, train_end, dtype=int),
+        val=np.arange(val_start, val_end, dtype=int),
+        test=np.arange(audit_start, required_rows, dtype=int),
+    )
+    return selected, fold
+
+
+def fit_initial_shadow_payoff(
+    targets: pd.DataFrame,
+    *,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Fit both locked ridges from the hash-pinned historical OOF cohort only."""
+
+    payoff = spec.get("payoff_layer", {}) or {}
+    source = spec.get("source_evidence", {}) or {}
+    required = [
+        "decision_time",
+        "outcome_time_conservative",
+        "source_split",
+        "fit_eligible",
+        "adverse_net_target",
+        "frozen_score_percentile",
+        "decision_atr_close_fraction",
+        "score_atr_product",
+    ]
+    missing = [column for column in required if column not in targets]
+    if missing:
+        raise ValueError(f"Initial OOF targets are missing columns: {missing}")
+    frame = targets.copy()
+    for column in ("decision_time", "outcome_time_conservative"):
+        frame[column] = pd.to_datetime(frame[column], utc=True, errors="coerce")
+    if frame.decision_time.isna().any() or frame.decision_time.duplicated().any():
+        raise ValueError("Initial OOF decision identity is incomplete or duplicated")
+    if set(frame.source_split.astype(str).unique()) != {"test"}:
+        raise ValueError("Initial payoff history must retain OOF test provenance")
+    if frame.fit_eligible.dtype == bool:
+        eligible = frame.fit_eligible.copy()
+    else:
+        normalized = frame.fit_eligible.astype(str).str.strip().str.lower()
+        if not normalized.isin(["true", "false"]).all():
+            raise ValueError("Initial OOF fit eligibility is invalid")
+        eligible = normalized.eq("true")
+    cutoff = _utc(source.get("historical_confirmation_cutoff"))
+    if frame.loc[eligible, "outcome_time_conservative"].isna().any():
+        raise ValueError("Eligible OOF targets need a mature outcome time")
+    if frame.loc[eligible, "outcome_time_conservative"].gt(cutoff).any():
+        raise ValueError("Initial payoff history extends beyond its frozen cutoff")
+    columns = [
+        "frozen_score_percentile",
+        "decision_atr_close_fraction",
+        "score_atr_product",
+        "adverse_net_target",
+    ]
+    frame[columns] = frame[columns].apply(pd.to_numeric, errors="coerce")
+    valid = eligible & np.isfinite(frame[columns].to_numpy(dtype=float)).all(axis=1)
+    if not valid.equals(eligible):
+        raise ValueError("An eligible OOF payoff row contains a non-finite value")
+    x = frame.loc[
+        valid,
+        [
+            "frozen_score_percentile",
+            "decision_atr_close_fraction",
+            "score_atr_product",
+        ],
+    ].to_numpy(dtype=float)
+    y = frame.loc[valid, "adverse_net_target"].to_numpy(dtype=float)
+    minimum = int(payoff.get("minimum_fit_rows", 1000))
+    if len(y) < max(1000, minimum):
+        raise ValueError("Insufficient frozen OOF history for the payoff layer")
+    atr_x = np.column_stack([np.zeros(len(x)), x[:, 1], np.zeros(len(x))])
+    alpha = float(payoff.get("ridge_alpha", np.nan))
+    membership = frame.loc[
+        valid, ["decision_time", "outcome_time_conservative"]
+    ].copy()
+    membership_hash = hashlib.sha256(
+        membership.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    ).hexdigest()
+    return {
+        "candidate_fit": fit_ridge_payoff(x, y, alpha=alpha),
+        "atr_only_fit": fit_ridge_payoff(atr_x, y, alpha=alpha),
+        "source_audit": {
+            "source_role": "hash_pinned_2022_2025_oof_targets_only",
+            "fit_rows": int(len(y)),
+            "outcome_max_utc": frame.loc[
+                valid, "outcome_time_conservative"
+            ].max().isoformat(),
+            "frozen_cutoff_utc": cutoff.isoformat(),
+            "training_membership_sha256": membership_hash,
+            "current_or_future_shadow_outcomes_used": False,
+        },
+    }
 
 
 def canonical_shadow_manifest_hash(payload: dict[str, Any]) -> str:
@@ -86,16 +272,32 @@ def validate_shadow_manifest(
         "block_id",
         "ordinal",
         "locked_at_utc",
+        "context_block_hours",
+        "sequence_burn_in_hours",
+        "evidence_hours",
+        "context_start_inclusive",
         "evidence_start_inclusive",
         "evidence_end_inclusive",
     )
     if any(key not in block for key in required_block):
         raise ValueError("Forward-shadow block identity is incomplete")
     locked = _utc(block["locked_at_utc"])
+    context_start = _utc(block["context_start_inclusive"])
     start = _utc(block["evidence_start_inclusive"])
     end = _utc(block["evidence_end_inclusive"])
-    if start <= locked or end < start:
-        raise ValueError("Evidence must begin strictly after the manifest lock")
+    context_hours = int(block["context_block_hours"])
+    burn_in = int(block["sequence_burn_in_hours"])
+    evidence_hours = int(block["evidence_hours"])
+    if (
+        context_start <= locked
+        or context_hours <= 0
+        or burn_in < 0
+        or evidence_hours <= 0
+        or burn_in + evidence_hours != context_hours
+        or start != context_start + pd.Timedelta(hours=burn_in)
+        or end != start + pd.Timedelta(hours=evidence_hours - 1)
+    ):
+        raise ValueError("Evidence block timing differs from the sealed schedule")
     if int(block["ordinal"]) < 0:
         raise ValueError("Block ordinal must be non-negative")
     model = payload.get("model", {}) or {}

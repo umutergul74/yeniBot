@@ -28,6 +28,9 @@ semantics. Before a block starts, one model is fitted with:
 - 6 embargo bars;
 - 64 post-fit audit bars used only for prediction parity, never checkpoint
   selection;
+- at least 72 hours between preparation and the aligned 720-hour context block,
+  so the sealed manifest can be reviewed, committed and pushed before any row
+  can acquire confirmation status;
 - the retained feature profile, model, loss, optimizer and deterministic
   `project seed + block ordinal` rule.
 
