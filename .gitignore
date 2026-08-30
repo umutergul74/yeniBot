@@ -1,5 +1,6 @@
 *.json
 !configs/full_oof_attribution_v1.json
+!configs/validation_net_utility_hurdle_v1.json
 cycle_history.csv
 bot_state.json
 regime_online_stats.json

@@ -1,0 +1,23 @@
+{
+  "version": "validation_net_utility_hurdle_v1",
+  "historical_source_spec": "configs/full_oof_attribution_v1.json",
+  "source_profile_unchanged": true,
+  "ridge_alpha": 10.0,
+  "minimum_fit_rows": 200,
+  "features": ["validation_score_percentile", "decision_atr_close_fraction", "score_atr_product"],
+  "target": "adverse_cost_single_opportunity_net_return",
+  "utility_cutoff": 0.0,
+  "utility_cutoff_comparison": "strictly_greater",
+  "score_encoding": "0.5_plus_atan_utility_over_0.001_div_pi_with_strict_zero_guard",
+  "benchmark": "validation_cdf_q80_fixed_atr_v1",
+  "permutations_per_null": 500,
+  "seed": 20260830,
+  "paired_fold_block_lengths": [3, 6],
+  "paired_bootstrap_replicates": 5000,
+  "paired_confidence_level": 0.95,
+  "paired_cost_scenarios": ["base", "adverse"],
+  "paired_gate": "both_block_lengths_lower_CI_above_zero_for_each_cost_scenario",
+  "selection_disclosure": "Single historical probe specified after the fixed-density panel failed, before this candidate was fitted. Historical profile/strategy selection bias remains; this is not independent confirmation.",
+  "promotion_allowed": false,
+  "live_trading_allowed": false
+}

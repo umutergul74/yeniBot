@@ -272,3 +272,26 @@ def test_attribution_rejects_missing_identity(tmp_path, column):
     signals.loc[0, column] = None
     with pytest.raises(ValueError):
         _validate_inputs(bars, signals, contract=DEFAULT_PHASE2_CONTRACT, spec=_spec())
+
+
+def test_attribution_discloses_upstream_fits_and_checks_serial_control(tmp_path):
+    bars, signals = _inputs()
+    result = run_economic_attribution(
+        bars,
+        signals,
+        gate=_gate(tmp_path),
+        contract=DEFAULT_PHASE2_CONTRACT,
+        spec=_spec(),
+        upstream_fit_operations=3,
+        include_serial_control=True,
+    )
+    assert result.report["model_or_strategy_refit_performed"] is True
+    assert result.report["upstream_fit_operations"] == 3
+    assert result.report["fit_operations_during_attribution"] == 0
+    assert len(result.serial_null_trials) == 20
+    assert "beats_serial_shift_null_at_5pct" in result.report["assessment"]["criteria"]
+    assert set(result.trade_ledger.cost_scenario) == {"base", "adverse"}
+    write_economic_attribution(tmp_path / "utility_audit", result)
+    assert (
+        tmp_path / "utility_audit" / "phase2_serial_shift_null_trials.csv"
+    ).is_file()

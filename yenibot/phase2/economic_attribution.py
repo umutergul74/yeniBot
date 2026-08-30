@@ -17,6 +17,7 @@ from yenibot.phase2.engine import run_long_only_backtest
 from yenibot.phase2.execution_cache import assert_cache_matches_reference
 from yenibot.phase2.execution_cache import build_fold_execution_cache
 from yenibot.phase2.readiness import Phase2Gate
+from yenibot.phase2.serial_attribution import circular_shift_scores, run_serial_null
 
 
 ECONOMIC_ATTRIBUTION_VERSION = "phase2_economic_attribution_v1"
@@ -58,6 +59,8 @@ class EconomicAttributionResult:
     null_trials: pd.DataFrame
     score_bands: pd.DataFrame
     fold_outcomes: pd.DataFrame
+    trade_ledger: pd.DataFrame
+    serial_null_trials: pd.DataFrame
 
 
 def _json_ready(value: Any) -> Any:
@@ -444,7 +447,8 @@ def _run_controls(
     contract: Phase2StrategyContract,
     scenarios: tuple[CostScenario, ...],
     spec: EconomicAttributionSpec,
-) -> tuple[dict[str, Any], pd.DataFrame]:
+    include_serial_control: bool = False,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
     rng = np.random.default_rng(spec.seed)
     groups = [
         np.asarray(index, dtype=int)
@@ -532,7 +536,26 @@ def _run_controls(
                     cache.evaluate(control_signals[contract.score_column].to_numpy()),
                     result.summary,
                 )
-    return deterministic_controls, null_frame
+    serial_frame = pd.DataFrame()
+    if include_serial_control:
+        serial_seed = spec.seed + 77111
+        shifted = circular_shift_scores(
+            scores, groups, np.random.default_rng(serial_seed)
+        )
+        serial_signals = signals.copy()
+        serial_signals[contract.score_column] = shifted
+        reference = _run_fold_segmented_backtest(
+            bars,
+            serial_signals,
+            gate=gate,
+            contract=contract,
+            cost_scenario=base_scenario,
+        )
+        assert_cache_matches_reference(cache.evaluate(shifted), reference.summary)
+        serial_frame = run_serial_null(
+            cache, scores, groups, permutations=spec.permutations, seed=serial_seed
+        )
+    return deterministic_controls, null_frame, serial_frame
 
 
 def _score_band_summary(
@@ -624,8 +647,13 @@ def run_economic_attribution(
     spec: EconomicAttributionSpec = EconomicAttributionSpec(),
     scenarios: tuple[CostScenario, ...] | None = None,
     source_metadata: dict[str, Any] | None = None,
+    upstream_fit_operations: int = 0,
+    include_serial_control: bool = False,
 ) -> EconomicAttributionResult:
     """Measure model-ranking contribution without tuning the model or policy."""
+
+    if not isinstance(upstream_fit_operations, int) or upstream_fit_operations < 0:
+        raise ValueError("upstream_fit_operations must be a non-negative integer")
 
     resolved_scenarios = scenarios or (
         next(item for item in contract.cost_scenarios if item.name == "base"),
@@ -655,13 +683,14 @@ def run_economic_attribution(
         actual_results[scenario.name] = actual
         actual_summaries[scenario.name] = _summary_view(actual)
 
-    controls, null_trials = _run_controls(
+    controls, null_trials, serial_trials = _run_controls(
         bar_frame,
         signal_frame,
         gate=gate,
         contract=contract,
         scenarios=resolved_scenarios,
         spec=spec,
+        include_serial_control=include_serial_control,
     )
     base_actual = actual_summaries["base"]
     base_return = float(base_actual["compounded_return"] or 0.0)
@@ -742,6 +771,26 @@ def run_economic_attribution(
         "execution_data_contract_complete": bool(base_actual["data_contract_complete"]),
     }
     diagnostic_gate_passed = all(criteria.values())
+    serial_summary = None
+    if include_serial_control:
+        serial_returns = serial_trials.compounded_return.to_numpy(dtype=float)
+        extreme = (serial_returns >= base_return) | np.isclose(
+            serial_returns, base_return, rtol=1e-12, atol=1e-14
+        )
+        serial_p = float((1 + extreme.sum()) / (len(serial_returns) + 1))
+        serial_summary = {
+            "method": "within_fold_calendar_month_circular_shift",
+            "trials": len(serial_trials),
+            "seed": spec.seed + 77111,
+            "return_median": float(np.median(serial_returns)),
+            "return_ci_95": np.quantile(serial_returns, [0.025, 0.975]).tolist(),
+            "mean_trade_count": float(serial_trials.trade_count.mean()),
+            "one_sided_p_value_actual_not_better_than_null": serial_p,
+            "conservative_both_nulls_p_value": max(permutation_p, serial_p),
+            "limitations": "Preserves cyclic order with a wrap seam; assumes local shift invariance. Turnover is reported, not forced equal. Historical selection bias remains.",
+        }
+        criteria["beats_serial_shift_null_at_5pct"] = serial_p <= 0.05
+        diagnostic_gate_passed = all(criteria.values())
     contract_payload = {
         "attribution_version": ECONOMIC_ATTRIBUTION_VERSION,
         "fold_segmentation": "independent_walk_forward_folds",
@@ -749,6 +798,8 @@ def run_economic_attribution(
         "spec": asdict(spec),
         "scenarios": [asdict(item) for item in resolved_scenarios],
     }
+    if include_serial_control:
+        contract_payload["serial_control_enabled"] = True
     report = {
         "version": ECONOMIC_ATTRIBUTION_VERSION,
         "status": (
@@ -757,7 +808,9 @@ def run_economic_attribution(
             else "retrospective_diagnostic_gate_failed"
         ),
         "evidence_scope": spec.evidence_scope,
-        "model_or_strategy_refit_performed": False,
+        "model_or_strategy_refit_performed": upstream_fit_operations > 0,
+        "upstream_fit_operations": upstream_fit_operations,
+        "fit_operations_during_attribution": 0,
         "automatic_strategy_selection_allowed": False,
         "promotion_allowed": False,
         "live_trading_allowed": False,
@@ -770,6 +823,7 @@ def run_economic_attribution(
         "actual": actual_summaries,
         "deterministic_controls": controls,
         "rank_destroyed_null": null_summary,
+        "serial_shift_null": serial_summary,
         "score_diagnostics": {
             "score_forward_return_rankic": score_return_rankic,
             "top_minus_bottom_forward_return_spread": top_bottom_return_spread,
@@ -795,6 +849,10 @@ def run_economic_attribution(
         null_trials=null_trials,
         score_bands=score_bands,
         fold_outcomes=fold_outcomes,
+        trade_ledger=pd.concat(
+            [result.trades for result in actual_results.values()], ignore_index=True
+        ),
+        serial_null_trials=serial_trials,
     )
 
 
@@ -813,6 +871,13 @@ def write_economic_attribution(
     )
     result.score_bands.to_csv(path / "phase2_score_decile_attribution.csv", index=False)
     result.fold_outcomes.to_csv(path / "phase2_fold_economic_outcomes.csv", index=False)
+    result.trade_ledger.to_csv(
+        path / "phase2_attribution_trade_ledger.csv", index=False
+    )
+    if not result.serial_null_trials.empty:
+        result.serial_null_trials.to_csv(
+            path / "phase2_serial_shift_null_trials.csv", index=False
+        )
     report = result.report
     actual = report["actual"]
     null = report["rank_destroyed_null"]

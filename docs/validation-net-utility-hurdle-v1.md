@@ -1,6 +1,6 @@
 # One next historical probe: validation net-utility hurdle v1
 
-Status: specified before candidate fitting; **not implemented or evaluated yet**.
+Status: implemented; **candidate not fitted/evaluated yet at this code checkpoint**.
 Date: August 30, 2026. This is a bounded historical research contract, not
 permission to deploy and not independent confirmation.
 
@@ -28,6 +28,7 @@ One candidate, one fixed model class, no hyperparameter or exit search:
 
 - Inputs: past-validation score percentile, preceding-bar ATR/price fraction,
   and their product. Include an intercept. No test-derived features/statistics.
+  Price here means the decision bar's known close, NOT the unseen next open.
 - Estimator: ridge regression, fixed `alpha=10`, validation-only standardization
   of the three inputs. A constant input receives scale 1, never fabricated data.
 - Target: the adverse-cost net return of a single potential trade under the
@@ -62,6 +63,15 @@ Require positive paired fold-level mean improvement over the q80 reference,
 with a conservative temporal-block uncertainty assessment. Do not treat hourly
 overlapping labels as independent samples for confidence intervals.
 
+Before any candidate fit, the implementation pinned this assessment to paired
+arithmetic fold-return deltas under BOTH base and adverse costs, moving blocks
+of 3 and 6 adjacent folds, 5,000 resamples, and 95% percentile intervals. Require
+the lower bound to be positive for both block lengths in both cost scenarios.
+This is approximate uncertainty under temporal dependence, not an independent
+test. The fixed machine contract is `configs/validation_net_utility_hurdle_v1.json`.
+The engine-compatible action score is a monotone arctangent encoding of predicted
+utility, NOT probability; exact zero and invalid estimates are forced to abstain.
+
 If it fails, archive the one result. Do not retune alpha, utility cutoff, input
 terms, validation history, exits or costs on these same test results. Any next
 family requires a distinct written mechanism, not a hidden continuation sweep.
@@ -80,5 +90,7 @@ confirmation only. Historical profile/strategy selection bias still remains.
 5. A fresh full-family evaluation is append-only, non-promotable and remains
    separate from the retired candidate's immutable outcome.
 
-No Colab work is required to implement this historical-only probe. First finish
-and checkpoint the full OOF serial-control result; then implement this contract.
+No Colab work is required. The completed full OOF audits remain unchanged. Run
+`yenibot.automation.phase2_net_utility` only with the pinned full-scope cache and
+the verified original q80 report; it records per-fold targets/fits and candidate
+actions before evaluation, and never overwrites an existing output directory.

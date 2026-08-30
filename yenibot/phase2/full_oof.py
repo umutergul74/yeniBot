@@ -89,9 +89,9 @@ def validation_cdf_test_scores(
     return result, audits
 
 
-def build_full_oof_inputs(
+def load_pinned_full_oof_frame(
     scope_dir: str | Path, *, spec: dict[str, Any]
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     scope = Path(scope_dir)
     prediction_path = scope / "predictions_all.parquet"
     manifest_path = scope / "training_manifest.json"
@@ -131,6 +131,14 @@ def build_full_oof_inputs(
         raise ValueError("Source prediction rows differ from training manifest")
     if frame.timestamp.max() > pd.Timestamp(manifest["data_end"]):
         raise ValueError("Predictions exceed source manifest data end")
+    return frame, manifest
+
+
+def build_full_oof_inputs(
+    scope_dir: str | Path, *, spec: dict[str, Any]
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    scope = Path(scope_dir)
+    frame, manifest = load_pinned_full_oof_frame(scope, spec=spec)
     test, fold_audit = validation_cdf_test_scores(frame, spec=spec)
     candidate_id = f"{spec['source_run_id']}_retained_full_oof_validation_cdf_v1"
     bars = test[["timestamp", "open", "high", "low", "close", "atr_14"]].rename(
