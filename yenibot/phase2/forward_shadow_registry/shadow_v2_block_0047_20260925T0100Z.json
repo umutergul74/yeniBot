@@ -1,0 +1,185 @@
+{
+  "artifacts": {
+    "hmm": {
+      "path": "hmm_fold_047.pkl",
+      "sha256": "a042cf80fce1d136dc1da31ffad2eb45e6cff97652d8cfcd375b407e18d21360"
+    },
+    "model": {
+      "path": "model_fold_047.pt",
+      "sha256": "61d72de8e4a1a82b6516ea4a39f78240d5c6187b4a67611b9229fa610dce9612"
+    },
+    "scaler": {
+      "path": "scaler_fold_047.pkl",
+      "sha256": "ebb3b4cd62c29ce1664987e89ca756497ca356611e5c5adadd266dcf882b1067"
+    },
+    "validation_cdf": {
+      "path": "validation_cdf.npy",
+      "sha256": "abdc6438819c2c101539455c9ca7777eadf80b0953c011f96b348f2cbee3489e"
+    }
+  },
+  "block": {
+    "block_id": "shadow_v2_block_0047_20260925T0100Z",
+    "context_block_hours": 720,
+    "context_start_inclusive": "2026-09-25T01:00:00+00:00",
+    "evidence_end_inclusive": "2026-10-25T00:00:00+00:00",
+    "evidence_hours": 657,
+    "evidence_start_inclusive": "2026-09-27T16:00:00+00:00",
+    "locked_at_utc": "2026-08-30T20:11:25.551473+00:00",
+    "minimum_registration_lead_hours": 72,
+    "ordinal": 47,
+    "planned_at_utc": "2026-08-30T20:10:43.414396+00:00",
+    "sequence_burn_in_hours": 63
+  },
+  "candidate_id": "block_prequential_forward_shadow_v2::shadow_v2_block_0047_20260925T0100Z",
+  "contract": {
+    "canonical_spec_sha256": "9e21b37a6608f1a3213c493df89424ddc54198fb60c520149695d4658fa599ba",
+    "config_file_sha256": "2241e880b91ab35f47483ef4970617160893e5033a32cfcd6e4a4c1dd6b6ced0",
+    "git": {
+      "branch": "codex/phase1-research-v2",
+      "commit": "bc8e73e3beae681777223aff40d0e48b0c686917",
+      "tracked_tree_clean": true
+    },
+    "spec_file_sha256": "4f1703cabbc6618388cd6962fb426e4ad53e6e5aabdd861a925061f578486597"
+  },
+  "manifest_hash": "ad8c770094fc5dfe50c04b0dba22141454645855a7a2f5dbe514577b366469b6",
+  "manifest_version": "forward_shadow_block_manifest_v2",
+  "model": {
+    "feature_columns": [
+      "4h_adx_14",
+      "4h_close_denoised_log_return",
+      "4h_large_trade_ratio",
+      "4h_log_return",
+      "4h_taker_buy_ratio_delta",
+      "4h_taker_buy_ratio_zscore",
+      "4h_taker_imbalance",
+      "4h_taker_imbalance_mean_12",
+      "4h_taker_imbalance_mean_24",
+      "4h_taker_imbalance_mean_3",
+      "4h_taker_imbalance_mean_6",
+      "4h_taker_imbalance_slope",
+      "4h_vol_per_trade_log_zscore",
+      "4h_volume_denoised_log_zscore",
+      "4h_volume_log_zscore",
+      "4h_vpt_zscore",
+      "4h_vwap_dist_atr",
+      "4h_whale_buy_flag",
+      "4h_whale_sell_flag",
+      "adx_14",
+      "buy_sell_imbalance_ema",
+      "close_denoised_log_return",
+      "cvd_cumulative_rate_norm",
+      "fut_oi_log_return",
+      "fut_oi_value_log_return",
+      "large_trade_ratio",
+      "log_return",
+      "taker_buy_ratio",
+      "taker_sell_ratio",
+      "true_cvd_delta_norm",
+      "true_cvd_zscore",
+      "vol_per_trade_log_zscore",
+      "volume_denoised_log_zscore",
+      "volume_log_zscore",
+      "vpt_zscore",
+      "vwap_dist_atr",
+      "whale_buy_flag",
+      "whale_sell_flag"
+    ],
+    "feature_columns_sha256": "85dbbb2aad3ac4820e69670d2de7a2a9ceae91fb826f6d9c52c5fb054b15d1b2",
+    "fit_selection_data": "train_and_validation_only",
+    "post_fit_audit_influences_selection": false,
+    "profile": "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+    "seed": 89
+  },
+  "payoff_layer": {
+    "atr_only_fit": {
+      "alpha": 10.0,
+      "center": [
+        0.0,
+        0.006690850462962362,
+        0.0
+      ],
+      "coefficients": [
+        0.0,
+        0.000833537293696779,
+        0.0
+      ],
+      "fit_rows": 24638,
+      "fit_target_mean": -0.0018915404245935584,
+      "intercept": -0.0018915404245935584,
+      "scale": [
+        1.0,
+        0.003398354050694627,
+        1.0
+      ]
+    },
+    "candidate_fit": {
+      "alpha": 10.0,
+      "center": [
+        0.5138807174693895,
+        0.006690850462962349,
+        0.0033480251293987818
+      ],
+      "coefficients": [
+        0.0004936401608114171,
+        0.0006457329317610661,
+        0.0004260323502643581
+      ],
+      "fit_rows": 24638,
+      "fit_target_mean": -0.0018915404245935584,
+      "intercept": -0.0018915404245935584,
+      "scale": [
+        0.2996309201443069,
+        0.0033983540506946426,
+        0.0028262435570779697
+      ]
+    },
+    "source_audit": {
+      "current_or_future_shadow_outcomes_used": false,
+      "fit_rows": 24638,
+      "frozen_cutoff_utc": "2025-12-28T02:00:00+00:00",
+      "outcome_max_utc": "2025-12-26T03:00:00+00:00",
+      "source_role": "hash_pinned_2022_2025_oof_targets_only",
+      "training_membership_sha256": "0128cac5c8bd71d201ed62bb6551c4098891f1488ba2ca0008d1584e02dc39b9"
+    }
+  },
+  "post_fit_parity": {
+    "exact_score_match": true,
+    "exact_timestamp_match": true,
+    "labels_or_returns_required_by_inference": false,
+    "passed": true,
+    "rows": 1
+  },
+  "process_id": "block_prequential_forward_shadow_v2",
+  "registration_status": "sealed_manifest_awaiting_git_registration",
+  "source_evidence": {
+    "conditional_result_sha256": "409c46ebe172007e58708e534885544b73e534fce705f9040c1d7992cf481ee6",
+    "failed_2026_window_evidence_role": "seen_training_history_only_never_confirmation",
+    "historical_confirmation_cutoff": "2025-12-28T02:00:00Z",
+    "initial_oof_targets_sha256": "2d2692c94d1ce656ccc7d31cf3cff08a63c808daa78f0a0f86537d41e3104665",
+    "initial_oof_targets_verified_sha256": "2d2692c94d1ce656ccc7d31cf3cff08a63c808daa78f0a0f86537d41e3104665",
+    "prequential_result_sha256": "41237d1a3298276b60add605c90cc3d4cef5f63bf2716c16e50f95516d560524"
+  },
+  "training_audit": {
+    "post_fit_audit_metrics": {
+      "long_f1": 0.0,
+      "prauc": 0.0,
+      "rank_ic": 0.0
+    },
+    "post_fit_audit_rows": 64,
+    "post_fit_metrics_are_parity_diagnostics_only": true,
+    "selected_end_utc": "2026-08-15T13:00:00+00:00",
+    "selected_membership_sha256": "37fc335e358c2c2fe06241b36564d68d6c95d211ac742e5c8861497ae1773841",
+    "selected_rows": 6214,
+    "selected_start_utc": "2025-11-29T16:00:00+00:00",
+    "source_labeled_sha256": "9ee3c973d0aeeadb07edb6d0ae37df0ad3971ca649915153082b99d8fa6908a0",
+    "train_rows": 5040,
+    "validation_metrics": {
+      "long_f1": 0.39814814814814814,
+      "prauc": 0.42805676395676456,
+      "rank_ic": 0.10104881920794204
+    },
+    "validation_metrics_are_diagnostics_not_selection_changes": true,
+    "validation_prediction_rows": 1017,
+    "validation_rows": 1080
+  }
+}
