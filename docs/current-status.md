@@ -147,10 +147,14 @@ rows were excluded. 2,005 funding mark prices are missing in 2022–2023;
 2026 funding mark prices are complete. No prices were invented to fill them.
 No model was trained or evaluated on the new snapshot.
 
-The next missing input is the retained control's verified full historical OOF
-`predictions_all.parquet`, not additional current market candles. It exists in
-Drive but has not been materialized locally. Do not replace it with the rejected
-August SWA run or with Future-OOS predictions.
+The retained control's full historical OOF `predictions_all.parquet` is now
+materialized locally and SHA-256 verified against the mounted Drive source.
+It contains 24,966 unique test decisions across 38 chronological folds,
+November 2022-December 2025, plus each fold's prior validation scores.
+The bounded full-history attribution audit is in progress; no new success claim
+is justified yet. Its explicit input contract is
+`configs/full_oof_attribution_v1.json`. See
+[full OOF research checkpoint](full-oof-research-checkpoint.md) to resume.
 
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.

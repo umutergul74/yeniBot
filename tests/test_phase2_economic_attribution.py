@@ -11,6 +11,14 @@ from yenibot.phase2.contracts import DEFAULT_PHASE2_CONTRACT
 from yenibot.phase2.economic_attribution import EconomicAttributionSpec
 from yenibot.phase2.economic_attribution import run_economic_attribution
 from yenibot.phase2.economic_attribution import write_economic_attribution
+from yenibot.phase2.economic_attribution import (
+    _run_fold_segmented_backtest,
+    _validate_inputs,
+)
+from yenibot.phase2.execution_cache import (
+    build_fold_execution_cache,
+    assert_cache_matches_reference,
+)
 from yenibot.phase2.readiness import Phase2Gate
 
 
@@ -191,3 +199,76 @@ def test_walk_forward_embargo_gaps_are_segmented_not_traded(tmp_path: Path) -> N
     assert diagnostics["within_fold_bar_gap_count"] == 0
     assert result.report["actual"]["base"]["fold_count"] == 3
     assert result.report["actual"]["base"]["data_contract_complete"] is True
+
+
+@pytest.mark.parametrize(
+    "case", ["fixed", "margin_atr", "trailing", "breakeven", "same_bar", "gap"]
+)
+def test_execution_cache_matches_reference_across_selection_paths(tmp_path, case):
+    bars, signals = _inputs()
+    contract = DEFAULT_PHASE2_CONTRACT
+    if case == "margin_atr":
+        contract = replace(
+            contract, min_score_margin=0.08, max_entry_atr_fraction=0.00494
+        )
+    elif case == "trailing":
+        contract = replace(
+            contract,
+            exit_policy="atr_trailing",
+            breakeven_trigger_atr=0.5,
+            trailing_stop_atr=0.2,
+        )
+    elif case == "breakeven":
+        contract = replace(contract, exit_policy="breakeven", breakeven_trigger_atr=0.5)
+    elif case == "same_bar":
+        contract = replace(contract, take_profit_atr=0.2, stop_loss_atr=0.2)
+    elif case == "gap":
+        bars = bars.drop(index=19)
+    bars, signals, _ = _validate_inputs(bars, signals, contract=contract, spec=_spec())
+    scenario = contract.cost_scenarios[-1]
+    cache = build_fold_execution_cache(
+        bars, signals, contract=contract, scenario=scenario
+    )
+    rng = np.random.default_rng(171)
+    for scores in (
+        np.zeros(len(signals)),
+        np.ones(len(signals)),
+        rng.random(len(signals)),
+        rng.random(len(signals)),
+    ):
+        changed = signals.copy()
+        changed[contract.score_column] = scores
+        reference = _run_fold_segmented_backtest(
+            bars,
+            changed,
+            gate=_gate(tmp_path),
+            contract=contract,
+            cost_scenario=scenario,
+        )
+        assert_cache_matches_reference(cache.evaluate(scores), reference.summary)
+
+
+def test_zero_trade_folds_count_against_positive_fold_share(tmp_path):
+    bars, signals = _inputs()
+    signals["prob_long"] = 0.0
+    result = run_economic_attribution(
+        bars,
+        signals,
+        gate=_gate(tmp_path),
+        contract=DEFAULT_PHASE2_CONTRACT,
+        spec=_spec(),
+    )
+    assert result.report["fold_diagnostics"] == {
+        "fold_count": 3,
+        "positive_fold_share": 0.0,
+    }
+    assert result.fold_outcomes.trade_count.eq(0).all()
+
+
+@pytest.mark.parametrize("column", ["fold", "split", "candidate_id"])
+def test_attribution_rejects_missing_identity(tmp_path, column):
+    bars, signals = _inputs()
+    signals[column] = signals[column].astype(object)
+    signals.loc[0, column] = None
+    with pytest.raises(ValueError):
+        _validate_inputs(bars, signals, contract=DEFAULT_PHASE2_CONTRACT, spec=_spec())

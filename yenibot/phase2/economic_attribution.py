@@ -14,6 +14,8 @@ from yenibot.phase2.contracts import CostScenario
 from yenibot.phase2.contracts import Phase2StrategyContract
 from yenibot.phase2.engine import Phase2BacktestResult
 from yenibot.phase2.engine import run_long_only_backtest
+from yenibot.phase2.execution_cache import assert_cache_matches_reference
+from yenibot.phase2.execution_cache import build_fold_execution_cache
 from yenibot.phase2.readiness import Phase2Gate
 
 
@@ -124,6 +126,8 @@ def _validate_inputs(
 
     bar_frame = bars.copy()
     signal_frame = signals.copy()
+    if signal_frame[["fold", "split"]].isna().any().any():
+        raise ValueError("Attribution fold and split identity must not be missing")
     bar_frame[contract.bar_time_column] = pd.to_datetime(
         bar_frame[contract.bar_time_column], utc=True, errors="coerce"
     )
@@ -171,7 +175,11 @@ def _validate_inputs(
         )
     if "candidate_id" in signal_frame.columns:
         candidate_ids = signal_frame["candidate_id"].dropna().astype(str).unique()
-        if len(candidate_ids) != 1 or candidate_ids[0] != contract.candidate_id:
+        if (
+            signal_frame["candidate_id"].isna().any()
+            or len(candidate_ids) != 1
+            or candidate_ids[0] != contract.candidate_id
+        ):
             raise ValueError(
                 "Candidate identity mismatch between signals and strategy contract"
             )
@@ -217,9 +225,15 @@ def _validate_inputs(
 
     gap_hours = bar_frame[contract.bar_time_column].diff().dt.total_seconds() / 3600.0
     within_fold_gap_count = 0
+    previous_fold_end = None
     for _, fold_signals in signal_frame.groupby("fold", sort=True, dropna=False):
         fold_start = fold_signals[contract.decision_time_column].min()
         fold_end = fold_signals[contract.decision_time_column].max()
+        if previous_fold_end is not None and fold_start <= previous_fold_end:
+            raise ValueError(
+                "Attribution fold windows must be disjoint and chronological"
+            )
+        previous_fold_end = fold_end
         fold_bar_times = bar_frame.loc[
             (bar_frame[contract.bar_time_column] >= fold_start)
             & (bar_frame[contract.bar_time_column] <= fold_end),
@@ -445,20 +459,29 @@ def _run_controls(
     base_scenario = next(
         (item for item in scenarios if item.name == "base"), scenarios[0]
     )
+    cache = build_fold_execution_cache(
+        bars, signals, contract=contract, scenario=base_scenario
+    )
+    reference = _run_fold_segmented_backtest(
+        bars, signals, gate=gate, contract=contract, cost_scenario=base_scenario
+    )
+    assert_cache_matches_reference(cache.evaluate(scores), reference.summary)
     for trial in range(spec.permutations):
         shuffled = scores.copy()
         for indices in groups:
             shuffled[indices] = rng.permutation(shuffled[indices])
-        null_signals = signals.copy()
-        null_signals[contract.score_column] = shuffled
-        result = _run_fold_segmented_backtest(
-            bars,
-            null_signals,
-            gate=gate,
-            contract=contract,
-            cost_scenario=base_scenario,
-        )
-        summary = result.summary
+        summary = cache.evaluate(shuffled)
+        if trial == 0:
+            null_signals = signals.copy()
+            null_signals[contract.score_column] = shuffled
+            reference = _run_fold_segmented_backtest(
+                bars,
+                null_signals,
+                gate=gate,
+                contract=contract,
+                cost_scenario=base_scenario,
+            )
+            assert_cache_matches_reference(summary, reference.summary)
         null_rows.append(
             {
                 "trial": trial,
@@ -504,6 +527,11 @@ def _run_controls(
                 cost_scenario=scenario,
             )
             deterministic_controls[control_name][scenario.name] = _summary_view(result)
+            if scenario.name == base_scenario.name:
+                assert_cache_matches_reference(
+                    cache.evaluate(control_signals[contract.score_column].to_numpy()),
+                    result.summary,
+                )
     return deterministic_controls, null_frame
 
 
@@ -548,9 +576,15 @@ def _fold_outcomes(
     contract: Phase2StrategyContract,
 ) -> pd.DataFrame:
     trades = result.trades.copy()
+    all_folds = sorted(signals["fold"].unique())
     if trades.empty:
         return pd.DataFrame(
-            columns=["fold", "trade_count", "compounded_net_return", "mean_net_return"]
+            {
+                "fold": all_folds,
+                "trade_count": 0,
+                "compounded_net_return": 0.0,
+                "mean_net_return": 0.0,
+            }
         )
     trades = trades.loc[trades["trade_status"].eq("completed")].copy()
     if "evaluation_fold" in trades.columns:
@@ -567,14 +601,15 @@ def _fold_outcomes(
             validate="many_to_one",
         )
     rows = []
-    for fold, group in trades.groupby("fold", dropna=False):
+    for fold in all_folds:
+        group = trades.loc[trades["fold"].eq(fold)]
         returns = pd.to_numeric(group["net_return"], errors="coerce").dropna()
         rows.append(
             {
                 "fold": fold,
                 "trade_count": int(len(returns)),
                 "compounded_net_return": float(np.prod(1.0 + returns) - 1.0),
-                "mean_net_return": float(returns.mean()),
+                "mean_net_return": float(returns.mean()) if len(returns) else 0.0,
             }
         )
     return pd.DataFrame(rows)
@@ -672,7 +707,11 @@ def run_economic_attribution(
     if "forward_return" in signal_frame.columns:
         forward = pd.to_numeric(signal_frame["forward_return"], errors="coerce")
         valid = forward.notna()
-        if int(valid.sum()) >= 3:
+        if (
+            int(valid.sum()) >= 3
+            and signal_frame.loc[valid, contract.score_column].nunique() > 1
+            and forward.loc[valid].nunique() > 1
+        ):
             score_return_rankic = float(
                 signal_frame.loc[valid, contract.score_column].corr(
                     forward.loc[valid], method="spearman"
