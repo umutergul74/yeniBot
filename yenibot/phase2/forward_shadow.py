@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from yenibot.training.walk_forward import FoldIndices
 SHADOW_PROCESS_ID = "block_prequential_forward_shadow_v2"
 SHADOW_MANIFEST_VERSION = "forward_shadow_block_manifest_v2"
 SHADOW_LEDGER_VERSION = "forward_shadow_ledger_v2"
+SHADOW_REGISTRATION_VERSION = "forward_shadow_registration_v2"
 
 
 def _utc(value: Any) -> pd.Timestamp:
@@ -246,6 +248,58 @@ def seal_shadow_manifest(payload: dict[str, Any]) -> dict[str, Any]:
     return sealed
 
 
+def canonical_shadow_registration_hash(payload: dict[str, Any]) -> str:
+    canonical = dict(payload)
+    canonical.pop("registration_hash", None)
+    canonical.pop("integrity_audit", None)
+    return hashlib.sha256(_canonical_json(canonical)).hexdigest()
+
+
+def seal_shadow_registration(payload: dict[str, Any]) -> dict[str, Any]:
+    sealed = json.loads(json.dumps(payload))
+    if sealed.get("registration_hash"):
+        raise ValueError("Unsealed registration cannot already contain a hash")
+    sealed["registration_hash"] = canonical_shadow_registration_hash(sealed)
+    return sealed
+
+
+def validate_shadow_registration(
+    payload: dict[str, Any], *, manifest: dict[str, Any]
+) -> dict[str, Any]:
+    checked_manifest = validate_shadow_manifest(manifest)
+    if payload.get("registration_version") != SHADOW_REGISTRATION_VERSION:
+        raise ValueError("Unsupported forward-shadow registration version")
+    configured = str(payload.get("registration_hash", "")).lower()
+    if configured != canonical_shadow_registration_hash(payload):
+        raise ValueError("Forward-shadow registration hash mismatch")
+    identity = {
+        "process_id": checked_manifest["process_id"],
+        "candidate_id": checked_manifest["candidate_id"],
+        "block_id": checked_manifest["block"]["block_id"],
+        "manifest_hash": checked_manifest["manifest_hash"],
+    }
+    if any(str(payload.get(key, "")) != str(value) for key, value in identity.items()):
+        raise ValueError("Forward-shadow registration identity mismatch")
+    commit = str(payload.get("manifest_git_commit", "")).lower()
+    registry_path = str(payload.get("manifest_registry_path", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not registry_path:
+        raise ValueError("Forward-shadow Git registration is incomplete")
+    registered = _utc(payload.get("registered_at_utc"))
+    block = checked_manifest["block"]
+    locked = _utc(block["locked_at_utc"])
+    context_start = _utc(block["context_start_inclusive"])
+    if registered < locked or registered >= context_start:
+        raise ValueError("Forward-shadow registration is outside the causal lock window")
+    return {
+        **payload,
+        "integrity_audit": {
+            "registration_hash_verified": True,
+            "identity_matches_manifest": True,
+            "registered_before_context": True,
+        },
+    }
+
+
 def _safe_artifact_path(root: Path, relative: str) -> Path:
     candidate = (root / relative).resolve()
     resolved_root = root.resolve()
@@ -456,6 +510,7 @@ def predict_label_free_artifacts(
     artifact_root: str | Path,
     config: dict[str, Any],
     device: str | torch.device | None = None,
+    evidence_only: bool = True,
 ) -> pd.DataFrame:
     """Run the sealed model without requiring label or forward-return columns."""
 
@@ -518,14 +573,16 @@ def predict_label_free_artifacts(
         batch_size=int((cfg.get("training", {}) or {}).get("batch_size", 256)),
         device=device,
     )
-    decision = predicted.timestamp + pd.Timedelta(hours=1)
-    block = checked["block"]
-    mask = decision.between(
-        _utc(block["evidence_start_inclusive"]),
-        _utc(block["evidence_end_inclusive"]),
-        inclusive="both",
-    )
-    return predicted.loc[mask].reset_index(drop=True)
+    if evidence_only:
+        decision = predicted.timestamp + pd.Timedelta(hours=1)
+        block = checked["block"]
+        mask = decision.between(
+            _utc(block["evidence_start_inclusive"]),
+            _utc(block["evidence_end_inclusive"]),
+            inclusive="both",
+        )
+        predicted = predicted.loc[mask]
+    return predicted.reset_index(drop=True)
 
 
 def feature_row_fingerprints(
@@ -702,9 +759,15 @@ def append_shadow_predictions(
     frame: pd.DataFrame,
     *,
     manifest: dict[str, Any],
+    registration: dict[str, Any] | None = None,
     timely_delay_minutes: int = 15,
 ) -> dict[str, Any]:
     checked = validate_shadow_manifest(manifest)
+    if registration is None:
+        raise ValueError("Git-registered manifest proof is required before ledger writes")
+    checked_registration = validate_shadow_registration(
+        registration, manifest=checked
+    )
     if timely_delay_minutes < 0:
         raise ValueError("Timely delay cannot be negative")
     missing = [column for column in SHADOW_LEDGER_COLUMNS if column != "evidence_role" and column not in frame]
@@ -821,6 +884,7 @@ def append_shadow_predictions(
         "appended_rows": len(additions),
         "total_rows": len(old) + len(additions),
         "head_hash": previous,
+        "registration_hash": checked_registration["registration_hash"],
         **identities,
         "fit_operations_performed": 0,
         "selection_operations_performed": 0,

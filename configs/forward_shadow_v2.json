@@ -20,6 +20,7 @@
     "post_fit_audit_bars": 64,
     "minimum_label_maturity_hours": 10,
     "minimum_registration_lead_hours": 72,
+    "minimum_lock_to_context_hours": 24,
     "block_ordinal_anchor": "2022-11-15T01:00:00Z",
     "seed_rule": "project_random_seed_plus_block_ordinal",
     "fit_selection_data": "train_and_validation_only",
@@ -33,6 +34,7 @@
   },
   "payoff_layer": {
     "ridge_alpha": 10.0,
+    "minimum_fit_rows": 1000,
     "candidate_features": [
       "validation_score_percentile",
       "decision_atr_close_fraction",

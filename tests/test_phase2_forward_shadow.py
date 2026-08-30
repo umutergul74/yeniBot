@@ -15,6 +15,7 @@ from yenibot.phase2.forward_shadow import (
     append_shadow_predictions,
     build_shadow_scores,
     canonical_shadow_manifest_hash,
+    canonical_shadow_registration_hash,
     empirical_cdf_right,
     fit_initial_shadow_payoff,
     load_shadow_manifest,
@@ -22,8 +23,10 @@ from yenibot.phase2.forward_shadow import (
     predict_label_free_model,
     read_shadow_ledger,
     seal_shadow_manifest,
+    seal_shadow_registration,
     select_shadow_training_window,
     validate_shadow_manifest,
+    validate_shadow_registration,
 )
 from yenibot.training.dataset import SequenceDataset
 from yenibot.training.trainer import _predict_dataset
@@ -105,6 +108,21 @@ def _raw_rows():
             "f2": [-1.0, -2.0, -3.0, -4.0],
             "label": [0, 1, 0, 1],
             "forward_return": [-99.0, 99.0, -99.0, 99.0],
+        }
+    )
+
+
+def _registration(manifest):
+    return seal_shadow_registration(
+        {
+            "registration_version": "forward_shadow_registration_v2",
+            "process_id": manifest["process_id"],
+            "candidate_id": manifest["candidate_id"],
+            "block_id": manifest["block"]["block_id"],
+            "manifest_hash": manifest["manifest_hash"],
+            "manifest_git_commit": "a" * 40,
+            "manifest_registry_path": "forward_shadow_registry/block_046.json",
+            "registered_at_utc": "2026-08-30T01:00:00Z",
         }
     )
 
@@ -229,6 +247,25 @@ def test_manifest_rejects_artifact_escape_even_with_matching_hash(tmp_path):
         validate_shadow_manifest(manifest, artifact_root=tmp_path)
 
 
+def test_registration_is_hash_sealed_bound_to_manifest_and_precontext(tmp_path):
+    manifest = _manifest(tmp_path)
+    registration = _registration(manifest)
+    checked = validate_shadow_registration(registration, manifest=manifest)
+    assert checked["registration_hash"] == canonical_shadow_registration_hash(
+        registration
+    )
+    changed = json.loads(json.dumps(registration))
+    changed["manifest_git_commit"] = "b" * 40
+    with pytest.raises(ValueError, match="hash mismatch"):
+        validate_shadow_registration(changed, manifest=manifest)
+    late = dict(registration)
+    late.pop("registration_hash")
+    late["registered_at_utc"] = manifest["block"]["context_start_inclusive"]
+    late = seal_shadow_registration(late)
+    with pytest.raises(ValueError, match="outside the causal lock window"):
+        validate_shadow_registration(late, manifest=manifest)
+
+
 def test_empirical_cdf_is_right_sided_and_strictly_validated():
     reference = np.linspace(0, 1, 1000)
     result = empirical_cdf_right(reference, np.array([0.0, 0.5, 1.0]))
@@ -325,6 +362,7 @@ def test_shadow_scores_ignore_outcomes_and_reconstruct_actions(tmp_path):
 
 def test_shadow_ledger_is_hash_chained_idempotent_and_marks_latency(tmp_path):
     manifest = _manifest(tmp_path)
+    registration = _registration(manifest)
     scores = build_shadow_scores(
         _raw_rows(),
         manifest=manifest,
@@ -333,10 +371,18 @@ def test_shadow_ledger_is_hash_chained_idempotent_and_marks_latency(tmp_path):
     )
     scores.loc[0, "generated_at"] = scores.loc[0, "decision_time"] + pd.Timedelta(minutes=5)
     path = tmp_path / "ledger.jsonl"
-    first = append_shadow_predictions(path, scores.iloc[:2], manifest=manifest)
+    with pytest.raises(ValueError, match="Git-registered"):
+        append_shadow_predictions(path, scores.iloc[:1], manifest=manifest)
+    first = append_shadow_predictions(
+        path, scores.iloc[:2], manifest=manifest, registration=registration
+    )
     assert first["appended_rows"] == 2
-    assert append_shadow_predictions(path, scores, manifest=manifest)["appended_rows"] == 2
-    assert append_shadow_predictions(path, scores, manifest=manifest)["appended_rows"] == 0
+    assert append_shadow_predictions(
+        path, scores, manifest=manifest, registration=registration
+    )["appended_rows"] == 2
+    assert append_shadow_predictions(
+        path, scores, manifest=manifest, registration=registration
+    )["appended_rows"] == 0
     ledger, head = read_shadow_ledger(path, with_hash=True)
     assert len(ledger) == 4 and len(head) == 64
     assert ledger.evidence_role.tolist()[0] == "timely_shadow"
@@ -345,7 +391,9 @@ def test_shadow_ledger_is_hash_chained_idempotent_and_marks_latency(tmp_path):
     changed = scores.copy()
     changed.loc[0, "raw_score"] += 0.01
     with pytest.raises(ValueError, match="changed"):
-        append_shadow_predictions(path, changed, manifest=manifest)
+        append_shadow_predictions(
+            path, changed, manifest=manifest, registration=registration
+        )
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace('"raw_score": 0.2', '"raw_score": 0.21', 1), encoding="utf-8")
     with pytest.raises(ValueError, match="hash chain"):
@@ -354,6 +402,7 @@ def test_shadow_ledger_is_hash_chained_idempotent_and_marks_latency(tmp_path):
 
 def test_shadow_ledger_rejects_prelock_gap_and_identity_changes(tmp_path):
     manifest = _manifest(tmp_path)
+    registration = _registration(manifest)
     scores = build_shadow_scores(
         _raw_rows(),
         manifest=manifest,
@@ -364,13 +413,28 @@ def test_shadow_ledger_rejects_prelock_gap_and_identity_changes(tmp_path):
     prelock["timestamp"] = pd.Timestamp("2026-08-30T00:00:00Z")
     prelock["decision_time"] = pd.Timestamp("2026-08-30T01:00:00Z")
     with pytest.raises(ValueError, match="Pre-lock"):
-        append_shadow_predictions(tmp_path / "prelock.jsonl", prelock, manifest=manifest)
+        append_shadow_predictions(
+            tmp_path / "prelock.jsonl",
+            prelock,
+            manifest=manifest,
+            registration=registration,
+        )
 
     gapped = scores.iloc[[0, 2]].copy()
     with pytest.raises(ValueError, match="contiguous"):
-        append_shadow_predictions(tmp_path / "gap.jsonl", gapped, manifest=manifest)
+        append_shadow_predictions(
+            tmp_path / "gap.jsonl",
+            gapped,
+            manifest=manifest,
+            registration=registration,
+        )
 
     wrong = scores.copy()
     wrong["block_id"] = "another"
     with pytest.raises(ValueError, match="identity mismatch"):
-        append_shadow_predictions(tmp_path / "wrong.jsonl", wrong, manifest=manifest)
+        append_shadow_predictions(
+            tmp_path / "wrong.jsonl",
+            wrong,
+            manifest=manifest,
+            registration=registration,
+        )

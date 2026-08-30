@@ -31,6 +31,8 @@ semantics. Before a block starts, one model is fitted with:
 - at least 72 hours between preparation and the aligned 720-hour context block,
   so the sealed manifest can be reviewed, committed and pushed before any row
   can acquire confirmation status;
+- preparation must still leave at least 24 hours between the final manifest
+  lock and that context block; a late or long-running preparation aborts closed;
 - the retained feature profile, model, loss, optimizer and deterministic
   `project seed + block ordinal` rule.
 
@@ -65,6 +67,16 @@ actions, model/block identity, feature snapshot hash, source-bar time, decision
 time and generation time in an append-only hash chain. It must be possible to
 distinguish timely ex-ante scores from later deterministic batch replay. Batch
 replay can support frozen model evidence; it cannot establish execution latency.
+
+The preparation runner is
+`yenibot.automation.phase2_forward_shadow_prepare`. It publishes a block only
+after exact saved-artifact/label-free parity. The exact manifest must then be
+committed and pushed before
+`yenibot.automation.phase2_forward_shadow_register` creates its registration
+proof. `yenibot.automation.phase2_forward_shadow_score` refuses ledger writes
+without that proof, strips any outcome columns, and scores only already closed
+source bars. Late rows remain audit-visible as `sealed_batch_replay` but never
+count as timely confirmation evidence.
 
 ## Decision horizon and gates
 
