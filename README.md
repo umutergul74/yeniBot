@@ -178,6 +178,7 @@ Run in strict order:
 6. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
 7. [`06_phase2_sandbox_backtest.ipynb`](notebooks/06_phase2_sandbox_backtest.ipynb)
 8. [`07_phase2_clean_forward_confirmation.ipynb`](notebooks/07_phase2_clean_forward_confirmation.ipynb)
+9. [`08_phase2_forward_shadow_v2.ipynb`](notebooks/08_phase2_forward_shadow_v2.ipynb)
 
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
