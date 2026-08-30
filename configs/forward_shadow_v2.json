@@ -66,6 +66,7 @@
     "prelock_or_backfilled_rows_allowed": false,
     "minimum_blocks": 12,
     "minimum_coverage_days": 360,
+    "coverage_basis": "complete_contiguous_720h_context_blocks_including_sequence_burn_in",
     "minimum_completed_candidate_trades": 100,
     "interim_looks_blocks": [3, 6, 9],
     "interim_success_allowed": false,
@@ -84,6 +85,8 @@
     ],
     "paired_bootstrap_replicates": 10000,
     "paired_bootstrap_block_lengths": [2, 3],
+    "rank_ic_bootstrap_block_hours": [24, 168],
+    "bootstrap_seed": 20260830,
     "automatic_promotion_allowed": false,
     "live_trading_allowed": false
   }

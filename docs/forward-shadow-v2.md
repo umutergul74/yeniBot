@@ -77,6 +77,9 @@ proof. `yenibot.automation.phase2_forward_shadow_score` refuses ledger writes
 without that proof, strips any outcome columns, and scores only already closed
 source bars. Late rows remain audit-visible as `sealed_batch_replay` but never
 count as timely confirmation evidence.
+`yenibot.automation.phase2_forward_shadow_evaluate` stays read-only with respect
+to model/policy state and refuses a complete-block result unless all 657 rows
+were timely and the next ten hourly outcome bars are contiguous and mature.
 
 ## Decision horizon and gates
 
@@ -94,10 +97,18 @@ The first confirmation decision requires all of:
 - hourly marked drawdown no worse than -15%;
 - complete common-cohort, artifact and chronology integrity.
 
-The paired checks use 10,000 fixed-protocol bootstrap replicates. No gate may be
-dropped after seeing the result. A failure retires the exact v2 candidate and
-requires a new hypothesis and boundary. A pass still permits only reviewed
-paper/shadow progression: automatic promotion and live orders are false.
+The paired checks use 10,000 fixed-protocol bootstrap replicates with two- and
+three-block circular lengths. Rank-IC resampling uses fixed 24-hour and 168-hour
+circular lengths. All use seed `20260830`, and every configured lower bound must
+be positive. No gate may be dropped after seeing the result. A failure retires
+the exact v2 candidate and requires a new hypothesis and boundary. A pass still
+permits only reviewed paper/shadow progression: automatic promotion and live
+orders are false.
+
+The 360-day age requirement is the sum of twelve contiguous 720-hour context
+blocks, including their 63-hour sequence burn-in. Returns, trades, Rank IC and
+policy comparisons use only the 657 preregistered evidence decisions per block;
+burn-in can never contribute performance.
 
 ## Implementation order
 

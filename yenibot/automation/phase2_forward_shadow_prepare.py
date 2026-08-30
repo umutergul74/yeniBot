@@ -33,7 +33,7 @@ from yenibot.phase2.full_oof import file_sha256
 from yenibot.training.trainer import train_one_fold
 
 
-SPEC_CANONICAL_SHA256 = "b1fe1a21563fb96bdfe101db5024782f6f45ee771cfc54d537419ab39de66c2b"
+SPEC_CANONICAL_SHA256 = "9e21b37a6608f1a3213c493df89424ddc54198fb60c520149695d4658fa599ba"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
