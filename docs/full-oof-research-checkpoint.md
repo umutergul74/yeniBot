@@ -131,9 +131,10 @@ historical selection bias and the original failed future-OOS remain.
 ## Next decision
 
 1. Do not rerun the completed audits or select q90 on its highest base return.
-2. Implement ONLY [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md),
-   specified before fitting and not yet evaluated. It tests validation-only
-   payoff estimation/abstention, not another exit or hyperparameter grid.
+2. The [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md)
+   follow-up is now completed and failed: +20.75% base, -46.27% adverse and only
+   13/38 positive folds. Do not rerun or retune it. Resume from its checkpoint's
+   calibration-source independence audit and require a separate pre-fit protocol.
 3. Preserve every failure. Any historical success still needs a separately
    locked post-lock unseen confirmation with actual funding/execution/risk checks.
 4. No Notebook 04/04a/06/07 or live trading is requested at this checkpoint.

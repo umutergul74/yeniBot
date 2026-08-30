@@ -126,6 +126,22 @@ but ALL four policies failed the economic gate. The score is potentially useful
 information, not a robust standalone bot. This density panel is closed.
 See [full OOF checkpoint](full-oof-research-checkpoint.md) for results and hashes.
 
+### Validation net-utility probe (completed, failed)
+
+The single predeclared three-input ridge payoff model completed 38 validation-only
+fits without retraining the TCN+GRU. It produced `+20.75%` base but `-46.27%`
+adverse return, `40.57%` base trade-close drawdown, 805 completed trades and only
+13/38 positive folds. Paired block intervals did not establish improvement over
+q80. This family is closed; alpha, cutoff, exits and validation history stay fixed.
+
+Calibration failed to transfer: selected test opportunities were predicted to
+earn about `+20.01` adverse-net bps but realized `-0.38` bps; actual executed trades
+realized `-6.51` bps. Overlapping opportunities are not portfolio trades or
+independent samples. The historical trainer's exact source hash verifies that
+the same validation set selected the base checkpoint, so it was not independent
+calibration data. That is a risk, not a proven sole cause of the loss.
+See [net-utility result and next-work checkpoint](validation-net-utility-hurdle-v1.md).
+
 ## Next Operator Run
 
 `recent6_validation_lcb_top3_v1` completed on the immutable historical cache
@@ -150,8 +166,8 @@ dispersion, global top-decile lift and worst-five improvement gates. The
 candidate is archived unchanged; do not tune or rerun it automatically.
 
 Training is paused (`experiments.training_allowed: false`). The active work
-is the specified validation net-utility hurdle probe after the completed
-accounting/data-integrity, three-fold and full-cache attribution reviews. Neither
+is calibration-source independence research after the completed, failed
+net-utility probe and earlier accounting/attribution reviews. Neither
 Notebook 04 nor 04a is an appropriate next run. The old 07 lock is audit-only,
 and 06 is historical engineering diagnostics, not a way to reopen failed OOS.
 
@@ -170,9 +186,10 @@ The bounded full-history attribution and serial controls completed; no policy
 passed. Their explicit input contract is
 `configs/full_oof_attribution_v1.json`. See
 [full OOF research checkpoint](full-oof-research-checkpoint.md) to resume.
-The next probe is [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md),
-specified before fitting and not yet evaluated. Its separate payoff-model fits
-must be reported truthfully; the TCN+GRU and frozen failures remain unchanged.
+The [validation net-utility probe](validation-net-utility-hurdle-v1.md) completed
+and failed. Do not rerun it. Next, audit earlier-OOF-only calibration and specify
+a separate temporal protocol and common-cohort controls before fitting anything.
+The TCN+GRU and all frozen failures remain unchanged.
 
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.

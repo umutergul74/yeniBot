@@ -1,6 +1,6 @@
-# One next historical probe: validation net-utility hurdle v1
+# Validation net-utility hurdle v1 — completed, failed
 
-Status: implemented; **candidate not fitted/evaluated yet at this code checkpoint**.
+Status: **completed; failed; family closed to retuning**.
 Date: August 30, 2026. This is a bounded historical research contract, not
 permission to deploy and not independent confirmation.
 
@@ -94,3 +94,92 @@ No Colab work is required. The completed full OOF audits remain unchanged. Run
 `yenibot.automation.phase2_net_utility` only with the pinned full-scope cache and
 the verified original q80 report; it records per-fold targets/fits and candidate
 actions before evaluation, and never overwrites an existing output directory.
+
+## Completed result and restart checkpoint
+
+Implementation and all settings were committed/pushed as `5c060de` before the
+first real fit. Run: `reports/phase2_economic_attribution/20260830_net_utility_v1`.
+There were 38 payoff-model fits and zero TCN+GRU refits. All fits/scalers,
+coefficients, training opportunities, decisions, ledgers and both null controls
+were retained. Exec session `90751` / PID `28268` completed with exit code 0;
+the read-only calibration diagnostic (`47930`) also completed. Neither is live.
+
+Main result SHA-256:
+`76e76d35470f3877cb7d919b34f11a2f7d9b183fbebe62c01a7c77fbfe303d6c`.
+Do not rerun or tune this completed family. The 61 relevant tests passed.
+
+| Metric | Candidate | Fixed q80 reference |
+|---|---:|---:|
+| Whole-period base return | +20.75% | +13.82% |
+| Whole-period adverse return | -46.27% | -65.26% |
+| Completed trades | 805 | 1,186 |
+| Base trade-close drawdown | -40.57% | -43.47% |
+| Base profit factor | 1.063 | 1.041 |
+| Positive folds | 13/38 | 21/38 |
+
+These are completed-trade compounded returns across independent historical folds,
+not annualized or live portfolio returns. Eight candidate folds had zero trades;
+17 lost money. Thus insufficient breadth is not merely an abstention penalty.
+Twelve terminal censored positions are not completed trades.
+
+The candidate beat both conditional nulls (500 each, p about 0.001996, at the
+Monte Carlo resolution floor); serial-null mean turnover was 812.8 versus 805
+actual trades. This is evidence of historical policy timing, not proof that
+the TCN score, rather than the ATR context, caused all incremental value.
+
+The positive paired base fold-return difference was only +0.118 percentage points.
+Its 6-fold-block 95% interval was [-1.142, +1.009] percentage points. Under adverse
+costs, the difference was +1.092 points with interval [-0.998, +2.422]. The 3-fold
+intervals also included zero. Improvement over q80 is not established. The
+candidate failed adverse return, fold breadth and paired uncertainty gates.
+
+## Calibration mechanism evidence (no new fit or selection)
+
+Saved-fit reconstruction and the reference opportunity engine showed:
+
+| Population | Mean predicted adverse net payoff | Mean realized adverse net payoff |
+|---|---:|---:|
+| Selected validation training opportunities | +18.27 bps | +19.10 bps |
+| Selected test opportunities | +20.01 bps | -0.38 bps |
+| Completed test portfolio trades | +15.39 bps | -6.51 bps |
+
+The first two populations contain overlapping opportunities and are NOT
+independent samples or realizable portfolio ledgers. The final row uses the
+actual non-overlapping completed trades. No significance claim is made from
+the large overlapping observation count. Payoff calibration did not transfer.
+
+The source training manifest identifies a 34,399-byte historical trainer with
+SHA-256 `c19640c29e6e3dc1d7a3b67e257ccc8fd06290c150c95411c61097faa070eb01`.
+This matches the git blob at `973906b:yenibot/training/trainer.py` exactly.
+Lines 556/559/562 select the checkpoint using validation performance; lines
+585/588 restore that best state and predict the same validation set. Therefore
+the payoff model's validation source was NOT independent of base-model selection.
+
+This is a verified optimism risk, NOT proof it alone caused the loss. Regime
+change, estimator misspecification and opportunity-to-portfolio selection remain
+possible contributors. The test data did not enter v1's fit; its rejection stays
+valid. No gate is relaxed and no failure is relabeled pending.
+
+For context, scikit-learn's [stacking documentation](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.StackingRegressor.html)
+uses cross-validated base predictions for the second-stage model and warns
+about reuse of fitted-data predictions. Our checkpoint-selection case is not
+identical to direct in-sample stacking, but the independence concern motivates
+the next audit. The analytic ridge implementation was tested against the
+[reference Ridge estimator](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Ridge.html).
+
+## Next work — not a hidden v1 retune
+
+Audit the feasibility of a time-ordered second stage trained ONLY on already
+mature predictions/outcomes from earlier OOF test folds. Keep the current and
+future fold completely excluded. Earlier-fold test labels, if used, must be
+explicitly disclosed as training data; never claim no test labels anywhere were
+used. Do not change v1's alpha, utility cutoff, exits or validation window.
+
+Before any new candidate fit, write ONE separate protocol specifying the source
+independence, warm-up rule, common evaluation cohort and matched benchmarks.
+Keep all benchmarks on that same cohort, not the original 38-fold total if early
+folds supply calibration warm-up. Include an ATR-only context control to isolate
+the TCN score's incremental contribution. No automatic model/threshold search.
+Such a probe would still be retrospective and could not remove historical profile
+selection bias or the need for post-lock unseen confirmation. No Colab run or
+live trading is needed at this checkpoint.

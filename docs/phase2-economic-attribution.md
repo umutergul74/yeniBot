@@ -105,10 +105,13 @@ The full-cache gate remains exactly the code defaults:
 - complete execution data contract.
 
 The fixed-density panel is closed as a deployable trade-entry engine, but the
-score is not wholly uninformative. The ONE next probe is
-[validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md), specified
-before fitting. Do not optimize more exits on these results. Only historical
-economic success can justify a separately locked post-lock unseen confirmation.
+score is not wholly uninformative. The subsequent single
+[validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md) probe also
+completed and failed adverse costs, breadth and paired uncertainty. It exposed
+poor payoff-calibration transfer and verified reuse of checkpoint-selection
+validation data. Next audit genuinely earlier-OOF calibration sources before
+any separate model protocol. Do not optimize more exits or reopen either family.
+Only robust historical evidence could justify a post-lock unseen confirmation.
 
 ## Local command
 

@@ -94,9 +94,10 @@ failed adverse costs, sample size, fold breadth and significance. See
 Update: the full-cache and serial-control audits below are now complete. All four
 density policies failed economic robustness, although turnover-aware controls
 support historical model contribution. Resume from the
-[full OOF checkpoint](full-oof-research-checkpoint.md), then implement only the
-[specified net-utility probe](validation-net-utility-hurdle-v1.md). Do not repeat
-the completed audit or start a model/exit grid.
+[full OOF checkpoint](full-oof-research-checkpoint.md). The
+[specified net-utility probe](validation-net-utility-hurdle-v1.md) also completed
+and failed; its checkpoint records calibration-source independence as the next
+audit. Do not repeat these runs, retune the closed family or start a model/exit grid.
 
 1. Verify and stage the full historical out-of-fold prediction cache and
    manifests locally. Current market prices alone cannot replace model outputs.
