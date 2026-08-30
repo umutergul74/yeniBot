@@ -203,6 +203,33 @@ The decision report separates:
 Local lab output is diagnostic only. It cannot select or promote a strategy
 from the already-seen sandbox window.
 
+## Model Economic Attribution
+
+Use `phase2_attribution` before interpreting a positive strategy variant as
+model edge. It compares the actual frozen ranking with score timing destroyed
+inside each fold/month while preserving the threshold-selection count and the
+entire execution/cost contract.
+
+```powershell
+.venv/Scripts/python -m yenibot.automation.phase2_attribution `
+  --report-dir reports/phase2_local_lab/final_third_wave_local/local_gate `
+  --bars <phase2_sandbox>/phase2_bars.csv `
+  --signals <phase2_sandbox>/phase2_signals.csv `
+  --input-manifest <phase2_sandbox>/phase2_input_manifest.json `
+  --output-dir reports/phase2_economic_attribution/<run-id> `
+  --incumbent-suite `
+  --permutations 100
+```
+
+The runner requires a pure `test` split and matching frozen candidate/threshold
+hashes. Disjoint walk-forward folds are independent; no position crosses an
+embargo gap. Outputs include null trials, score deciles, fold outcomes, source
+hashes, deterministic controls and Holm-adjusted suite results. Promotion and
+live trading are always disabled for this retrospective command.
+
+See [`phase2-economic-attribution.md`](phase2-economic-attribution.md) for the
+current findings and next gate.
+
 Official mode is intentionally fail-closed:
 
 ```bash

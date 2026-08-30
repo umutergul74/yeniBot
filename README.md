@@ -155,6 +155,8 @@ Operational references:
   backtest contract
 - [`docs/phase2-entry-checklist.md`](docs/phase2-entry-checklist.md): blocking
   entry conditions before implementation
+- [`docs/phase2-economic-attribution.md`](docs/phase2-economic-attribution.md):
+  model-vs-filter economic contribution audit and current findings
 
 ## Colab Workflow
 

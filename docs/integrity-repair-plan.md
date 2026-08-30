@@ -76,12 +76,26 @@ Reports: `reports/integrity_audit_20260830/`. This is an accounting audit, not a
 new clean OOS test. It supplies no permission to tune these policies on this
 window. The repaired engine did not reveal hidden profitability.
 
+## Economic attribution checkpoint
+
+Steps 1-3 below were completed for the bundled three-fold replacement-control
+cache. The new fail-closed runner preserves fold/month selection frequency,
+destroys only score timing, treats walk-forward folds independently and applies
+family-wise correction across the bounded incumbent suite.
+
+No strategy passed. The narrow ATR-band strategy's +5.31% base return was below
+its rank-destroyed null median (+6.95%); the apparent edge came from the regime
+filter. The score-margin 0.07 lead showed a directional contribution signal but
+failed adverse costs, sample size, fold breadth and significance. See
+[Phase 2 economic attribution](phase2-economic-attribution.md).
+
 ## Next sequence (no automatic model search)
 
-1. Verify and stage the actual historical out-of-fold prediction cache and
+1. Verify and stage the full historical out-of-fold prediction cache and
    manifests locally. Current market prices alone cannot replace model outputs.
    Keep both failed OOS windows excluded from parameter/strategy selection.
-2. Compare the retained score against no-trade, identical filters/exits without
+2. Run the implemented attribution contract on that full cache. Compare the
+   retained score against no-trade, identical filters/exits without
    model selection, and reproducible matched/randomized entry references on
    eligible historical research data. Report exposure, net expectancy, costs,
    concentration and temporal uncertainty, not only total return.
@@ -103,8 +117,8 @@ Local refresh command (choose a new directory each time):
 ```
 
 At this checkpoint there is no reason for the operator to rerun 04/04a/05/07.
-The next step is historical economic attribution with verified cached predictions,
-not another expensive training cycle.
+The next step is full-cache economic attribution with the verified retained-control
+predictions, not another expensive training cycle or TP/SL sweep.
 
 ## Verification
 

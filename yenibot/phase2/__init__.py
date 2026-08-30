@@ -17,6 +17,10 @@ from yenibot.phase2.confirmation import locked_risk_policy
 from yenibot.phase2.confirmation import locked_strategy_contracts
 from yenibot.phase2.engine import Phase2BacktestResult
 from yenibot.phase2.engine import run_long_only_backtest
+from yenibot.phase2.economic_attribution import EconomicAttributionResult
+from yenibot.phase2.economic_attribution import EconomicAttributionSpec
+from yenibot.phase2.economic_attribution import run_economic_attribution
+from yenibot.phase2.economic_attribution import write_economic_attribution
 from yenibot.phase2.readiness import Phase2Gate
 from yenibot.phase2.readiness import load_phase2_gate
 from yenibot.phase2.risk import Phase2RiskPolicy
@@ -26,6 +30,8 @@ from yenibot.phase2.variants import registered_phase2_strategy_variants
 
 __all__ = [
     "CostScenario",
+    "EconomicAttributionResult",
+    "EconomicAttributionSpec",
     "Phase2BacktestResult",
     "Phase2Gate",
     "Phase2InputBuildResult",
@@ -41,5 +47,7 @@ __all__ = [
     "phase2_inputs_from_predictions",
     "phase2_strategy_registry",
     "registered_phase2_strategy_variants",
+    "run_economic_attribution",
     "run_long_only_backtest",
+    "write_economic_attribution",
 ]

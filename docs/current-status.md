@@ -93,6 +93,24 @@ artifacts, but neither is promotable evidence after the Phase 1 candidate
 failure. The clean-forward run also did not establish a positive deployable
 strategy. Do not use Notebook 06 or 07 to repair the failed model result.
 
+### Economic attribution result
+
+The new fold-segmented attribution audit compared the frozen score with
+fold/month-matched rank-destroyed controls under identical execution and costs.
+None of the baseline or two documented incumbents passed.
+
+- Baseline: `-10.08%` base, `-25.47%` adverse, raw permutation `p=0.594`.
+- Score-margin 0.07 lead: `+2.72%` base but `-4.64%` adverse, 78 trades,
+  one positive fold, raw `p=0.079`, Holm `p=0.238`.
+- Narrow ATR-band watchlist: `+5.31%` base, but its rank-destroyed null median
+  was higher at `+6.95%`; inverted ranking returned `+6.99%` and always-on long
+  returned `+17.43%`. This was regime/filter return, not demonstrated model edge.
+
+Fold embargoes are now evaluated as independent paths. Positions are never
+carried across the two 64-hour gaps, and end-of-fold censored positions do not
+become completed trades. The result is retrospective and non-promotable.
+See [Phase 2 economic attribution](phase2-economic-attribution.md).
+
 ## Next Operator Run
 
 `recent6_validation_lcb_top3_v1` completed on the immutable historical cache
@@ -117,7 +135,8 @@ dispersion, global top-decile lift and worst-five improvement gates. The
 candidate is archived unchanged; do not tune or rerun it automatically.
 
 Training is paused (`experiments.training_allowed: false`). The active work
-is accounting/data integrity, followed by economic-baseline review. Neither
+is full-cache economic attribution after the completed accounting/data-integrity
+and three-fold attribution review. Neither
 Notebook 04 nor 04a is an appropriate next run. The old 07 lock is audit-only,
 and 06 is historical engineering diagnostics, not a way to reopen failed OOS.
 
@@ -127,6 +146,11 @@ bars, 163,427 valid 15m bars and 5,108 funding records from January 2022.
 rows were excluded. 2,005 funding mark prices are missing in 2022–2023;
 2026 funding mark prices are complete. No prices were invented to fill them.
 No model was trained or evaluated on the new snapshot.
+
+The next missing input is the retained control's verified full historical OOF
+`predictions_all.parquet`, not additional current market candles. It exists in
+Drive but has not been materialized locally. Do not replace it with the rejected
+August SWA run or with Future-OOS predictions.
 
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.
