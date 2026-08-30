@@ -212,6 +212,20 @@ candidate. It must reproduce the process that generated the evidence rather
 than relabel the retired fixed recent-three ensemble. The TCN+GRU and all frozen
 failure records remain unchanged.
 
+Forward-shadow v2 implementation is now complete through commit `32a579f`:
+label-free inference, saved-artifact parity, aligned 720-hour preparation,
+hash-pinned historical payoff fits, pushed-Git registration, an append-only
+timeliness ledger, mature-only candidate-versus-ATR marked accounting, and the
+conjunctive 12-block confirmation gate are implemented. Seventy-three affected
+legacy/new tests and 18 focused forward tests passed. A broader full-suite run
+was stopped during an unrelated long CPU training test after passing roughly
+17%; it did not report a failure before cancellation. No concrete model block
+has been prepared, no registration exists, and the confirmation clock has not
+started. The next operator action is exactly one GPU `prepare` run of
+`notebooks/08_phase2_forward_shadow_v2.ipynb`; do not run 04/05/06/07 for this
+candidate. Codex must then copy the exact manifest into Git, push it, and create
+the Drive registration before `score` is allowed.
+
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.
 
