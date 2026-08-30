@@ -111,6 +111,21 @@ carried across the two 64-hour gaps, and end-of-fold censored positions do not
 become completed trades. The result is retrospective and non-promotable.
 See [Phase 2 economic attribution](phase2-economic-attribution.md).
 
+### Full-history attribution (completed)
+
+The retained full-CV cache was audited over 38 folds / 24,966 test rows from
+November 2022-December 2025. Scores were percentiles of each fold's preceding
+validation distribution; four fixed densities used unchanged baseline exits.
+q80/q90 returned `+13.82%/+19.54%` under base costs but `-65.26%/-42.84%` under
+adverse costs, with only `21/38` positive folds and `43.47%/31.59%` base drawdown.
+These are whole-period independent-fold returns, not annual or live returns.
+
+Serial-preserving controls corrected an ordinary-shuffle turnover distortion.
+Historical model contribution survived (bounded-family Holm p about `0.00798`),
+but ALL four policies failed the economic gate. The score is potentially useful
+information, not a robust standalone bot. This density panel is closed.
+See [full OOF checkpoint](full-oof-research-checkpoint.md) for results and hashes.
+
 ## Next Operator Run
 
 `recent6_validation_lcb_top3_v1` completed on the immutable historical cache
@@ -135,8 +150,8 @@ dispersion, global top-decile lift and worst-five improvement gates. The
 candidate is archived unchanged; do not tune or rerun it automatically.
 
 Training is paused (`experiments.training_allowed: false`). The active work
-is full-cache economic attribution after the completed accounting/data-integrity
-and three-fold attribution review. Neither
+is the specified validation net-utility hurdle probe after the completed
+accounting/data-integrity, three-fold and full-cache attribution reviews. Neither
 Notebook 04 nor 04a is an appropriate next run. The old 07 lock is audit-only,
 and 06 is historical engineering diagnostics, not a way to reopen failed OOS.
 
@@ -151,10 +166,13 @@ The retained control's full historical OOF `predictions_all.parquet` is now
 materialized locally and SHA-256 verified against the mounted Drive source.
 It contains 24,966 unique test decisions across 38 chronological folds,
 November 2022-December 2025, plus each fold's prior validation scores.
-The bounded full-history attribution audit is in progress; no new success claim
-is justified yet. Its explicit input contract is
+The bounded full-history attribution and serial controls completed; no policy
+passed. Their explicit input contract is
 `configs/full_oof_attribution_v1.json`. See
 [full OOF research checkpoint](full-oof-research-checkpoint.md) to resume.
+The next probe is [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md),
+specified before fitting and not yet evaluated. Its separate payoff-model fits
+must be reported truthfully; the TCN+GRU and frozen failures remain unchanged.
 
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.

@@ -81,11 +81,19 @@ replacement.
 
 ## Single next research decision
 
-Before new training, run the same attribution contract on the retained control's
-full historical out-of-fold cache. The verified Drive artifact exists, but the
-119 MB `predictions_all.parquet` has not yet been materialized locally. The
-three-fold audit is too narrow to decide whether the score-margin lead generalizes
-over the full market history.
+The full-cache follow-up is now complete. The 119 MB OOF artifact was verified
+locally; same-fold past-validation percentiles avoided transferring a later raw
+threshold backwards in time. Four densities were evaluated at unchanged exits.
+None passed the economic gate. q80/q90 were weakly positive under base costs but
+strongly negative under adverse costs and insufficiently broad across folds.
+
+Ordinary shuffling increased realized turnover, despite preserving selected-row
+counts. The separate `yenibot.automation.phase2_oof_serial_control` corrects this
+confound using within-fold/month cyclic shifts, reference-engine verification,
+explicit turnover reporting and conservative two-null/family-wise comparison.
+Historical model contribution survived, not deployable utility. Shift-invariance
+assumptions and historical selection bias remain. All figures, source hashes and
+limitations are in the [full OOF checkpoint](full-oof-research-checkpoint.md).
 
 The full-cache gate remains exactly the code defaults:
 
@@ -96,11 +104,11 @@ The full-cache gate remains exactly the code defaults:
 - positive score/forward-return RankIC and top-minus-bottom spread;
 - complete execution data contract.
 
-If it fails, close the current score as a trade-entry engine and start one bounded
-model hypothesis aimed at net-of-cost decision utility/abstention rather than
-optimizing exits around the same weak score. If it passes, lock one strategy and
-a post-lock unseen boundary; do not select among multiple variants on that future
-window.
+The fixed-density panel is closed as a deployable trade-entry engine, but the
+score is not wholly uninformative. The ONE next probe is
+[validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md), specified
+before fitting. Do not optimize more exits on these results. Only historical
+economic success can justify a separately locked post-lock unseen confirmation.
 
 ## Local command
 

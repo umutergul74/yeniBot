@@ -1,6 +1,6 @@
 # Full OOF research checkpoint
 
-Updated August 30, 2026. This is a continuation checkpoint, not a success report.
+Updated August 30, 2026. Both audits completed; the goal is NOT achieved.
 
 ## Objective and current evidence
 
@@ -61,7 +61,7 @@ Drawdown here is completed-trade-close drawdown, not intrabar worst-case risk.
 Base funding is a fixed-rate estimate, not complete historical funding; no result
 can authorize deployment.
 
-## Current run / resume
+## Completed runs / resume
 
 Run directory: `reports/phase2_economic_attribution/20260830_full_oof_cdf_v1`.
 
@@ -74,25 +74,69 @@ The command is:
   --output-dir reports/phase2_economic_attribution/20260830_full_oof_cdf_v1
 ```
 
-The initial local handle was exec session `1234`, OS worker PID `9428`.
-These are historical identifiers, not proof it remains alive. Recheck the handle
-or process before restarting. Existing output directories are never overwritten.
-Each completed strategy writes its result; `full_oof_attribution_suite.json`
-appears only after the complete four-strategy family finishes.
+Exec session `1234` / worker PID `9428` completed with exit code 0. The additional
+serial-control run (session `88174`) also completed with exit code 0. Neither is
+an active wait. Do not restart either completed run; outputs are append-only.
+
+Serial output: `reports/phase2_economic_attribution/20260830_full_oof_serial_v1`.
+Runner: `yenibot.automation.phase2_oof_serial_control`, with the same scope and
+gate paths, `--attribution-dir` pointing at the original run and `--output-dir`
+pointing at the serial output. Both complete suite JSONs exist.
+
+Suite JSON SHA-256:
+
+- Original: `3e84792e679932459e12ae7a38b9976196381ede2b51decf260a0c85fb15c6dc`.
+- Serial: `0109b42ea00023c94145d10711cf6944f18dde36f7ece936955c245e00a3fb69`.
+
+## Completed result
+
+These are whole-period, completed-trade returns over independent November
+2022-December 2025 folds at unit notional, NOT annualized/live portfolio returns.
+Terminal censored positions are excluded, and drawdown is trade-close based.
+
+| Validation cutoff | Base return | Adverse return | Trades | Positive folds | Base drawdown |
+|---|---:|---:|---:|---:|---:|
+| q50 | -76.30% | -97.18% | 2,126 | 12/38 | -77.76% |
+| q70 | -34.17% | -86.12% | 1,552 | 18/38 | -49.96% |
+| q80 | +13.82% | -65.26% | 1,186 | 21/38 | -43.47% |
+| q90 | +19.54% | -42.84% | 737 | 21/38 | -31.59% |
+
+Every policy failed adverse costs and fold breadth. q80/q90 profit factors were
+only 1.041/1.070 and mean base net returns 1.90/3.27 bps per trade. This fixed
+four-density panel is closed to further tuning; no policy is deployable.
+
+Ordinary shuffling preserved selected rows but increased realized turnover.
+For q80, 1,186 actual trades became 2,010.7 mean null trades. The follow-up
+circular-shift control preserved cyclic score order inside each fold/month:
+
+| Cutoff | Actual trades | Serial-null mean trades | Serial-null median return | Serial p |
+|---|---:|---:|---:|---:|
+| q50 | 2,126 | 2,126.6 | -89.31% | 0.00399 |
+| q70 | 1,552 | 1,563.8 | -82.17% | 0.00200 |
+| q80 | 1,186 | 1,198.9 | -75.23% | 0.00200 |
+| q90 | 737 | 741.7 | -60.30% | 0.00200 |
+
+There were 500 controls of EACH kind per policy. Using each policy's larger
+p-value from the two controls and Holm correction across the four policies
+gives approximately 0.00798 for each. Three serial p-values hit the Monte Carlo
+minimum, not a precisely estimated smaller value. Circular shifts preserve
+cyclic order with a wrap seam and assume local shift-invariance; they do not
+force identical turnover or eliminate historical model-selection bias.
+
+Historical model contribution survives the turnover-aware comparison. This is
+stronger evidence than the narrow three-fold audit, but is NOT high, future-stable
+model success or a deployable system. Adverse-cost failure, substantial drawdown,
+historical selection bias and the original failed future-OOS remain.
 
 ## Next decision
 
-1. Inspect all four results together, including adverse costs, all-fold breadth,
-   reference controls and family-wise significance. Do not choose on raw return.
-2. Ordinary within-month score permutations do not preserve signal serial
-   dependence. Any apparent model contribution still needs a dependence-aware
-   control (e.g. circular shifts/block methods) before a stronger claim.
-3. If economic evidence fails, close this fixed-exit score-density panel without
-   searching exits. Use the observed failure mechanism to specify ONE model
-   utility/abstention hypothesis; do not reopen already rejected families.
-4. If robust historical evidence survives, preregister one post-lock unseen
-   confirmation, with realistic actual funding and execution/risk checks.
-5. No Notebook 04/04a/06/07 or live trading is requested at this checkpoint.
+1. Do not rerun the completed audits or select q90 on its highest base return.
+2. Implement ONLY [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md),
+   specified before fitting and not yet evaluated. It tests validation-only
+   payoff estimation/abstention, not another exit or hyperparameter grid.
+3. Preserve every failure. Any historical success still needs a separately
+   locked post-lock unseen confirmation with actual funding/execution/risk checks.
+4. No Notebook 04/04a/06/07 or live trading is requested at this checkpoint.
 
 ## Statistical references
 
