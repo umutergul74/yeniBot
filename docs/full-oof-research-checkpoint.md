@@ -133,8 +133,11 @@ historical selection bias and the original failed future-OOS remain.
 1. Do not rerun the completed audits or select q90 on its highest base return.
 2. The [validation net-utility hurdle v1](validation-net-utility-hurdle-v1.md)
    follow-up is now completed and failed: +20.75% base, -46.27% adverse and only
-   13/38 positive folds. Do not rerun or retune it. Resume from its checkpoint's
-   calibration-source independence audit and require a separate pre-fit protocol.
+   13/38 positive folds. Do not rerun or retune it. The calibration-source audit
+   led to the separate [past-OOF utility v1 protocol](prequential-oof-utility-v1.md).
+   That document is the current implementation/run checkpoint; its initial
+   read-only preflight passed. Keep its fixed 36-fold cohort separate from these
+   older 38-fold totals.
 3. Preserve every failure. Any historical success still needs a separately
    locked post-lock unseen confirmation with actual funding/execution/risk checks.
 4. No Notebook 04/04a/06/07 or live trading is requested at this checkpoint.
