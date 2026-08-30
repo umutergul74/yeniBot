@@ -1,0 +1,87 @@
+{
+  "version": "block_prequential_forward_shadow_v2",
+  "candidate_family": "tcn_gru_validation_cdf_past_oof_payoff",
+  "profile": "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
+  "source_evidence": {
+    "prequential_result_sha256": "41237d1a3298276b60add605c90cc3d4cef5f63bf2716c16e50f95516d560524",
+    "conditional_result_sha256": "409c46ebe172007e58708e534885544b73e534fce705f9040c1d7992cf481ee6",
+    "initial_oof_targets_sha256": "2d2692c94d1ce656ccc7d31cf3cff08a63c808daa78f0a0f86537d41e3104665",
+    "historical_confirmation_cutoff": "2025-12-28T02:00:00Z",
+    "failed_2026_window_evidence_role": "seen_training_history_only_never_confirmation"
+  },
+  "model_schedule": {
+    "block_hours": 720,
+    "evidence_hours_per_block": 657,
+    "sequence_burn_in_hours_per_block": 63,
+    "train_bars": 5040,
+    "purge_bars": 24,
+    "validation_bars": 1080,
+    "embargo_bars": 6,
+    "post_fit_audit_bars": 64,
+    "minimum_label_maturity_hours": 10,
+    "block_ordinal_anchor": "2022-11-15T01:00:00Z",
+    "seed_rule": "project_random_seed_plus_block_ordinal",
+    "fit_selection_data": "train_and_validation_only",
+    "post_fit_audit_influences_selection": false,
+    "in_block_refit_allowed": false
+  },
+  "score_transform": {
+    "type": "same_model_validation_empirical_cdf_right",
+    "reference_role": "final_selected_checkpoint_validation_predictions",
+    "minimum_reference_rows": 1000
+  },
+  "payoff_layer": {
+    "ridge_alpha": 10.0,
+    "candidate_features": [
+      "validation_score_percentile",
+      "decision_atr_close_fraction",
+      "score_atr_product"
+    ],
+    "atr_control_features": [
+      "constant_zero",
+      "decision_atr_close_fraction",
+      "constant_zero"
+    ],
+    "target": "adverse_cost_single_opportunity_net_return",
+    "entry_utility_cutoff": 0.0,
+    "entry_comparison": "strictly_greater",
+    "initial_history": "hash_pinned_2022_2025_oof_targets_only",
+    "update_schedule": "once_before_each_720h_block",
+    "update_history": "initial_oof_plus_only_prior_shadow_outcomes_mature_before_new_block",
+    "in_block_refit_allowed": false
+  },
+  "execution_contract": {
+    "signal_backtest": "next_open_tp2_sl5_max10_stop_first",
+    "accounting_version": "phase2_mtm_v2",
+    "base_and_adverse_costs_required": true,
+    "atr_only_same_cohort_required": true,
+    "zero_latency_results_are_signal_evidence_only": true,
+    "live_readiness_requires_separate_latency_liquidity_evidence": true
+  },
+  "confirmation": {
+    "start_rule": "strictly_after_artifacts_manifest_lock_and_commit",
+    "prelock_or_backfilled_rows_allowed": false,
+    "minimum_blocks": 12,
+    "minimum_coverage_days": 360,
+    "minimum_completed_candidate_trades": 100,
+    "interim_looks_blocks": [3, 6, 9],
+    "interim_success_allowed": false,
+    "required_gates": [
+      "candidate_base_return_positive",
+      "candidate_adverse_return_positive",
+      "candidate_base_profit_factor_at_least_1_10",
+      "candidate_adverse_profit_factor_at_least_1_05",
+      "candidate_adverse_positive_block_fraction_at_least_two_thirds",
+      "candidate_minus_atr_base_paired_block_lower95_positive",
+      "candidate_minus_atr_adverse_paired_block_lower95_positive",
+      "candidate_score_payoff_rank_ic_moving_block_lower95_positive",
+      "candidate_adverse_net_bps_per_occupied_hour_not_below_atr_control",
+      "hourly_marked_drawdown_not_worse_than_minus_15_percent",
+      "all_integrity_and_common_cohort_checks_pass"
+    ],
+    "paired_bootstrap_replicates": 10000,
+    "paired_bootstrap_block_lengths": [2, 3],
+    "automatic_promotion_allowed": false,
+    "live_trading_allowed": false
+  }
+}
