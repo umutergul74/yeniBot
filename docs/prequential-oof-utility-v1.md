@@ -186,6 +186,11 @@ completed. It preserves historical profitability but finds greater hourly
 drawdown and 2.229 times the ATR control's exposure. Its final section is the
 active checkpoint for the next conditional score-contribution audit.
 
+Further update: that [conditional score attribution](conditional-score-attribution-result-v1.md)
+is complete. It finds strong incremental historical sensitivity after coarse
+ATR conditioning, while retaining the exact serial/multiplicity and unseen-data
+limitations. Its active checkpoint now governs the forward-shadow work.
+
 1. Keep all earlier failures and this failed-gate result immutable. Do not rerun
    the completed trial, turn it into an official winner, or tune its parameters.
 2. The next bounded work is an **execution/risk realism audit of the frozen

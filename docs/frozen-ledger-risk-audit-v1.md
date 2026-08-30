@@ -164,6 +164,11 @@ audit nor its pinned implementation identity; new manifests use POSIX separators
 
 Previous goal turn: concrete progress, not blocked. All jobs above are terminal.
 
+Update: the fixed [conditional score attribution](conditional-score-attribution-result-v1.md)
+has now completed and passed its retrospective diagnostic. Its result document
+supersedes the steps below as the active checkpoint; the original plan remains
+for audit chronology.
+
 1. Do not rerun/refit the closed candidate or optimize to clear its failed gate.
 2. The next bounded research question is **incremental TCN score contribution
    after controlling for ATR/volatility context**, using the same frozen fits and

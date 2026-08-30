@@ -142,6 +142,25 @@ the same validation set selected the base checkpoint, so it was not independent
 calibration data. That is a risk, not a proven sole cause of the loss.
 See [net-utility result and next-work checkpoint](validation-net-utility-hurdle-v1.md).
 
+### Past-OOF utility and conditional score attribution
+
+A stricter block-prequential payoff layer, fitted only on mature earlier OOF
+test outcomes, produced +149.01% base and +80.65% adverse historical return on
+folds 2-37. It still failed its original breadth and paired-control acceptance
+gate and remains closed to retuning. A separate frozen-ledger audit retained
++146.49%/+78.31% after terminal liquidation under the fixed funding schedules,
+while revealing 2.229 times the ATR control's occupied exposure.
+
+The final ATR-conditional audit then moved only the TCN+GRU score within two
+predeclared fold/month/ATR grids. The actual policy beat all 500 controls in all
+16 locked cost/statistic combinations (`1/501` Monte Carlo resolution), with
+98.33%/96.09% selected-row exchangeability coverage. Independent seed replay,
+full-engine checks and 12/12 artifact hashes matched exactly. This establishes
+strong **retrospective incremental-score sensitivity**, not independent signal
+confirmation: circular controls under-preserve the actual serial dependence and
+trade counts differ. See the
+[conditional attribution result](conditional-score-attribution-result-v1.md).
+
 ## Next Operator Run
 
 `recent6_validation_lcb_top3_v1` completed on the immutable historical cache
@@ -186,10 +205,12 @@ The bounded full-history attribution and serial controls completed; no policy
 passed. Their explicit input contract is
 `configs/full_oof_attribution_v1.json`. See
 [full OOF research checkpoint](full-oof-research-checkpoint.md) to resume.
-The [validation net-utility probe](validation-net-utility-hurdle-v1.md) completed
-and failed. Do not rerun it. Next, audit earlier-OOF-only calibration and specify
-a separate temporal protocol and common-cohort controls before fitting anything.
-The TCN+GRU and all frozen failures remain unchanged.
+The validation-only and past-OOF utility probes, ledger-risk audit and
+conditional score audit are complete. Do not rerun or retune them. The active
+work is now a separately preregistered block-prequential forward-shadow
+candidate. It must reproduce the process that generated the evidence rather
+than relabel the retired fixed recent-three ensemble. The TCN+GRU and all frozen
+failure records remain unchanged.
 
 See [integrity repair plan](integrity-repair-plan.md) for the corrected
 accounting contract, scope limitations and next research stages.
