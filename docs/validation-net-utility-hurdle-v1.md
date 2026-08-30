@@ -169,6 +169,11 @@ the next audit. The analytic ridge implementation was tested against the
 
 ## Next work — not a hidden v1 retune
 
+Update August 30: the separate [past-OOF utility v1](prequential-oof-utility-v1.md)
+protocol and probe below have now been completed. That document is the active
+checkpoint. It improved historical returns but failed its conjunctive gate;
+neither this validation family nor the new probe may be retuned to rescue it.
+
 Audit the feasibility of a time-ordered second stage trained ONLY on already
 mature predictions/outcomes from earlier OOF test folds. Keep the current and
 future fold completely excluded. Earlier-fold test labels, if used, must be

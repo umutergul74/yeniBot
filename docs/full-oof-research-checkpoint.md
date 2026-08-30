@@ -135,9 +135,10 @@ historical selection bias and the original failed future-OOS remain.
    follow-up is now completed and failed: +20.75% base, -46.27% adverse and only
    13/38 positive folds. Do not rerun or retune it. The calibration-source audit
    led to the separate [past-OOF utility v1 protocol](prequential-oof-utility-v1.md).
-   That document is the current implementation/run checkpoint; its initial
-   read-only preflight passed. Keep its fixed 36-fold cohort separate from these
-   older 38-fold totals.
+   That probe is now complete: +149.01% base/+80.65% adverse, but the locked gate
+   still failed breadth and paired comparisons. It is closed to retuning.
+   Resume from that document's execution/risk realism audit checkpoint. Keep
+   its fixed 36-fold cohort separate from these older 38-fold totals.
 3. Preserve every failure. Any historical success still needs a separately
    locked post-lock unseen confirmation with actual funding/execution/risk checks.
 4. No Notebook 04/04a/06/07 or live trading is requested at this checkpoint.

@@ -1,7 +1,8 @@
 # Prequential OOF utility v1
 
-Status: protocol written before candidate fitting. August 30, 2026.
-The goal remains unachieved; this is a retrospective probe, not clean confirmation.
+Status: completed August 30, 2026; historical returns improved, but the locked
+conjunctive gate FAILED. Probe CLOSED to retuning. The original pre-fit protocol
+below is retained. The goal remains unachieved; this is not clean confirmation.
 
 ## Mechanism and boundaries
 
@@ -94,7 +95,7 @@ control, malformed clocks/splits/cohorts and refusal to overwrite results.
 The 61 existing targeted tests also passed; one new assertion initially expected
 an obsolete exception message and was corrected without changing the safeguard.
 
-Run once after the implementation commit is pushed:
+Original command (now completed; do not rerun):
 
 ```powershell
 .venv/Scripts/python -m yenibot.automation.phase2_prequential_utility `
@@ -107,3 +108,97 @@ Run once after the implementation commit is pushed:
 
 Add `--preflight-only` for a read-only source/cohort check. Completed probes are
 append-only: do not rerun them or create a new directory just to retune v1.
+
+## Completed evidence and active checkpoint
+
+Implementation/protocol commit `1ea6768` was pushed BEFORE the actual fit.
+Exec session `54897`, worker PID `23972`, completed with exit code 0. There is no
+active training/evaluation wait. The separate read-only reconstruction audit
+(session `47184`) also completed with exit code 0 and performed no extra fits.
+
+The output directory is
+`reports/phase2_economic_attribution/20260830_prequential_oof_v1`.
+There were 36 candidate and 36 ATR-only payoff fits, no TCN+GRU or archived-policy
+refits. All 36 training membership hashes and strict maturity constraints were
+reconstructed successfully. Saved training scalers and intercepts matched; ridge
+normal-equation maximum residual was 1.14e-13; saved prediction error was zero.
+Independent itemized price/cost calculations matched ledger returns to 1.15e-16.
+Every evaluated policy used the same 23,652 decisions, folds 2-37.
+
+| Policy, same 36-fold cohort | Base return | Adverse return | Trades | Base trade-close DD |
+|---|---:|---:|---:|---:|
+| Past-OOF utility candidate | +149.01% | +80.65% | 315 | -19.00% |
+| ATR-only matched control | +56.39% | +35.56% | 140 | -10.30% |
+| Fixed q80 | +20.68% | -60.13% | 1,107 | -43.31% |
+| Archived validation-payoff policy | +22.02% | -45.59% | 803 | -40.57% |
+
+These are completed-trade compounded returns across independent historical
+folds spanning January 2023-December 2025, NOT annualized returns or a continuous
+live portfolio simulation. Censored positions are excluded and drawdown is
+trade-close only. There are no leverage or real execution guarantees.
+
+Candidate base/adverse profit factors were 1.517/1.320; mean net trade returns
+30.68/20.47 bps. Adverse trade-close drawdown was -22.58%. Three excluded terminal
+marks summed to -0.812% base/-0.977% adverse (not compounded portfolio returns;
+no hypothetical exit costs charged). ATR-only adverse PF was 1.327 and mean net
+24.28 bps, with -12.20% DD. More candidate total return does NOT establish better
+per-trade quality or equal-risk efficiency than the context-only policy.
+
+The candidate had 23 positive, seven negative and six no-trade base folds.
+23/36 = 63.89% is below the unchanged two-thirds requirement (24/36).
+Adverse folds: 21 positive, nine negative, six no-trade. Neither no-trade folds
+nor losses are dropped. Both conditional nulls had p = 0.001996 (500 each,
+Monte Carlo floor), but this concerns whole-policy timing, not isolated TCN value.
+Serial-null mean turnover was 327.53 versus 315 actual trades.
+
+Paired mean-fold deltas and 95% intervals below are **percentage points**, not
+whole-period compounded-return differences. All pre-specified tests were required.
+
+| Candidate minus control | Mean delta | 3-fold-block interval | 6-fold-block interval |
+|---|---:|---:|---:|
+| q80, base | +1.917 | [-0.272, +4.627] | [-0.278, +4.692] |
+| q80, adverse | +4.022 | [+1.869, +6.652] | [+1.815, +6.755] |
+| ATR-only, base | +1.444 | [+0.023, +2.954] | [+0.408, +3.249] |
+| ATR-only, adverse | +0.927 | [-0.485, +2.390] | [+0.050, +2.569] |
+
+Three original criteria failed: fold breadth, all paired q80 conditions, and all
+paired ATR-only conditions. Do not choose only the favorable cost or block length.
+The family is CLOSED despite the improved aggregate returns; no threshold,
+alpha, history window, exit or gate changes are permitted to rescue this result.
+
+Read-only concentration checks: base/adverse completed returns were +7.22/+3.84%
+in the 2023 slice (31 trades), +60.21/+39.48% in 2024 (136) and +44.96/+24.73%
+in 2025 (148). Removing the five largest winners still left +103.60/+48.37%;
+removing the best fold left +108.81/+54.73%. These are descriptive robustness
+checks after seeing the result, not additional independent successful trials.
+
+Payoff calibration did transfer descriptively in this historical probe:
+1,712 selected eligible overlapping opportunities had predicted/observed
+adverse payoff +11.81/+19.70 bps; completed trades +8.02/+20.47 bps. No large-N
+significance is inferred from overlapping opportunities. The change also expanded
+and changed the training history; validation reuse is not proved the sole cause
+of the earlier failure. Historical profile-selection bias remains intact.
+
+### Resume here
+
+1. Keep all earlier failures and this failed-gate result immutable. Do not rerun
+   the completed trial, turn it into an official winner, or tune its parameters.
+2. The next bounded work is an **execution/risk realism audit of the frozen
+   ledgers**, not a new entry-policy search: intratrade marked equity and terminal
+   positions, actual historical funding availability, and candidate versus
+   ATR-only exposure/risk concentration. First specify the accounting assumptions;
+   retain original returns alongside any accounting-reconciled diagnostic.
+3. Evidence of promising historical utility now exists, but robust incremental
+   TCN benefit and clean confirmation remain unproved. Never equate +149% with
+   live readiness or the project's final goal. Any future promotion still requires
+   a separately locked, genuinely unseen confirmation and execution/risk checks.
+4. No notebook run or live trading is required for the next local audit.
+
+Result SHA-256:
+`41237d1a3298276b60add605c90cc3d4cef5f63bf2716c16e50f95516d560524`.
+Fits SHA-256:
+`f0b66218d53b32daab7807d97ab4cee56f7d110799be64e34260f0bc66515ae4`.
+Candidate signals SHA-256:
+`cbef47bf8150d61bb10fa1761b6a14f2dd8a987c0da3bbe876d4362ee162dcf1`.
+The root result pins all original artifacts. An appended
+`post_run_integrity_audit.json` records the later no-refit checks separately.
