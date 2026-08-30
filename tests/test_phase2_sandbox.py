@@ -252,12 +252,12 @@ def test_backtest_does_not_queue_stale_signals_while_position_is_open(
 
     assert len(result.trades) == 1
     trade = result.trades.iloc[0]
-    assert trade["decision_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
+    assert trade["decision_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
     assert trade["entry_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
-    assert trade["entry_delay_hours"] == 1.0
+    assert trade["entry_delay_hours"] == 0.0
     assert result.summary["selected_signal_count"] == 2
     assert result.summary["skipped_during_open_position_count"] == 1
-    assert result.summary["max_entry_delay_hours"] == 1.0
+    assert result.summary["max_entry_delay_hours"] == 0.0
 
 
 def test_backtest_rejects_next_bar_entry_across_data_gap(tmp_path: Path) -> None:
@@ -345,7 +345,7 @@ def test_backtest_applies_score_margin_entry_filter_before_execution(
 
     assert len(result.trades) == 1
     trade = result.trades.iloc[0]
-    assert trade["decision_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
+    assert trade["decision_time"] == pd.Timestamp("2026-01-01 03:00:00", tz="UTC")
     assert trade["score_margin"] == pytest.approx(0.09)
     assert result.summary["selected_signal_count"] == 2
     assert result.summary["entry_filter_skipped_count"] == 1
@@ -369,7 +369,7 @@ def test_backtest_forces_close_before_internal_data_gap(tmp_path: Path) -> None:
             "open": [100.0] * 4,
             "high": [100.2] * 4,
             "low": [99.8] * 4,
-            "close": [100.0, 100.1, 100.2, 100.3],
+            "close": [100.0, 100.1, 100.2, 100.2],
             "atr_14": [1.0] * 4,
         }
     )
@@ -396,8 +396,10 @@ def test_backtest_forces_close_before_internal_data_gap(tmp_path: Path) -> None:
 
     trade = result.trades.iloc[0]
     assert trade["entry_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
-    assert trade["exit_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
-    assert trade["exit_reason"] == "data_gap_forced_close"
+    assert trade["exit_time"] == pd.Timestamp("2026-01-01 03:00:00", tz="UTC")
+    assert trade["exit_reason"] == "data_gap_censored"
+    assert trade["trade_status"] == "censored"
+    assert result.summary["trade_count"] == 0
     assert trade["holding_bars"] == 2
     assert result.summary["data_gap_forced_close_count"] == 1
 
@@ -447,7 +449,7 @@ def test_breakeven_stop_activates_only_after_completed_trigger_bar(
     trade = result.trades.iloc[0]
     assert trade["entry_time"] == pd.Timestamp("2026-01-01 01:00:00", tz="UTC")
     assert trade["exit_time"] == pd.Timestamp("2026-01-01 02:00:00", tz="UTC")
-    assert trade["exit_reason"] == "breakeven_stop"
+    assert trade["exit_reason"] == "breakeven_stop_gap_open"
     assert trade["exit_price"] == 100.0
     assert bool(trade["dynamic_stop_activated"]) is True
 
@@ -496,7 +498,7 @@ def test_atr_trailing_stop_uses_only_prior_completed_bar_extremes(
     )
 
     trade = result.trades.iloc[0]
-    assert trade["exit_time"] == pd.Timestamp("2026-01-01 03:00:00", tz="UTC")
+    assert trade["exit_time"] == pd.Timestamp("2026-01-01 04:00:00", tz="UTC")
     assert trade["exit_reason"] == "atr_trailing_stop"
     assert trade["exit_price"] == 101.0
     assert trade["final_active_stop_price"] == 101.0

@@ -216,6 +216,12 @@ def test_completed_failed_adaptive_cycle_routes_to_no_notebook() -> None:
 
 def test_preregistered_trajectory_swa_cycle_routes_only_to_notebook_04() -> None:
     config = load_config("config.yaml")
+    # Historical preregistration fixture; the committed cycle is now closed.
+    cycle = config["experiments"]["next_research_cycle"]
+    cycle["status"] = "trajectory_swa_v1_preregistered_awaiting_historical_triage"
+    cycle["primary_hypothesis"] = "trajectory_swa_v1"
+    cycle["next_action"] = "run_notebook_04_then_notebook_05_once"
+    cycle["trajectory_weight_averaging"]["enabled"] = True
     protocol = research_protocol_payload(
         config,
         phase2_readiness={

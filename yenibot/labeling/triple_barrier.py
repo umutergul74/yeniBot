@@ -95,6 +95,7 @@ def add_long_only_labels(
     tp_multiplier: float = 2.0,
     sl_multiplier: float = 5.0,
     max_holding_bars: int = 10,
+    expected_bar_interval_hours: float = 1.0,
 ) -> pd.DataFrame:
     """Add binary long-only triple-barrier labels to a feature frame."""
 
@@ -104,6 +105,15 @@ def add_long_only_labels(
         raise ValueError(f"Missing columns for labeling: {missing}")
 
     df = frame.copy().reset_index(drop=True)
+    times = pd.to_datetime(df["timestamp"], utc=True, errors="raise")
+    if (
+        times.isna().any()
+        or not times.is_monotonic_increasing
+        or times.duplicated().any()
+    ):
+        raise ValueError("Label timestamps must be unique, ordered and finite")
+    if max_holding_bars <= 0 or expected_bar_interval_hours <= 0:
+        raise ValueError("Label horizon and interval must be positive")
     close = df["close"].astype(float).to_numpy()
     high = df["high"].astype(float).to_numpy()
     low = df["low"].astype(float).to_numpy()
@@ -118,6 +128,18 @@ def add_long_only_labels(
         float(sl_multiplier),
         int(max_holding_bars),
     )
+    # A row-based horizon must never compress a missing candle into one hour.
+    # Reject the entire event window, even if a barrier hit before the gap.
+    expected = pd.Timedelta(hours=expected_bar_interval_hours)
+    gaps = times.diff().ne(expected).astype(int)
+    gaps.iloc[0] = 0
+    cumulative = gaps.cumsum()
+    complete = cumulative.shift(-max_holding_bars).eq(cumulative)
+    invalid = ~complete.to_numpy()
+    labels[invalid] = -1
+    tb_return[invalid] = np.nan
+    hit_code[invalid] = -1
+    exit_bar[invalid] = -1
 
     df["label"] = labels
     df["tb_return"] = tb_return

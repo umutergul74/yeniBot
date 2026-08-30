@@ -164,7 +164,6 @@ def recency_weights(
         for fold, weight in zip(selected, normalized, strict=True)
     }
 
-
 def aggregate_recency_predictions(
     raw_predictions: pd.DataFrame,
     *,
@@ -330,7 +329,9 @@ def research_protocol_payload(
         failed_candidate_id = configured_primary_id
     current_status = str(cycle.get("status", "not_configured"))
     current_action = cycle.get("next_action")
-    if artifact_override and readiness.get("ready_for_phase2"):
+    if current_status == "historical_swa_failed_engineering_review":
+        current_action = "refresh_data_then_review_economic_baselines"
+    elif artifact_override and readiness.get("ready_for_phase2"):
         current_status = "phase2_ready_review"
         current_action = "review_phase2_design_boundary_before_any_phase2_code"
     elif artifact_override and (
@@ -342,7 +343,9 @@ def research_protocol_payload(
         )
     ):
         current_status = "seed_reproducibility_review_required"
-        current_action = "complete_seed_reproducibility_review_before_replacement_preregistration"
+        current_action = (
+            "complete_seed_reproducibility_review_before_replacement_preregistration"
+        )
     elif failed_future_oos and replacement_fit_complete:
         current_status = "failed_future_oos_replacement_manifest_pin_required"
         current_action = PIN_REPLACEMENT_MANIFEST_ACTION
@@ -362,14 +365,20 @@ def research_protocol_payload(
         "frozen_candidate_manifest_unavailable" in blockers or not frozen_available
     ):
         current_status = "awaiting_replacement_preregistration"
-        current_action = "select_and_preregister_replacement_candidate_from_historical_cv_only"
+        current_action = (
+            "select_and_preregister_replacement_candidate_from_historical_cv_only"
+        )
     elif artifact_override and (
         future_readiness.get("ready_for_evaluation")
         and not future_readiness.get("evaluation_completed")
     ):
         current_status = "future_oos_ready_prediction_only"
         current_action = "run_no_refit_future_oos_evaluator"
-    elif artifact_override and "future_unseen_oos_not_ready" in blockers and frozen_available:
+    elif (
+        artifact_override
+        and "future_unseen_oos_not_ready" in blockers
+        and frozen_available
+    ):
         current_status = "replacement_manifest_pinned_waiting_for_future_oos_rows"
         current_action = "wait_for_new_future_oos_rows"
     replacement_candidate = configured_replacement
@@ -467,6 +476,7 @@ def research_protocol_payload(
         ),
         "phase2_code_allowed": False,
     }
+
 
 def research_protocol_markdown(protocol: dict[str, Any]) -> str:
     return "\n".join(

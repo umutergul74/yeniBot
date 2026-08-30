@@ -99,6 +99,7 @@ def build_phase1_current_status(
     )
     research_cycle_closed = bool(
         protocol_action.startswith("archive_failed_adaptive_ensemble_")
+        or protocol_action == "refresh_data_then_review_economic_baselines"
     )
 
     if phase2_ready:
@@ -182,13 +183,17 @@ def build_phase1_current_status(
         historical_research_result = "no_active_candidate"
         historical_research_next_action = "preregister_distinct_historical_mechanism"
     if adaptive_research_preregistered:
-        historical_research_result = "preregistered_policy_pending_historical_evaluation"
+        historical_research_result = (
+            "preregistered_policy_pending_historical_evaluation"
+        )
         historical_research_next_action = protocol_action
     elif trajectory_research_preregistered and not configured_research_evaluated:
-        historical_research_result = "preregistered_training_candidate_pending_historical_evaluation"
+        historical_research_result = (
+            "preregistered_training_candidate_pending_historical_evaluation"
+        )
         historical_research_next_action = protocol_action
     elif research_cycle_closed:
-        historical_research_result = "adaptive_policy_failed_no_promotion"
+        historical_research_result = "closed_research_no_promotion"
         historical_research_next_action = protocol_action
 
     if (

@@ -218,7 +218,7 @@ def _prediction_path(scope_dir: str | Path) -> Path:
 
 
 def _time_column(frame: pd.DataFrame) -> str:
-    for column in ("timestamp", "bar_close_time", "decision_time"):
+    for column in ("timestamp", "bar_open_time", "bar_close_time", "decision_time"):
         if column in frame.columns:
             return column
     raise ValueError("Predictions are missing a timestamp/bar time column.")
@@ -294,6 +294,11 @@ def phase2_inputs_from_predictions(
         .rename(columns={time_column: "bar_close_time"})
         .reset_index(drop=True)
     )
+    # Native Phase 1 timestamp is Binance bar OPEN time. Keep it explicitly;
+    # features/scores become available only when that hourly bar completes.
+    if time_column in {"timestamp", "bar_open_time"}:
+        bars["bar_open_time"] = bars["bar_close_time"]
+        bars["bar_close_time"] = bars["bar_open_time"] + pd.Timedelta(hours=1)
     if atr_column != "atr_14":
         bars = bars.rename(columns={atr_column: "atr_14"})
 
@@ -335,6 +340,9 @@ def phase2_inputs_from_predictions(
         .rename(columns={time_column: "decision_time", score_column: "prob_long"})
         .reset_index(drop=True)
     )
+    if time_column in {"timestamp", "bar_open_time"}:
+        signals["source_bar_open_time"] = signals["decision_time"]
+        signals["decision_time"] = signals["decision_time"] + pd.Timedelta(hours=1)
     return bars, signals, stats
 
 

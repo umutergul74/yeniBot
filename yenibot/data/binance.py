@@ -202,7 +202,14 @@ def download_full_klines(
         if request_sleep_seconds > 0:
             time.sleep(request_sleep_seconds)
 
-    return klines_to_dataframe(rows)
+    frame = klines_to_dataframe(rows)
+    cutoff = pd.Timestamp.now(tz="UTC")
+    if end_ms is not None:
+        cutoff = min(cutoff, pd.to_datetime(end_ms, unit="ms", utc=True))
+    return frame.loc[
+        (frame["close_time"] < cutoff)
+        & (frame["timestamp"] >= pd.to_datetime(start_ms, unit="ms", utc=True))
+    ].reset_index(drop=True)
 
 
 def download_full_klines_from_vision(
@@ -250,7 +257,11 @@ def download_full_klines_from_vision(
             "Check symbol, interval, and date range."
         )
     filtered = [row for row in rows if start_ms <= int(row[0]) < end_ms]
-    return klines_to_dataframe(filtered)
+    frame = klines_to_dataframe(filtered)
+    cutoff = min(
+        pd.Timestamp.now(tz="UTC"), pd.to_datetime(end_ms, unit="ms", utc=True)
+    )
+    return frame.loc[frame["close_time"] < cutoff].reset_index(drop=True)
 
 
 def futures_metrics_to_dataframe(frame: pd.DataFrame) -> pd.DataFrame:

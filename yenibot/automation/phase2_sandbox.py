@@ -160,6 +160,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exit-slippage-bps", type=float, default=2.0)
     parser.add_argument("--funding-bps-per-8h", type=float, default=0.0)
     parser.add_argument(
+        "--funding-events",
+        help="Historical funding parquet/CSV; otherwise costs are explicit estimates",
+    )
+    parser.add_argument(
         "--all-cost-scenarios",
         action="store_true",
         help=(
@@ -237,6 +241,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     bars = pd.read_csv(bars_path)
     signals = pd.read_csv(signals_path)
+    funding_events = None
+    if args.funding_events:
+        funding_path = Path(args.funding_events)
+        funding_events = (
+            pd.read_parquet(funding_path)
+            if funding_path.suffix == ".parquet"
+            else pd.read_csv(funding_path)
+        )
     scenarios = (
         contract.cost_scenarios if args.all_cost_scenarios else (custom_scenario,)
     )
@@ -263,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_long_only_backtest(
                 bars,
                 signals,
+                funding_events=funding_events,
                 gate=gate,
                 contract=strategy_contract,
                 cost_scenario=scenario,

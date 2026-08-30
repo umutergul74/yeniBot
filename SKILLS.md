@@ -10,105 +10,31 @@ Build a professional, bias-free ML pipeline that trains a binary TCN+GRU sequenc
 
 Phase 1 ends at model validation. Do not build execution, trade management, order routing, live bot services, alerting, leverage, or deployable trading code until Phase 1 readiness gates pass. A gated Phase 2 sandbox branch may prepare backtest accounting, trade-ledger, fee/slippage/funding, and report plumbing while Future-OOS is pending, but every output must be marked non-promotable and official mode must fail closed until Phase 2 readiness passes.
 
-## Current Safe Baseline
+## Current Operating State — August 30, 2026
 
-The current safe control profile is configured in `config.yaml`:
+Committed `config.yaml` and generated evidence are authoritative together;
+a notebook's older handoff or README snapshot cannot override a completed outcome.
 
-- `experiments.control_profile`: `baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility`
-- `features.active_profile` may remain a feature-generation default and is not by itself a promotion decision.
-- `experiments.policy_review.status`: `failed_clean_holdout_review`
-- `future_oos_monitor.allow_holdout_roll_forward`: `false`
-- Frozen candidate `control_fold_ensemble_v1` completed its 737-row future-OOS
-  evaluation on June 13, 2026 and failed. It is retired and must not be tuned
-  or retested on that same window.
-- `experiments.research_focus.mode`: `walk_forward_cv_repair`
-- `experiments.next_research_cycle.status`: `replacement_candidate_manifest_pinned_awaiting_future_oos`
-- Replacement candidate `control_recent3_equal_v2` has been selected from
-  historical rolling-origin CV only, fitted through the new anchor, and pinned
-  as the current frozen candidate. Its expected manifest hash is
-  `baf5ec8b946c6c62c8a0c964c5345417d7023397b798eaa6fec41a3653250857`.
-- Future-OOS scoring remains paused until enough fresh mature labeled rows
-  exist after the `2026-06-13T01:00:00+00:00` anchor. Phase 2 remains blocked
-  until this pinned candidate is evaluated without refitting and passes its
-  pre-registered future-OOS gates.
-- The failed June 13 candidate remains immutable historical evidence in
-  `frozen_candidate_outcomes`; do not regenerate or re-hash it as a current
-  primary, and do not use its failed window for replacement policy selection.
-- Bundle `20260614_054446` completed the train-fold-only preprocessing cycle
-  without a promotable candidate. Hard reliability masking changed 10 of 12
-  triage folds, raised dispersion, reduced positive-fold coverage, and damaged
-  top-score payoff. Train-only clipping was controlled but too weak and reduced
-  top-10 lift. Both masking variants are rejected and clipping is archived as
-  inconclusive/non-promotable; do not rerun this family automatically.
-- Bundle 74 completed the isolated seed-audit extension on source run
-  `20260614_054446` without retraining the source full-CV scope. Treat
-  `seed_audit_coverage.csv`, `seed_reproducibility_audit.csv`, and
-  `seed_reproducibility_manifest_diff.csv` as mandatory
-  current evidence before selecting another feature or training hypothesis.
-  Independent-seed dispersion is not interpretable until the same-seed audit is
-  classified as reproduced or as acceptable numeric drift.
-- Historical rolling-origin evidence from bundle `20260613_134953` showed a
-  real trade-off: `recent_3_equal` improved mean Rank IC, positive-fold
-  coverage, worst-fold IC, and F1 versus `all_eligible_equal`, while
-  `all_eligible_equal` retained stronger top-decile lift. Do not repeat the
-  broad recency sweep.
-- Bundle 70 rejected `dual_horizon_all_recent3_50_50`: its IC improvement was
-  real, but mean F1 was `0.4383` and positive top-decile return occurred in
-  only `69.4%` of folds. `recent_3_equal` alone cleared every committed
-  balanced non-inferiority gate. `control_recent3_equal_v2` is now the pinned
-  replacement candidate awaiting a fresh unseen OOS window.
-- Bundle `20260624_171150` completed the first model-capacity diagnostic.
-  Uniform medium shrinkage was rejected because it worsened dispersion and
-  collapsed top-decile lift. Uniform small shrinkage improved triage std,
-  positive-fold coverage, and worst-fold IC, but damaged official F1, PRAUC,
-  and top-decile concentration. Do not rerun either combined configuration.
-  Bundle `20260625_155006` then closed component-only width search: isolated
-  TCN32, GRU64, and fusion64 all failed the joint stability, F1, and top-score
-  payoff gates. Keep the baseline TCN64/GRU128/fusion128 architecture fixed.
-- Bundle `20260626_122455` closed `baseline_seed_rank_ensemble_v1`.
-  The equal-weight validation-CDF seed-rank ensemble raised mean IC, but
-  worsened dispersion, positive-fold coverage, worst-fold behavior, official
-  F1, and top-decile payoff. Do not search seed weights, add more seeds, or
-  retry rank/probability seed ensembles without a new mechanism.
-- Bundle `20260627_205102` showed that the first sample-weighting implementation
-  was mechanically inert. Static label-uniqueness weights had a normalized
-  Kish effective-sample fraction near `0.9983`, with p10, p50, and p90 almost
-  identical. The low overlap-information proxy near `0.094` describes target
-  dependence; it does not imply that static normalized loss weights can
-  distinguish rows. The v1 event component also averaged percentile ranks
-  across 20 columns, so almost no rows crossed its `0.80` threshold and the
-  event weights remained effectively one. Archive both v1 candidates and do
-  not interpret their nearly identical predictions as a valid event-weighting
-  test.
-- Bundle `20260627_232543` completed the corrected event-weighting test. The
-  weights were mechanically active, so this was a valid test rather than
-  another no-op. It improved paired triage mean IC by only `0.0012`, improved
-  Rank IC in only 4 of 12 folds, and worsened dispersion, worst-fold IC,
-  PRAUC, and top-decile lift. Close the sample/event-weighting family; do not
-  tune its quantile, strength, or feature-family weights.
-- Bundle `20260628_093830` completed the fixed-sum auxiliary-return test. It
-  produced real but incomplete transfer: paired triage mean IC improved by
-  `0.0084`, PRAUC by `0.0061`, and global top-decile lift from `1.2276` to
-  `1.2705`. It still failed because dispersion worsened, official F1 fell, and
-  bad-fold top-decile lift remained `0.6406`. The auxiliary and P(Long)
-  rankings were `0.921` correlated, so the target is not missing; naive
-  gradient summation is the unresolved mechanism.
-- Bundle `20260628_155057` closed primary-preserving multitask projection.
-  Shared gradients conflicted in only `1.8%` of 6,400 audited batches and had
-  mean cosine `+0.61`; gradient interference was not the instability mechanism.
-  The candidate still worsened dispersion and official F1, reduced positive
-  top-decile-lift coverage to `50%`, and left bad-fold top-decile lift below
-  one. Close the entire auxiliary multitask family.
-- The current research state is model-research freeze pending future OOS:
-  `experiments.research_focus.status` should be
-  `model_research_frozen_pending_future_oos`. `candidate_profiles` must remain
-  empty. The retained control passes every active historical model-evidence
-  gate, but Phase 2 is still blocked by the pre-registered frozen future-OOS
-  confirmation. Do not run notebook 04, add profiles, tune thresholds, change
-  the frozen manifest, or lower the 720-row minimum while confirmation is
-  pending.
+- Keep the retained TCN64/GRU128/fusion128 historical control as a reference.
+  Do not describe its scores as calibrated probabilities or promise profitability.
+- Both `control_fold_ensemble_v1` and `control_recent3_equal_v2` failed their
+  one-shot Future-OOS tests and are retired. Preserve original outcome files.
+- Adaptive ensemble research and trajectory SWA (`20260824_154330`) completed
+  without promotion. Their parameters and failed selection windows remain closed.
+- `experiments.training_allowed: false` and `candidate_profiles: []` intentionally
+  block Notebook 04. A new reviewed preregistration is required before training.
+- Current authorized work: data/accounting integrity, versioned data refresh,
+  and historical diagnostic comparisons of model versus no-model economic value.
+- Phase 2 v2 accounting results are new audit artifacts, not replacements for
+  v1 results or grounds to reopen either failed OOS candidate.
+- Old clean-forward locks remain unchanged and audit-only. Any new confirmation
+  must pin its accounting version, model, policy and a defensible unseen boundary.
+- For closed-candle local refresh use `python -m yenibot.automation.refresh_data
+  --output-dir data/raw/snapshots/<new-id>`. It performs no training or scoring.
+- Failed mechanisms, historical evidence and rejection reasons are preserved in
+  the experiment memory in config and git. Do not rerun them automatically.
 
-Treat these as operational facts unless a newer committed config deliberately changes them. Do not promote any profile, blend, score band, or threshold from the already-seen holdout window.
+See `docs/current-status.md` and `docs/integrity-repair-plan.md`.
 
 ## Non-Negotiable Data Rules
 

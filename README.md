@@ -1,7 +1,7 @@
 # yeniBot
 
 [![Phase](https://img.shields.io/badge/phase-1%20model%20validation-16794b)](#current-status)
-[![Phase 2](https://img.shields.io/badge/phase%202-future%20OOS%20pending-c47b13)](#current-status)
+[![Phase 2](https://img.shields.io/badge/phase%202-audit%20only-c47b13)](#current-status)
 [![CI](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml/badge.svg)](https://github.com/umutergul74/yeniBot/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
 [![PyTorch](https://img.shields.io/badge/PyTorch-TCN%20%2B%20GRU-EE4C2C?logo=pytorch&logoColor=white)](yenibot/models/hybrid.py)
@@ -15,55 +15,32 @@ binary TCN+GRU model under purged walk-forward validation, and produces
 artifact-verified evidence for or against promotion.
 
 > [!IMPORTANT]
-> This repository does not contain a trading bot, backtester, execution
-> engine, position-sizing system, or live deployment service. Model scores are
+> This repository contains research backtesting and position sizing, but no
+> order-routing bot or live deployment service. Model scores are
 > research outputs, not trading advice or calibrated probability estimates.
 
 ## Current Status
 
-**Model evidence passes the active `v4_evidence` research charter. Historical
-model research is frozen, while Phase 2 awaits one preregistered future-OOS
-confirmation.**
+Reviewed **August 30, 2026**, branch `codex/phase1-research-v2`.
 
-The first frozen candidate failed and remains immutable history. Its
-replacement, `control_recent3_equal_v2`, was selected using historical
-rolling-origin evidence only and pinned before collecting a new unseen window.
-It has not been refit or tuned against that window.
+- The retained TCN+GRU control has historical ranking evidence, not proven
+  deployable profitability. Treat its sigmoid as a score, not calibrated odds.
+- Both frozen Future-OOS candidates failed and are retired. Their original
+  windows, predictions and outcomes must not be rescored or tuned.
+- Adaptive expert selection and trajectory SWA failed their preregistered tests.
+  SWA run `20260824_154330` is closed; training is explicitly paused in config.
+- The current work is accounting/data integrity and economic-baseline review.
+  No model, threshold, strategy or acceptance gate has been promoted.
+- Phase 2 accounting `phase2_mtm_v2` uses hourly marked equity, explicit bar
+  intervals, gap-aware stops, itemized fill costs and optional historical funding.
+  Censored positions are not completed trades. Legacy forward locks are audit-only.
+- Latest local raw snapshot: `data/raw/snapshots/20260830_integrity_v2`.
+  No training, feature rebuild or OOS evaluation was run against this new data.
 
-Latest retained walk-forward evidence snapshot, generated from run
-`20260628_155057` and reviewed on **June 28, 2026**:
-
-| Evidence | Result | Interpretation |
-|---|---:|---|
-| Mean walk-forward Rank IC | `0.0748` | Passes the `0.03` gate |
-| Positive-IC folds | `76.3%` | Passes the `75%` gate narrowly |
-| PRAUC lift vs prevalence | `1.145` | Robust under hierarchical bootstrap |
-| Precision lift vs prevalence | `1.085` | Positive point estimate; uncertainty remains |
-| F1 skill vs rate-matched random | `+0.028` | Small but positive classification skill |
-| Positive-return folds | `68.4%` | Passes the active consistency gate |
-| Top-decile OOS forward return | `0.00286` | Positive walk-forward economic ordering |
-| Raw probability calibration | Not deployment-ready | Use outputs as ranking scores |
-| Replacement future-OOS rows | `313 / 720` | Confirmation not ready yet |
-
-The legacy monitors remain visible:
-
-- Fold Rank IC standard deviation: `0.0832`
-- Raw official Long F1: `0.4377`
-
-These are not hidden or rewritten. Under the active evidence charter they are
-monitors rather than standalone promotion gates because the original targets
-did not account for dependent time-series sampling noise or no-skill class
-baselines.
-
-The current interpretation is deliberately narrow:
-
-- The model has credible **ranking evidence**.
-- The model does **not** yet have reliable probability calibration.
-- The already-seen holdout produced a negative top-decile return and is not
-  used for further tuning.
-- Phase 2 requires the pinned replacement to pass its new, no-refit future-OOS
-  window. Historical profile search is closed while this confirmation is
-  pending.
+See [current status](docs/current-status.md) and
+[integrity repair / next plan](docs/integrity-repair-plan.md) for limitations
+and next actions. The current task is **not** to rerun Notebook 04/04a or to
+wait for a retired candidate to pass.
 
 ## Research Boundary
 
@@ -203,7 +180,7 @@ Run in strict order:
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
 
-Rerun rules:
+Rerun rules (future work requires an approved active research contract; training is currently paused):
 
 | Change | Required notebooks |
 |---|---|
@@ -213,20 +190,19 @@ Rerun rules:
 | Model, loss, training config, or active training profile | `04 -> 05` |
 | Diagnostics/reporting only | `05` |
 | Frozen-prediction Phase 2 sandbox/backtest only | `06`; no training and no Phase 1 report rebuild |
-| Locked clean-forward confirmation | `07` after `05` writes post-anchor Future-OOS predictions |
+| Locked clean-forward confirmation | `07` only with a new valid lock and separate append-only predictions; current lock is audit-only |
 | Unevaluated frozen future-OOS data refresh | `01 -> 02 -> 03 -> 05`; do not refit with `04` |
 | Historical walk-forward preprocessing/profile experiment | `04 -> 05`; notebooks `02/03` are unchanged |
-| Preregistered trajectory-SWA experiment | `04`, then `05`; triage must pass before automatic full CV |
+| Closed trajectory-SWA experiment | No rerun; retained as historical audit evidence |
 
 When `candidate_profiles` is empty, do not run notebook `04` merely to recreate
 the control. Use notebook `05` for reporting changes and wait until a distinct
 candidate is explicitly pre-registered.
 
 Notebook 04a is retained only for the completed cached-policy audit and is not
-part of the active run. The current `trajectory_swa_v1` candidate runs through
-Notebook 04 and emits a single averaged checkpoint per fold; Notebook 05 then
-writes the immutable diagnostic bundle. It cannot activate a replacement
-candidate automatically.
+part of the active run. Trajectory SWA is also closed. Do not rerun 04/04a
+to reproduce rejected candidates. A new experiment requires reviewed
+preregistration and explicit re-enabling of training in config.
 
 Before any unevaluated frozen-candidate evaluation, follow
 [`docs/future-oos-runbook.md`](docs/future-oos-runbook.md). Its preflight is

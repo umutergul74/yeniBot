@@ -406,6 +406,32 @@ def test_future_oos_waits_without_loading_models(tmp_path: Path, monkeypatch) ->
     assert failure["fit_operations_performed"] == 0
 
 
+def _complete_recorded_family(report, config):
+    path = report / "future_oos_evaluation.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    times = pd.date_range("2024-01-03", periods=3, freq="h", tz="UTC")
+    identity = {
+        "rows": 3,
+        "data_start": times.min().isoformat(),
+        "data_end": times.max().isoformat(),
+    }
+    payload["rows"][0].update(identity)
+    config["experiments"]["frozen_candidate_outcomes"]["control_v1"].update(identity)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    for name in future_oos_module._IMMUTABLE_FUTURE_OOS_ARTIFACTS:
+        if not (report / name).exists():
+            (report / name).write_text("audit fixture\n", encoding="utf-8")
+    pd.DataFrame(
+        {
+            "timestamp": times,
+            "candidate_id": "control_v1",
+            "prob_long": [0.2, 0.6, 0.8],
+            "label": [0, 1, 1],
+            "forward_return": [-0.01, 0.01, 0.02],
+        }
+    ).to_parquet(report / "future_oos_predictions.parquet", index=False)
+
+
 def test_future_oos_reuses_recorded_immutable_outcome_without_rescoring(
     tmp_path: Path,
     monkeypatch,
@@ -447,6 +473,8 @@ def test_future_oos_reuses_recorded_immutable_outcome_without_rescoring(
         lambda **_: (_ for _ in ()).throw(AssertionError("must not rescore")),
     )
 
+    _complete_recorded_family(report, config)
+    original = (report / "future_oos_evaluation.json").read_bytes()
     evaluation, status = evaluate_future_oos(
         run_dir=tmp_path / "run",
         report_dir=report,
@@ -459,6 +487,10 @@ def test_future_oos_reuses_recorded_immutable_outcome_without_rescoring(
     assert status["evaluation_reused_from_recorded_outcome"] is True
     assert status["rescore_operations_performed"] == 0
     assert status["state_source"] == "recorded_immutable_future_oos_outcome"
+    assert (report / "future_oos_evaluation.json").read_bytes() == original
+    (report / "future_oos_prediction_sample.csv").write_text("corrupted sample", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        evaluate_future_oos(run_dir=tmp_path / "run", report_dir=report, config=config, manifests=[])
 
 
 def test_future_oos_restores_verified_recorded_artifact_family_from_sibling_run(
@@ -506,6 +538,7 @@ def test_future_oos_restores_verified_recorded_artifact_family_from_sibling_run(
         lambda **_: (_ for _ in ()).throw(AssertionError("must not rescore")),
     )
 
+    _complete_recorded_family(source, config)
     current = reports / "current_run"
     evaluation, status = evaluate_future_oos(
         run_dir=tmp_path / "run",

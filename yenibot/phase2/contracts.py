@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
+import math
 
 
 Phase2Mode = Literal["sandbox", "official"]
@@ -20,6 +21,21 @@ class CostScenario:
     entry_slippage_bps: float = 2.0
     exit_slippage_bps: float = 2.0
     funding_bps_per_8h: float = 0.0
+
+    def validate(self) -> None:
+        values = (
+            self.entry_fee_bps,
+            self.exit_fee_bps,
+            self.entry_slippage_bps,
+            self.exit_slippage_bps,
+            self.funding_bps_per_8h,
+        )
+        if not all(math.isfinite(v) for v in values) or any(
+            v < 0 or v >= 10_000 for v in values[:4]
+        ):
+            raise ValueError(
+                "Costs must be finite; fees/slippage must be in [0, 10000) bps"
+            )
 
     def round_trip_cost_fraction(self, holding_hours: float = 0.0) -> float:
         fee_bps = self.entry_fee_bps + self.exit_fee_bps
@@ -77,6 +93,25 @@ class Phase2StrategyContract:
     )
 
     def validate(self) -> None:
+        if self.allow_overlapping_positions:
+            raise ValueError(
+                "Overlapping positions require an event-driven multi-position ledger; unsupported"
+            )
+        for name in (
+            "threshold",
+            "take_profit_atr",
+            "stop_loss_atr",
+            "min_score_margin",
+            "expected_bar_interval_hours",
+            "max_bar_gap_hours",
+            "min_entry_atr_fraction",
+            "max_entry_atr_fraction",
+            "breakeven_trigger_atr",
+            "trailing_stop_atr",
+        ):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
         if self.side != "long_only":
             raise ValueError("The first Phase 2 contract is long-only.")
         if self.entry_rule != "next_bar_open":

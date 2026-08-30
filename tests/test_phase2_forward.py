@@ -296,7 +296,7 @@ def test_forward_runner_applies_locked_candidates_and_risk_policy(
     report = json.loads(
         (output / "phase2_forward_decision.json").read_text(encoding="utf-8")
     )
-    assert report["status"] == "collecting_clean_evidence"
+    assert report["status"] == "historical_audit_only_lock_requires_new_preregistration"
     assert {item["role"] for item in report["candidate_results"]} == {
         "primary_balanced",
         "challenger_return",

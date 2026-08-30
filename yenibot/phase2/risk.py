@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -17,9 +18,22 @@ class Phase2RiskPolicy:
     max_notional_fraction: float = 0.25
     daily_realized_loss_limit_fraction: float = 0.01
     max_realized_drawdown_fraction: float = 0.05
+    max_marked_drawdown_fraction: float = 0.05
     allow_leverage: bool = False
 
     def validate(self) -> None:
+        if not all(
+            math.isfinite(v)
+            for v in (
+                self.initial_equity,
+                self.risk_fraction_per_trade,
+                self.max_notional_fraction,
+                self.daily_realized_loss_limit_fraction,
+                self.max_realized_drawdown_fraction,
+                self.max_marked_drawdown_fraction,
+            )
+        ):
+            raise ValueError("Risk parameters must be finite")
         if not self.policy_id.strip():
             raise ValueError("Risk policy id cannot be empty.")
         if self.initial_equity <= 0:
@@ -34,6 +48,8 @@ class Phase2RiskPolicy:
             raise ValueError("Daily realized loss limit must be in (0, 1).")
         if not 0 < self.max_realized_drawdown_fraction < 1:
             raise ValueError("Maximum realized drawdown must be in (0, 1).")
+        if not 0 < self.max_marked_drawdown_fraction < 1:
+            raise ValueError("Maximum marked drawdown must be in (0, 1).")
 
     def notional_fraction(self, *, stop_distance_fraction: float) -> float:
         """Return bounded notional/equity from the fixed loss budget."""

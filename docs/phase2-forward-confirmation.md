@@ -1,6 +1,23 @@
 # Phase 2 Clean Forward Confirmation
 
-Status: **locked and collecting post-anchor evidence**
+Status: **legacy lock preserved; historical audit only** (August 30, 2026)
+
+The frozen Phase 1 candidate failed. This v1 lock also predates the corrected
+accounting contract and admits decisions before its own registration date.
+It remains readable for audit, but cannot produce a clean-confirmation pass.
+Do not change its hash, cutoff, policies or failure history to repair that.
+A new candidate needs a newly reviewed lock, pinned `phase2_mtm_v2` accounting
+and a defensible unseen boundary after registration/selection.
+
+Continuous future inference can append to `forward_predictions.jsonl` using
+`phase2.prediction_ledger.append_forward_predictions`. It verifies overlap,
+model identity, hourly continuity and a content hash chain. This ledger is
+separate from the immutable `future_oos_predictions.parquet` outcome. The
+forward runner prioritizes the ledger when present; it never extends a
+completed model evaluation. Generating a new candidate's scores still requires
+its actual verified model artifacts; market data alone is not predictions.
+
+The following describes the historical v1 design, not current authorization.
 
 This workflow is separate from the already-seen Phase 2 sandbox. It consumes
 only frozen-model decisions strictly after `2026-06-13T01:00:00Z`, performs no

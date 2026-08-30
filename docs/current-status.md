@@ -1,6 +1,6 @@
 # Current Phase 1 Status
 
-Last reviewed: **August 24, 2026**
+Last reviewed: **August 30, 2026**
 
 ## Decision
 
@@ -111,18 +111,25 @@ confidence level, validation split, and purge remain closed to tuning. The
 result is preserved in `phase1_latest_policy_research_bundle.zip` with zero fit
 operations and no failed-OOS selection rows.
 
-The materially distinct `trajectory_swa_v1` mechanism is now preregistered.
-It preserves the control features, labels, TCN+GRU widths, primary loss, seed,
-fold boundaries, and thresholds. Inside each train fold it averages one
-post-burn-in optimization trajectory and emits one checkpoint. This is not a
-seed ensemble, recency ensemble, validation expert selector, or inference-time
-blend.
+The `trajectory_swa_v1` mechanism completed in run `20260824_154330`.
+Its 12-fold triage implementation audit passed, but the candidate failed
+dispersion, global top-decile lift and worst-five improvement gates. The
+candidate is archived unchanged; do not tune or rerun it automatically.
 
-Run Notebook 04 once. The candidate first runs only on the committed triage
-folds and reaches full CV only if every existing triage gate passes. Then run
-Notebook 05 once to create the review bundle. Do not run Notebook 04a, 06, or
-07 in this cycle. The two failed Future-OOS windows remain excluded from
-selection, and even a historical pass cannot auto-freeze a replacement.
+Training is paused (`experiments.training_allowed: false`). The active work
+is accounting/data integrity, followed by economic-baseline review. Neither
+Notebook 04 nor 04a is an appropriate next run. The old 07 lock is audit-only,
+and 06 is historical engineering diagnostics, not a way to reopen failed OOS.
+
+A local raw snapshot was downloaded on August 30: 40,857 1H bars, 10,214 4H
+bars, 163,427 valid 15m bars and 5,108 funding records from January 2022.
+1H/4H are gap-free; 15m has two historical gaps after three zero-activity
+rows were excluded. 2,005 funding mark prices are missing in 2022–2023;
+2026 funding mark prices are complete. No prices were invented to fill them.
+No model was trained or evaluated on the new snapshot.
+
+See [integrity repair plan](integrity-repair-plan.md) for the corrected
+accounting contract, scope limitations and next research stages.
 
 The authoritative machine-readable instruction is
 `operator_next_step.json`. A completed evaluation must always supersede the

@@ -241,6 +241,7 @@ def _write_experiment_bundle(
         "future_oos_evaluation.csv",
         "future_oos_evaluation.md",
         "future_oos_evaluation.json",
+        "future_oos_artifact_integrity.json",
         "future_oos_prediction_sample.csv",
         "future_oos_predictions.parquet",
         "future_oos_temporal_blocks.csv",

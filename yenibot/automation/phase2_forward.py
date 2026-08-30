@@ -20,6 +20,7 @@ from yenibot.phase2.confirmation import locked_risk_policy
 from yenibot.phase2.confirmation import locked_strategy_contracts
 from yenibot.phase2.confirmation import validate_forward_input_manifest
 from yenibot.phase2.adapter import phase2_inputs_from_predictions
+from yenibot.phase2.prediction_ledger import read_forward_ledger
 from yenibot.phase2.engine import run_long_only_backtest
 from yenibot.phase2.forensics import phase2_trade_forensics
 from yenibot.phase2.forensics import write_phase2_forensics
@@ -129,6 +130,31 @@ def _source_inputs(
     lock: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     frozen = lock["frozen_model"]
+    ledger_path = _find_single_file(root, "forward_predictions.jsonl")
+    if ledger_path is not None:
+        frame = read_forward_ledger(ledger_path)
+        frozen = lock["frozen_model"]
+        if (
+            frame.empty
+            or not frame.candidate_id.eq(frozen["candidate_id"]).all()
+            or not frame.manifest_hash.eq(frozen["candidate_manifest_hash"]).all()
+        ):
+            raise ValueError("Forward ledger does not match the locked model")
+        bars, signals, stats = phase2_inputs_from_predictions(
+            frame,
+            candidate_id=frozen["candidate_id"],
+            threshold=frozen["threshold"],
+            split="all",
+        )
+        return (
+            bars,
+            signals,
+            {
+                **stats,
+                "source_mode": "append_only_forward_ledger",
+                "source_path": str(ledger_path),
+            },
+        )
     future_path = _find_single_file(root, "future_oos_predictions.parquet")
     if future_path is None:
         future_path = _find_single_file(root, "future_oos_predictions.csv")
@@ -265,9 +291,13 @@ def _gate_checks(
     forensic_summary = base_forensics["summary"]
     bootstrap = base_forensics["bootstrap"]
     checks = {
+        "lock_integrity": bool(boundary.get("integrity_audit"))
+        and all(boundary.get("integrity_audit", {}).values()),
+        "continuous_hourly_coverage": boundary.get("continuous_hourly_coverage")
+        is True,
+        "data_contract_complete": summary.get("data_contract_complete") is True,
         "minimum_coverage_days": (
-            float(boundary["coverage_days"])
-            >= float(window["minimum_coverage_days"])
+            float(boundary["coverage_days"]) >= float(window["minimum_coverage_days"])
         ),
         "minimum_trade_count": (
             int(summary["trade_count"]) >= int(window["minimum_trade_count"])
@@ -291,13 +321,10 @@ def _gate_checks(
             >= float(gates["bootstrap_probability_positive_min"])
         ),
         "maximum_drawdown": (
-            float(summary["max_drawdown"])
-            >= float(gates["max_drawdown_floor"])
+            float(summary["max_drawdown"]) >= float(gates["max_drawdown_floor"])
         ),
         "best_month_removed_return": (
-            float(
-                forensic_summary["best_month_removed_compounded_return"]
-            )
+            float(forensic_summary["best_month_removed_compounded_return"])
             >= float(gates["best_month_removed_return_min"])
         ),
     }
@@ -305,7 +332,9 @@ def _gate_checks(
         checks["minimum_coverage_days"] and checks["minimum_trade_count"]
     )
     metrics_passed = bool(evidence_ready and all(checks.values()))
-    if not evidence_ready:
+    if not checks["lock_integrity"]:
+        status = "historical_audit_only_lock_requires_new_preregistration"
+    elif not evidence_ready:
         status = "collecting_clean_evidence"
     elif metrics_passed:
         status = "locked_metrics_passed_promotion_still_fail_closed"
@@ -388,14 +417,20 @@ def _parser() -> argparse.ArgumentParser:
         choices=["all", "primary_balanced", "challenger_return"],
     )
     parser.add_argument("--keep-existing", action="store_true")
+    parser.add_argument("--funding-events", help="Historical funding parquet/CSV")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    funding_events = (
+        _read_table(Path(args.funding_events)) if args.funding_events else None
+    )
     output_dir = Path(args.output_dir)
-    if output_dir.exists() and not args.keep_existing:
-        shutil.rmtree(output_dir)
+    if output_dir.exists() and any(output_dir.iterdir()) and not args.keep_existing:
+        raise FileExistsError(
+            "Forward outputs are versioned evidence; choose a new output directory (or explicitly --keep-existing for diagnostics)"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     bundle = Path(args.bundle) if args.bundle else None
     if bundle is not None:
@@ -462,9 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         contracts = locked_strategy_contracts(lock)
         roles = (
-            list(contracts)
-            if args.candidate_role == "all"
-            else [args.candidate_role]
+            list(contracts) if args.candidate_role == "all" else [args.candidate_role]
         )
         risk_policy = locked_risk_policy(lock)
         for role in roles:
@@ -475,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = run_long_only_backtest(
                     inputs.bars,
                     inputs.signals,
+                    funding_events=funding_events,
                     gate=gate,
                     contract=contract,
                     cost_scenario=scenario,

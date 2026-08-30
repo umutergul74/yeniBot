@@ -27,6 +27,7 @@ from yenibot.experiment.future_oos_diagnostics import (
 )
 from yenibot.experiment.holdout import _aggregate_holdout_predictions, _predict_holdout_for_profile
 from yenibot.phase2.adapter import attach_phase2_market_columns
+from yenibot.experiment.oos_integrity import matches_record, verify_family, SEAL_NAME
 
 __all__ = ["evaluate_future_oos"]
 
@@ -54,6 +55,7 @@ def _recorded_evaluation_matches(
     primary_id: str,
     recorded_status: str,
     expected_manifest_hash: str,
+    recorded_outcome: dict[str, Any] | None = None,
 ) -> bool:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -63,14 +65,24 @@ def _recorded_evaluation_matches(
     if rows.empty or "candidate_id" not in rows.columns:
         return False
     primary = rows.loc[rows["candidate_id"].astype(str).eq(primary_id)]
-    if primary.empty:
+    if len(primary) != 1:
         return False
     expected_passed = "passed" in recorded_status and "failed" not in recorded_status
-    observed_passed = bool(primary.iloc[0].get("evidence_passed", False))
+    raw_passed = primary.iloc[0].get("evidence_passed")
+    if not isinstance(raw_passed, (bool, np.bool_)):
+        return False
+    observed_passed = bool(raw_passed)
     if observed_passed is not expected_passed:
         return False
     observed_manifest_hash = str(primary.iloc[0].get("manifest_hash", "") or "")
-    return not expected_manifest_hash or observed_manifest_hash == expected_manifest_hash
+    try:
+        return bool(
+            expected_manifest_hash
+            and observed_manifest_hash == expected_manifest_hash
+            and matches_record(primary.iloc[0].to_dict(), recorded_outcome)
+        )
+    except (ValueError, TypeError, OverflowError):
+        return False
 
 
 def _restore_recorded_future_oos_artifacts(
@@ -79,6 +91,7 @@ def _restore_recorded_future_oos_artifacts(
     primary_id: str,
     recorded_status: str,
     expected_manifest_hash: str,
+    recorded_outcome: dict[str, Any],
 ) -> Path | None:
     """Restore a verified immutable outcome into a new historical-research report.
 
@@ -112,9 +125,21 @@ def _restore_recorded_future_oos_artifacts(
             primary_id=primary_id,
             recorded_status=recorded_status,
             expected_manifest_hash=expected_manifest_hash,
+            recorded_outcome=recorded_outcome,
         ):
             continue
-        if any(not (source / name).is_file() for name in _IMMUTABLE_FUTURE_OOS_ARTIFACTS):
+        if any(
+            not (source / name).is_file() for name in _IMMUTABLE_FUTURE_OOS_ARTIFACTS
+        ):
+            continue
+        try:
+            seal = verify_family(
+                source,
+                _IMMUTABLE_FUTURE_OOS_ARTIFACTS,
+                primary_id=primary_id,
+                outcome=recorded_outcome,
+            )
+        except (OSError, ValueError, KeyError, TypeError):
             continue
         report_path.mkdir(parents=True, exist_ok=True)
         for name in _IMMUTABLE_FUTURE_OOS_ARTIFACTS:
@@ -122,6 +147,7 @@ def _restore_recorded_future_oos_artifacts(
                 continue
             shutil.copy2(source / name, report_path / name)
         shutil.copy2(source_evaluation, evaluation_path)
+        _write_json(report_path / SEAL_NAME, seal)
         return source
     return None
 
@@ -495,6 +521,7 @@ def evaluate_future_oos(
             primary_id=primary_id,
             recorded_status=recorded_status,
             expected_manifest_hash=expected_manifest_hash,
+            recorded_outcome=recorded_outcome,
         )
         if not evaluation_path.exists() or evaluation_path.stat().st_size == 0:
             raise RuntimeError(
@@ -504,6 +531,27 @@ def evaluate_future_oos(
                 "expanded window."
             )
         recorded_payload = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        if not _recorded_evaluation_matches(
+            evaluation_path,
+            primary_id=primary_id,
+            recorded_status=recorded_status,
+            expected_manifest_hash=expected_manifest_hash,
+            recorded_outcome=recorded_outcome,
+        ):
+            raise RuntimeError(
+                "Immutable OOS window/metrics disagree with committed outcome; refusing to rescore"
+            )
+        try:
+            seal = verify_family(
+                report_path,
+                _IMMUTABLE_FUTURE_OOS_ARTIFACTS,
+                primary_id=primary_id,
+                outcome=recorded_outcome,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError(f"Immutable OOS integrity check failed: {exc}") from exc
+        if not (report_path / SEAL_NAME).exists():
+            _write_json(report_path / SEAL_NAME, seal)
         recorded_rows = recorded_payload.get("rows", []) or []
         evaluation = pd.DataFrame(recorded_rows)
         primary = evaluation.loc[
@@ -514,7 +562,9 @@ def evaluate_future_oos(
             .astype(str)
             .eq(primary_id)
         ]
-        expected_passed = "passed" in recorded_status and "failed" not in recorded_status
+        expected_passed = (
+            "passed" in recorded_status and "failed" not in recorded_status
+        )
         if primary.empty:
             raise RuntimeError(
                 "Immutable Future-OOS evaluation does not contain the configured primary "
@@ -550,14 +600,15 @@ def evaluate_future_oos(
                 "evaluation_reused_from_recorded_outcome": True,
                 "evaluation_artifact_restored": restored_from is not None,
                 "evaluation_artifact_source_run_id": (
-                    restored_from.name if restored_from is not None else report_path.name
+                    restored_from.name
+                    if restored_from is not None
+                    else report_path.name
                 ),
                 "recorded_outcome_status": recorded_outcome.get("status"),
                 "state_source": "recorded_immutable_future_oos_outcome",
             }
         )
-        recorded_payload["status"] = status
-        _write_json(evaluation_path, recorded_payload)
+        # Lifecycle diagnostics may evolve, but never rewrite the sealed result.
         _write_json(report_path / "future_oos_readiness.json", status)
         return evaluation, status
     if not bool(future_cfg.get("enabled", False)) or not anchor_value:
@@ -1001,4 +1052,12 @@ def evaluate_future_oos(
             report_path / "future_oos_prediction_sample.csv",
             index=False,
         )
+    if evaluation_completed:
+        seal = verify_family(
+            report_path,
+            _IMMUTABLE_FUTURE_OOS_ARTIFACTS,
+            primary_id=primary_id,
+            outcome=primary.iloc[0].to_dict(),
+        )
+        _write_json(report_path / SEAL_NAME, seal)
     return evaluation, status

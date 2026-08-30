@@ -45,6 +45,10 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         f"- Final equity: `{summary.get('final_equity')}`",
         f"- Maximum drawdown: `{summary.get('max_drawdown')}`",
         f"- Cost scenario: `{summary.get('cost_scenario')}`",
+        f"- Accounting version: `{summary.get('accounting_version')}`",
+        f"- Equity basis: `{metadata.get('equity_basis')}`",
+        f"- Funding basis: `{summary.get('funding_basis')}`",
+        f"- Censored positions (not completed exits): `{summary.get('censored_position_count')}`",
         f"- Selected signals: `{summary.get('selected_signal_count')}`",
         "- Entry-filter passed/skipped: "
         f"`{summary.get('entry_filter_passed_count')}` / "
@@ -52,7 +56,7 @@ def phase2_sandbox_markdown(result: Phase2BacktestResult) -> str:
         f"- Skipped stale entries: `{summary.get('skipped_stale_entry_count')}`",
         "- Skipped signals during open position: "
         f"`{summary.get('skipped_during_open_position_count')}`",
-        f"- Forced closes at data gaps: `{summary.get('data_gap_forced_close_count')}`",
+        f"- Data-gap censored positions: `{summary.get('data_gap_forced_close_count')}`",
         f"- Max entry delay hours: `{summary.get('max_entry_delay_hours')}`",
         "",
         "## Gate",

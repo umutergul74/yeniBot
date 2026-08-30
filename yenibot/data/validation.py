@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from yenibot.data.binance import KLINE_COLUMNS, interval_to_milliseconds
@@ -26,6 +27,37 @@ def validate_full_kline_frame(
     df = frame.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
+    numeric = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "num_trades",
+        "taker_buy_base_vol",
+        "taker_buy_quote_vol",
+    ]
+    for column in numeric:
+        df[column] = pd.to_numeric(df[column], errors="raise")
+    if (
+        df["timestamp"].isna().any()
+        or not np.isfinite(df[numeric].to_numpy(dtype=float)).all()
+    ):
+        raise ValueError(
+            "Klines contain missing timestamps or non-finite numeric values"
+        )
+    prices = df[["open", "high", "low", "close"]]
+    if (
+        (prices <= 0).any().any()
+        or (df["high"] < prices.max(axis=1)).any()
+        or (df["low"] > prices.min(axis=1)).any()
+    ):
+        raise ValueError("Invalid OHLC geometry or non-positive price")
+    if (df[["volume", "quote_volume", "num_trades"]] < 0).any().any():
+        raise ValueError(
+            "Negative volume or trade count is malformed, not a zero-activity row"
+        )
 
     if df["timestamp"].duplicated().any():
         dupes = df.loc[df["timestamp"].duplicated(), "timestamp"].head().tolist()

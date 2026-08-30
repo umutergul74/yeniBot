@@ -61,6 +61,11 @@ class Phase2Gate:
     def evidence_status(self) -> str:
         if self.official_allowed:
             return "official_phase2_allowed"
+        if (
+            self.future_oos_evaluation_completed
+            and not self.future_oos_candidate_passed
+        ):
+            return "sandbox_retired_candidate_historical_audit_only"
         return "sandbox_not_promotable_until_future_oos_passes"
 
     def assert_mode_allowed(self, mode: Phase2Mode) -> None:

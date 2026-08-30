@@ -98,6 +98,11 @@ __all__ = [
     '_future_oos_ready_at_fields',
 ]
 
+def assert_training_enabled(config: dict[str, Any]) -> None:
+    if _cfg(config, ["experiments", "training_allowed"], True) is False:
+        raise ValueError("Training is paused; preregister a new candidate before running Notebook 04")
+
+
 def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any]:
     """Validate stable notebook-04 safety invariants without pinning lifecycle labels."""
 
@@ -107,6 +112,10 @@ def validate_training_research_contract(config: dict[str, Any]) -> dict[str, Any
     seed_audit = experiments.get("seed_audit", {}) or {}
 
     errors: list[str] = []
+    if experiments.get("training_allowed") is False:
+        errors.append(
+            "Training is paused after completed research; refresh data and review economic baselines before preregistering a new candidate"
+        )
     research_status = str(research.get("status") or "").strip()
     research_focus_status = str(research_focus.get("status") or "").strip()
 

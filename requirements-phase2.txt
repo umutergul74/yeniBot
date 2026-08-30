@@ -1,0 +1,5 @@
+# Lightweight, pinned accounting environment; no model training dependencies.
+numpy==2.2.6
+pandas==2.3.3
+pyarrow==25.0.1
+PyYAML==6.0.3

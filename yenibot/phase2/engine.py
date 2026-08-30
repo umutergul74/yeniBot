@@ -11,6 +11,9 @@ from yenibot.phase2.contracts import CostScenario
 from yenibot.phase2.contracts import Phase2Mode
 from yenibot.phase2.contracts import Phase2StrategyContract
 from yenibot.phase2.costs import net_long_return
+from yenibot.phase2.costs import historical_funding_return, validate_funding_events
+from yenibot.phase2.market_contract import normalize_execution_inputs
+from yenibot.phase2.accounting import marked_equity_curve
 from yenibot.phase2.readiness import Phase2Gate
 from yenibot.phase2.risk import Phase2RiskPolicy
 
@@ -32,6 +35,7 @@ class ExitResolution:
     take_profit_price: float
     final_active_stop_price: float
     dynamic_stop_activated: bool
+    exit_at_open: bool = False
 
 
 def _to_timestamp(value: Any) -> pd.Timestamp:
@@ -41,14 +45,16 @@ def _to_timestamp(value: Any) -> pd.Timestamp:
     return ts.tz_convert("UTC")
 
 
-def _prepare_bars(frame: pd.DataFrame, contract: Phase2StrategyContract) -> pd.DataFrame:
+def _prepare_bars(
+    frame: pd.DataFrame, contract: Phase2StrategyContract
+) -> pd.DataFrame:
     required = {contract.bar_time_column, "open", "high", "low", "close", contract.atr_column}
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise ValueError(f"Bars are missing required columns: {missing}")
     bars = frame.copy()
     bars[contract.bar_time_column] = bars[contract.bar_time_column].map(_to_timestamp)
-    bars = bars.sort_values(contract.bar_time_column).drop_duplicates(contract.bar_time_column)
+    bars = bars.sort_values(contract.bar_time_column)
     return bars.reset_index(drop=True)
 
 
@@ -69,7 +75,7 @@ def _entry_index_after_decision(
     bar_times: pd.Series,
     decision_time: pd.Timestamp,
 ) -> int | None:
-    candidates = bar_times[bar_times > decision_time]
+    candidates = bar_times[bar_times >= decision_time]
     if candidates.empty:
         return None
     return int(candidates.index[0])
@@ -81,7 +87,7 @@ def _holding_hours(
     entry_idx: int,
     exit_idx: int,
 ) -> float:
-    start = bars.loc[entry_idx, contract.bar_time_column]
+    start = bars.loc[entry_idx, "bar_open_time"]
     end = bars.loc[exit_idx, contract.bar_time_column]
     return max((end - start).total_seconds() / 3600.0, 0.0)
 
@@ -138,12 +144,24 @@ def _resolve_exit(
                 return ExitResolution(
                     exit_idx=prior_idx,
                     exit_price=float(bars.loc[prior_idx, "close"]),
-                    exit_reason="data_gap_forced_close",
+                    exit_reason="data_gap_censored",
                     initial_stop_price=initial_stop_price,
                     take_profit_price=take_price,
                     final_active_stop_price=active_stop_price,
                     dynamic_stop_activated=dynamic_stop_activated,
                 )
+        opening = float(bars.loc[idx, "open"])
+        if idx > entry_idx and opening <= active_stop_price:
+            return ExitResolution(
+                idx,
+                opening,
+                f"{active_stop_reason}_gap_open",
+                initial_stop_price,
+                take_price,
+                active_stop_price,
+                dynamic_stop_activated,
+                True,
+            )
         high = float(bars.loc[idx, "high"])
         low = float(bars.loc[idx, "low"])
         touched_take = high >= take_price
@@ -203,8 +221,7 @@ def _resolve_exit(
         if (
             contract.exit_policy in {"breakeven", "atr_trailing"}
             and contract.breakeven_trigger_atr is not None
-            and running_high
-            >= entry_price + contract.breakeven_trigger_atr * atr
+            and running_high >= entry_price + contract.breakeven_trigger_atr * atr
         ):
             candidate_stop = entry_price
             candidate_reason = "breakeven_stop"
@@ -224,7 +241,11 @@ def _resolve_exit(
     return ExitResolution(
         exit_idx=last_idx,
         exit_price=float(bars.loc[last_idx, "close"]),
-        exit_reason="max_holding_bars",
+        exit_reason=(
+            "max_holding_bars"
+            if last_idx == entry_idx + contract.max_holding_bars - 1
+            else "end_of_data_censored"
+        ),
         initial_stop_price=initial_stop_price,
         take_profit_price=take_price,
         final_active_stop_price=active_stop_price,
@@ -239,6 +260,8 @@ def _summarize(
     gate: Phase2Gate,
     risk_policy: Phase2RiskPolicy | None = None,
 ) -> dict[str, Any]:
+    if "trade_status" in trades.columns:
+        trades = trades.loc[trades["trade_status"].eq("completed")]
     if trades.empty:
         initial_equity = risk_policy.initial_equity if risk_policy is not None else 1.0
         return {
@@ -311,7 +334,7 @@ def _summarize(
         "cost_scenario": str(trades["cost_scenario"].iloc[0]),
         "return_basis": (
             "risk_sized_portfolio_return"
-            if return_column == "portfolio_return"
+            if risk_policy is not None
             else "full_notional_trade_return"
         ),
     }
@@ -364,6 +387,7 @@ def run_long_only_backtest(
     cost_scenario: CostScenario | None = None,
     risk_policy: Phase2RiskPolicy | None = None,
     mode: Phase2Mode = "sandbox",
+    funding_events: pd.DataFrame | None = None,
 ) -> Phase2BacktestResult:
     """Run the first pre-registered long-only Phase 2 sandbox backtest.
 
@@ -377,9 +401,36 @@ def run_long_only_backtest(
         risk_policy.validate()
     gate.assert_mode_allowed(mode)
     scenario = cost_scenario or contract.cost_scenarios[1]
+    scenario.validate()
+    if mode == "official" and funding_events is None:
+        raise ValueError("Official accounting requires historical funding events")
     bars = _prepare_bars(bars, contract)
     signals = _prepare_signals(signals, contract)
-    bar_times = bars[contract.bar_time_column]
+    bars, signals, legacy_times = normalize_execution_inputs(bars, signals, contract)
+    if funding_events is not None:
+        funding_events = funding_events.copy()
+        funding_events["timestamp"] = pd.to_datetime(
+            funding_events["timestamp"], utc=True
+        )
+        ordered = funding_events.timestamp.sort_values()
+        tolerance = pd.Timedelta(hours=8, minutes=1)
+        in_window = ordered.loc[
+            (ordered >= bars.bar_open_time.min() - tolerance)
+            & (ordered <= bars[contract.bar_time_column].max() + tolerance)
+        ]
+        if not bars.empty and (
+            ordered.empty
+            or ordered.min() > bars.bar_open_time.min() + tolerance
+            or ordered.max() < bars[contract.bar_time_column].max() - tolerance
+            or (in_window.diff().dropna() > tolerance).any()
+        ):
+            raise ValueError("Historical funding coverage is incomplete for these bars")
+        funding_events = funding_events.loc[
+            (funding_events.timestamp >= bars.bar_open_time.min())
+            & (funding_events.timestamp < bars[contract.bar_time_column].max())
+        ]
+    funding_events = validate_funding_events(funding_events)
+    bar_times = bars["bar_open_time"]
 
     trades: list[dict[str, Any]] = []
     min_entry_idx = 0
@@ -414,12 +465,18 @@ def run_long_only_backtest(
         if entry_idx is None:
             skipped_no_next_bar_count += 1
             continue
-        entry_time = bars.loc[entry_idx, contract.bar_time_column]
+        entry_time = bars.loc[entry_idx, "bar_open_time"]
         entry_delay = max((entry_time - decision_time).total_seconds() / 3600.0, 0.0)
         if entry_delay > contract.max_bar_gap_hours:
             skipped_stale_entry_count += 1
             continue
-        atr = float(bars.loc[max(entry_idx - 1, 0), contract.atr_column])
+        if (
+            entry_idx == 0
+            or bars.loc[entry_idx - 1, contract.bar_time_column] != entry_time
+        ):
+            skipped_stale_entry_count += 1
+            continue
+        atr = float(bars.loc[entry_idx - 1, contract.atr_column])
         if atr <= 0:
             skipped_invalid_atr_count += 1
             continue
@@ -449,8 +506,7 @@ def run_long_only_backtest(
                 risk_drawdown_halt_skip_count += 1
                 continue
             realized_loss_fraction = (
-                daily_realized_pnl[decision_day]
-                / daily_start_equity[decision_day]
+                daily_realized_pnl[decision_day] / daily_start_equity[decision_day]
             )
             if (
                 realized_loss_fraction
@@ -468,9 +524,16 @@ def run_long_only_backtest(
         exit_idx = exit_resolution.exit_idx
         exit_price = exit_resolution.exit_price
         exit_reason = exit_resolution.exit_reason
-        if exit_reason == "data_gap_forced_close":
+        if exit_reason == "data_gap_censored":
             data_gap_forced_close_count += 1
-        holding_hours = _holding_hours(bars, contract, entry_idx, exit_idx)
+        exit_time = bars.loc[
+            exit_idx,
+            "bar_open_time"
+            if exit_resolution.exit_at_open
+            else contract.bar_time_column,
+        ]
+        holding_hours = (exit_time - entry_time).total_seconds() / 3600.0
+        censored = exit_reason.endswith("_censored")
         entry_delay_hours.append(entry_delay)
         trade_bars = bars.loc[entry_idx:exit_idx]
         returns = net_long_return(
@@ -478,21 +541,25 @@ def run_long_only_backtest(
             entry_price=entry_price,
             exit_price=exit_price,
             holding_hours=holding_hours,
+            funding_return=historical_funding_return(
+                funding_events,
+                entry_time=entry_time,
+                exit_time=exit_time,
+                entry_price=entry_price,
+            ),
+            charge_exit=not censored,
         )
         risk_fields: dict[str, Any] = {}
+        equity_before = portfolio_equity
+        notional_fraction = 1.0
         if risk_policy is not None:
             stop_distance_fraction = max(
-                (
-                    entry_price
-                    - exit_resolution.initial_stop_price
-                )
-                / entry_price,
+                (entry_price - exit_resolution.initial_stop_price) / entry_price,
                 0.0,
             )
             risk_sizing_cost_fraction = scenario.round_trip_cost_fraction(
                 holding_hours=(
-                    contract.max_holding_bars
-                    * contract.expected_bar_interval_hours
+                    contract.max_holding_bars * contract.expected_bar_interval_hours
                 )
             )
             risk_sizing_loss_fraction = (
@@ -508,16 +575,15 @@ def run_long_only_backtest(
             portfolio_return = (
                 realized_pnl / equity_before if equity_before > 0 else 0.0
             )
-            portfolio_peak = max(portfolio_peak, portfolio_equity)
-            realized_drawdown = portfolio_equity / portfolio_peak - 1.0
-            exit_day = bars.loc[exit_idx, contract.bar_time_column].date()
+            realized_drawdown = (
+                portfolio_equity / max(portfolio_peak, portfolio_equity) - 1.0
+            )
+            exit_day = exit_time.date()
             daily_start_equity.setdefault(exit_day, equity_before)
             daily_realized_pnl.setdefault(exit_day, 0.0)
-            daily_realized_pnl[exit_day] += realized_pnl
-            if (
-                realized_drawdown
-                <= -risk_policy.max_realized_drawdown_fraction
-            ):
+            if not censored:
+                daily_realized_pnl[exit_day] += realized_pnl
+            if realized_drawdown <= -risk_policy.max_realized_drawdown_fraction:
                 portfolio_halted = True
             risk_fields = {
                 "risk_policy_id": risk_policy.policy_id,
@@ -528,19 +594,37 @@ def run_long_only_backtest(
                 "position_notional_fraction": notional_fraction,
                 "position_notional": position_notional,
                 "equity_before": equity_before,
-                "realized_portfolio_pnl": realized_pnl,
+                "realized_portfolio_pnl": 0.0 if censored else realized_pnl,
+                "unrealized_portfolio_pnl": realized_pnl if censored else 0.0,
                 "portfolio_return": portfolio_return,
                 "equity_after": portfolio_equity,
-                "realized_drawdown_after": realized_drawdown,
+                "realized_drawdown_after": None if censored else realized_drawdown,
                 "portfolio_halted_after_trade": portfolio_halted,
             }
+        if risk_policy is None:
+            position_notional = equity_before
+            portfolio_equity = equity_before + position_notional * returns["net_return"]
+        risk_fields.update(
+            {
+                "equity_before": equity_before,
+                "equity_after": portfolio_equity,
+                "position_notional": position_notional,
+                "position_notional_fraction": notional_fraction,
+                "portfolio_return": portfolio_equity / equity_before - 1,
+            }
+        )
         trades.append(
             {
                 "strategy_id": contract.strategy_id,
                 "candidate_id": contract.candidate_id,
                 "decision_time": decision_time,
                 "entry_time": entry_time,
-                "exit_time": bars.loc[exit_idx, contract.bar_time_column],
+                "exit_time": exit_time,
+                "trade_status": "censored" if censored else "completed",
+                "exit_time_basis": "bar_open_gap_fill"
+                if exit_resolution.exit_at_open
+                else "bar_close_proxy_intrabar_time_unknown",
+                "excursions_are_bar_bounds": True,
                 "score": score,
                 "threshold": contract.threshold,
                 "score_margin": score - contract.threshold,
@@ -568,16 +652,59 @@ def run_long_only_backtest(
                 "gross_return": returns["gross_return"],
                 "net_return": returns["net_return"],
                 "total_cost_return": returns["total_cost_return"],
+                **{
+                    name: returns[name]
+                    for name in (
+                        "entry_fee_return",
+                        "exit_fee_return",
+                        "entry_slippage_return",
+                        "exit_slippage_return",
+                        "funding_return",
+                        "funding_basis",
+                        "entry_fill_price",
+                        "exit_fill_price",
+                    )
+                },
                 "cost_scenario": scenario.name,
                 "phase2_mode": mode,
                 "evidence_status": gate.evidence_status,
                 **risk_fields,
             }
         )
-        min_entry_idx = exit_idx + 1 if not contract.allow_overlapping_positions else entry_idx + 1
+        if risk_policy is not None:
+            marks = marked_equity_curve(
+                trade_bars,
+                pd.DataFrame([trades[-1]]),
+                contract=contract,
+                scenario=scenario,
+                initial_equity=equity_before,
+                funding_events=funding_events,
+            )
+            # Realized guardrails retain their original meaning; also latch a
+            # mark-to-market breach to block subsequent entries (not a live liquidation).
+            for mark in marks["equity"]:
+                portfolio_peak = max(portfolio_peak, float(mark))
+                if (
+                    mark / portfolio_peak - 1
+                    <= -risk_policy.max_marked_drawdown_fraction
+                ):
+                    portfolio_halted = True
+        if exit_reason == "data_gap_censored":
+            bars = bars.iloc[: exit_idx + 1]
+            break  # Balance after an unobserved interval is unknown, not flat.
+        min_entry_idx = (
+            exit_idx + 1 if not contract.allow_overlapping_positions else entry_idx + 1
+        )
 
     trade_frame = pd.DataFrame(trades)
-    equity = _equity_curve(trade_frame)
+    equity = marked_equity_curve(
+        bars,
+        trade_frame,
+        contract=contract,
+        scenario=scenario,
+        initial_equity=risk_policy.initial_equity if risk_policy else 1.0,
+        funding_events=funding_events,
+    )
     summary = _summarize(
         trade_frame,
         mode=mode,
@@ -585,6 +712,23 @@ def run_long_only_backtest(
         risk_policy=risk_policy,
     )
     summary["cost_scenario"] = scenario.name
+    summary["completed_trade_compounded_return"] = summary["compounded_return"]
+    if not equity.empty:
+        summary["final_equity"] = float(equity.equity.iloc[-1])
+        summary["compounded_return"] = (
+            summary["final_equity"] / summary["initial_equity"] - 1
+        )
+        summary["max_drawdown"] = float(equity.drawdown.min())
+    summary["censored_position_count"] = int(
+        trade_frame.get("trade_status", pd.Series(dtype=str)).eq("censored").sum()
+    )
+    summary["accounting_version"] = "phase2_mtm_v2"
+    summary["funding_basis"] = (
+        "historical_events"
+        if funding_events is not None
+        else "fixed_rate_duration_estimate"
+    )
+    summary["data_contract_complete"] = data_gap_forced_close_count == 0
     execution_diagnostics = {
         "selected_signal_count": selected_signal_count,
         "skipped_no_next_bar_count": skipped_no_next_bar_count,
@@ -626,6 +770,11 @@ def run_long_only_backtest(
     }
     summary.update(execution_diagnostics)
     metadata = {
+        "accounting_version": "phase2_mtm_v2",
+        "equity_basis": "hourly_close_mark_to_market_not_intrabar_worst_case",
+        "legacy_open_timestamps_normalized": legacy_times,
+        "censored_positions_are_not_executed_exits": True,
+        "funding_time_assumption": "entry_inclusive_exit_exclusive_bar_close_proxy",
         "mode": mode,
         "contract": {
             "strategy_id": contract.strategy_id,

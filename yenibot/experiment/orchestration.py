@@ -21,6 +21,7 @@ from yenibot.experiment.classification import (
 from yenibot.experiment.charter import write_validation_charter_status
 from yenibot.experiment.common import _cfg, _hash_payload, _json_ready, _read_json, _slug, _write_json
 from yenibot.experiment.configuration import (
+    assert_training_enabled,
     _TRAINING_EXECUTION_KEYS,
     _apply_experiment_policy_guard,
     _attach_resolved_seed_audit_folds,
@@ -416,6 +417,7 @@ def run_experiment_matrix(
     run_id: str | None = None,
     device: str | None = None,
 ) -> dict[str, Any]:
+    assert_training_enabled(config)
     settings = experiment_settings(config)
     settings = _resolve_holdout_settings(settings, config)
     settings = _apply_experiment_policy_guard(settings, config)

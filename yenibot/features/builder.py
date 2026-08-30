@@ -1230,12 +1230,29 @@ def build_feature_matrix(
     if warmup_rows > 0:
         merged = merged.iloc[warmup_rows:].copy()
     neutral_fill_columns = [*intrahour_fill_columns, *context_fill_columns]
+    # Availability metadata and market prices are facts, never imputed values.
+    stale_htf = (
+        merged["timestamp"] - merged["4h_available_timestamp"]
+    ) >= pd.Timedelta(hours=shift_hours)
     if neutral_fill_columns:
-        passthrough_columns = [column for column in merged.columns if column not in neutral_fill_columns]
+        passthrough_columns = [
+            column
+            for column in merged.columns
+            if column not in neutral_fill_columns
+            and column not in RAW_COLUMNS
+            and column not in METADATA_COLUMNS
+        ]
         merged[passthrough_columns] = merged[passthrough_columns].ffill()
         merged[neutral_fill_columns] = merged[neutral_fill_columns].fillna(0.0)
     else:
-        merged = merged.ffill()
+        fill_columns = [
+            column
+            for column in merged.columns
+            if column not in RAW_COLUMNS and column not in METADATA_COLUMNS
+        ]
+        merged[fill_columns] = merged[fill_columns].ffill()
+    htf_columns = [f"4h_{column}" for column in htf_result.feature_columns]
+    merged.loc[stale_htf, htf_columns] = np.nan
     feature_columns = select_feature_columns(merged)
     model_feature_columns = filter_feature_columns(feature_columns, config)
     availability_columns = feature_availability_columns(feature_columns, config)

@@ -165,6 +165,7 @@ def _make_dataset(
         part[forward_column].to_numpy(dtype=np.float32),
         seq_len=seq_len,
         sample_weights=sample_weights,
+        timestamps=part["timestamp"] if "timestamp" in part else None,
     )
 
 

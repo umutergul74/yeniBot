@@ -3233,9 +3233,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
         "baseline_plus_4h_bounded_whale_no_4h_tier1_no_4h_pure_volatility_no_1h_pure_volatility",
     ]
     assert config["experiments"]["max_auto_full_candidates"] == 1
-    assert config["experiments"]["candidate_profiles"] == [
-        "baseline_stable_trajectory_swa_v1"
-    ]
+    assert config["experiments"]["candidate_profiles"] == []
+    assert config["experiments"]["training_allowed"] is False
     trajectory = config["features"]["profiles"][
         "baseline_stable_trajectory_swa_v1"
     ]
@@ -3426,13 +3425,13 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     assert max(config["experiments"]["triage_fold_ids"]) == 35
     assert config["experiments"]["research_focus"]["mode"] == "walk_forward_cv_repair"
     assert config["experiments"]["research_focus"]["status"] == (
-        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
+        "engineering_integrity_review"
     )
     assert config["experiments"]["next_research_cycle"]["status"] == (
-        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
+        "historical_swa_failed_engineering_review"
     )
     assert config["experiments"]["next_research_cycle"]["next_action"] == (
-        "run_notebook_04_then_notebook_05_once"
+        "refresh_data_then_review_economic_baselines"
     )
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["enabled"] is False
     assert config["experiments"]["next_research_cycle"]["replacement_candidate"]["status"] == (
@@ -3451,7 +3450,8 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
     trajectory_cycle = config["experiments"]["next_research_cycle"][
         "trajectory_weight_averaging"
     ]
-    assert trajectory_cycle["enabled"] is True
+    assert trajectory_cycle["enabled"] is False
+    assert trajectory_cycle["status"] == "completed_failed_triage"
     assert trajectory_cycle["preregistered"] is True
     assert trajectory_cycle["hypothesis_id"] == "trajectory_swa_v1"
     assert trajectory_cycle["candidate_profile"] == (
@@ -4295,20 +4295,19 @@ def test_repo_experiment_profiles_keep_default_baseline_and_candidate_boundaries
 
 def test_training_research_contract_validates_invariants_not_lifecycle_names() -> None:
     config = load_config("config.yaml")
+    config["experiments"]["training_allowed"] = True
 
     contract = validate_training_research_contract(config)
 
     assert contract["research_cycle_status"] == (
-        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
+        "historical_swa_failed_engineering_review"
     )
     assert contract["research_focus_mode"] == "walk_forward_cv_repair"
-    assert contract["research_focus_status"] == (
-        "trajectory_swa_v1_preregistered_awaiting_historical_triage"
-    )
+    assert contract["research_focus_status"] == ("engineering_integrity_review")
     assert contract["seed_audit_mode"] == "in_run"
     assert contract["adaptive_ensemble_enabled"] is False
     assert contract["adaptive_hypothesis_id"] == "recent6_validation_lcb_top3_v1"
-    assert contract["trajectory_weight_averaging_enabled"] is True
+    assert contract["trajectory_weight_averaging_enabled"] is False
     assert contract["trajectory_weight_averaging_hypothesis_id"] == "trajectory_swa_v1"
     assert len(contract["trajectory_weight_averaging_preregistration_commit"]) == 40
 

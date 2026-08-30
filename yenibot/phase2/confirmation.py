@@ -35,6 +35,7 @@ def _to_utc(value: Any) -> pd.Timestamp:
 def canonical_forward_lock_hash(payload: dict[str, Any]) -> str:
     canonical = dict(payload)
     canonical.pop("lock_hash", None)
+    canonical.pop("integrity_audit", None)
     encoded = json.dumps(
         canonical,
         sort_keys=True,
@@ -71,6 +72,15 @@ def load_phase2_forward_lock(
     )
     if confirmation_start < fit_end:
         raise ValueError("Clean confirmation cannot begin before frozen fit end.")
+    # Preserve legacy locks, but never promote them under corrected accounting.
+    payload["integrity_audit"] = {
+        "cutoff_not_before_registration": confirmation_start
+        >= _to_utc(payload["locked_at_utc"]),
+        "cutoff_after_seen_selection": confirmation_start
+        >= _to_utc(payload["selection_evidence"]["seen_window_decision_end"]),
+        "accounting_version_pinned": payload.get("accounting_version")
+        == "phase2_mtm_v2",
+    }
     if int(payload["confirmation_window"]["minimum_trade_count"]) <= 0:
         raise ValueError("Clean confirmation minimum trade count must be positive.")
     if int(payload["confirmation_window"]["minimum_coverage_days"]) <= 0:
@@ -173,6 +183,9 @@ def filter_clean_confirmation_inputs(
         clean_signals[decision_time_column] > cutoff
     ].copy()
     accepted_bars = clean_bars.loc[clean_bars[bar_time_column] > cutoff].copy()
+    # Retain one closed context bar for entry ATR; it cannot create a signal.
+    context = clean_bars.loc[clean_bars[bar_time_column] <= cutoff].tail(1)
+    accepted_bars = pd.concat([context, accepted_bars], ignore_index=True)
 
     frozen = lock["frozen_model"]
     if "candidate_id" in accepted_signals.columns and not accepted_signals.empty:
@@ -211,8 +224,21 @@ def filter_clean_confirmation_inputs(
         if earliest is not None and latest is not None
         else 0.0
     )
+    signal_times = accepted_signals[decision_time_column]
+    bar_times = accepted_bars[bar_time_column]
+    contiguous = bool(
+        not signal_times.duplicated().any()
+        and not bar_times.duplicated().any()
+        and signal_times.diff().dropna().eq(pd.Timedelta(hours=1)).all()
+        and bar_times.diff().dropna().eq(pd.Timedelta(hours=1)).all()
+    )
     report = {
         "lock_version": lock["lock_version"],
+        "integrity_audit": lock.get("integrity_audit", {}),
+        "continuous_hourly_coverage": contiguous,
+        "evidence_role": "historical_audit_only"
+        if not all(lock.get("integrity_audit", {}).values())
+        else "locked_forward",
         "lock_hash": lock["lock_hash"],
         "cutoff_exclusive": cutoff.isoformat(),
         "input_signal_count": int(len(clean_signals)),

@@ -122,6 +122,8 @@ def phase2_trade_forensics(
     """Build read-only Phase 2 diagnostics without changing strategy policy."""
 
     frame = trades.copy()
+    if "trade_status" in frame:
+        frame = frame.loc[frame.trade_status.eq("completed")].copy()
     signal_frame = signals.copy()
     execution = execution_summary or {}
     numeric_columns = (
