@@ -37,6 +37,18 @@ def _check_hash(path, expected):
         raise ValueError(f"Changed pinned artifact: {path}")
 
 
+def artifact_path(root, relative):
+    """Read historical Windows manifests on Colab without permitting traversal."""
+    root = root.resolve()
+    relative = str(relative).replace("\\", "/")
+    if ":" in relative or relative.startswith("/"):
+        raise ValueError("Artifact must use a relative path")
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError("Artifact path escapes its bundle")
+    return path
+
+
 def parse_mark_minute(payload, minute):
     expected = int(minute.timestamp() * 1000)
     if not isinstance(payload, list) or len(payload) != 1 or len(payload[0]) < 7:
@@ -118,7 +130,7 @@ def main(argv=None):
     _check_hash(funding_path, FUNDING_SHA256)
     report = json.loads(report_path.read_text(encoding="utf-8"))
     for relative, expected in report["artifact_sha256"].items():
-        _check_hash(probe / relative, expected)
+        _check_hash(artifact_path(probe, relative), expected)
     source = json.loads((probe / "source_manifest.json").read_text(encoding="utf-8"))
     bars, frozen, _ = build_full_oof_inputs(args.scope_dir, spec=source["spec"])
     bars["fold"] = frozen.fold.to_numpy()
@@ -251,7 +263,7 @@ def main(argv=None):
         "promotion_allowed": False,
         "live_trading_allowed": False,
         "artifact_sha256": {
-            str(p.relative_to(output)): file_sha256(p)
+            p.relative_to(output).as_posix(): file_sha256(p)
             for p in output.rglob("*")
             if p.is_file() and p.name != "run_checkpoint.json"
         },

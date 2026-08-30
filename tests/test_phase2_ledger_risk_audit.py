@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from yenibot.automation.phase2_ledger_risk_audit import parse_mark_minute
+from yenibot.automation.phase2_ledger_risk_audit import artifact_path, parse_mark_minute
 from yenibot.phase2.contracts import DEFAULT_PHASE2_CONTRACT, CostScenario
 from yenibot.phase2.ledger_risk_audit import (
     funding_price_scenarios,
@@ -12,6 +12,15 @@ from yenibot.phase2.ledger_risk_audit import (
 )
 
 ZERO = CostScenario("zero", 0, 0, 0, 0, 0)
+
+
+def test_bundle_paths_support_windows_and_colab_without_path_escape(tmp_path):
+    assert artifact_path(tmp_path, "folds\\fold_02.json") == artifact_path(
+        tmp_path, "folds/fold_02.json"
+    )
+    for path in ("../outside", "..\\outside", "/outside", "C:/outside", "//host/share"):
+        with pytest.raises(ValueError):
+            artifact_path(tmp_path, path)
 
 
 def fixture():

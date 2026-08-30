@@ -181,6 +181,11 @@ of the earlier failure. Historical profile-selection bias remains intact.
 
 ### Resume here
 
+Update: the [frozen-ledger risk audit](frozen-ledger-risk-audit-v1.md) below is now
+completed. It preserves historical profitability but finds greater hourly
+drawdown and 2.229 times the ATR control's exposure. Its final section is the
+active checkpoint for the next conditional score-contribution audit.
+
 1. Keep all earlier failures and this failed-gate result immutable. Do not rerun
    the completed trial, turn it into an official winner, or tune its parameters.
 2. The next bounded work is an **execution/risk realism audit of the frozen
