@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from textwrap import dedent
 
@@ -22,7 +23,7 @@ Bu notebook **ayrı deney dalını** çeker; eski otomatik deney matrisini veya 
 
 İlk çalışma: **A = 6 temel fiyat/hacim özelliği → GRU → saf BCE**.
 38 fold, 3 seed, validation BCE ile epoch seçimi, her iki sınırda 24 saat boşluk.
-B/C/D aynı komut altyapısında tanımlıdır; açık pozisyon girdileri tamamlanmadan çalıştırılmaları engellenir.
+B/C/D için OI kaynağı ve A veri eşleşmesi kontrol edilir; B aşamasında ayrı 07 notebookunu kullanın.
 Wavelet/loss aşamaları sonraki ayrı adımlardır. İlk çalışmada `EXPERIMENTS = ['A']` bırakın.
 
 Colab menüsünden **Runtime → Change runtime type → GPU** seçip hücreleri sırayla çalıştırın.
@@ -97,8 +98,10 @@ cell("code", """
 subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-r', str(REPO_DIR / 'requirements.txt')], check=True)
 import yaml
 from yenibot.training.advisor import sha256, atomic_json
-from yenibot.training.advisor_colab import freeze_market_inputs, cache_frozen_inputs, create_review_bundle
+from yenibot.training.advisor_colab import (freeze_market_inputs, cache_frozen_inputs, create_review_bundle,
+                                          freeze_oi_inputs, pin_completed_a_reference)
 from yenibot.data import download_full_klines
+from yenibot.data.binance import download_futures_metrics_from_vision
 session_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 SESSION = PERSIST / 'sessions' / session_stamp
 SESSION.mkdir(parents=True, exist_ok=True)
@@ -121,7 +124,7 @@ Eksik saatler veya yetersiz tarih kapsamı eğitimi durdurur; tarih/örnek sayı
 İşlem olmayan bir kaynak barı yalnızca işlem/hacim alanlarının tamamı sıfır,
 OHLC fiyatları eşit ve önceki kapanışla aynıysa korunur; tarihleri kalite raporuna yazılır.
 Sıfır fiyat, negatif değer veya tutarsız sıfır işlem kaydı kabul edilmez; satır uydurulmaz/silinmez.
-Bu ilk A çalışması için açık pozisyon indirilmez. B–D öncesinde o kaynak ayrıca tamamlanacaktır.
+Bu ilk A çalışması için açık pozisyon indirilmez. B–D için kaynak ayrı ve sabit bir girdiye kaydedilir.
 """),
 cell("code", """
 import pandas as pd
@@ -148,6 +151,25 @@ else:
 cache_frozen_inputs(frozen_snapshot, LOCAL_BASE / 'raw')
 shutil.copyfile(frozen_snapshot / 'snapshot_manifest.json', PERSIST / 'data/input_snapshot.manifest.json')
 print('Sabit ham girdiler:', frozen_snapshot)
+if any(name != 'A' for name in EXPERIMENTS):
+    reference_a = pin_completed_a_reference(PERSIST)
+    oi_candidates = [DRIVE_BASE / 'data/raw/btc_futures_metrics.parquet',
+                     DRIVE_BASE / 'data/raw/snapshots/20260830_integrity_v2/btc_futures_metrics.parquet']
+    oi_source = None
+    for candidate in oi_candidates:
+        if candidate.exists():
+            timestamps = pd.read_parquet(candidate, columns=['timestamp']).timestamp
+            timestamps = pd.to_datetime(timestamps, utc=True)
+            if timestamps.min() <= pd.Timestamp(RAW_START) and timestamps.max() >= pd.Timestamp(RAW_END):
+                oi_source = candidate
+                break
+    oi_file = freeze_oi_inputs(oi_source, PERSIST / 'inputs/oi_snapshot_v1',
+        start=RAW_START, end=RAW_END,
+        downloader=lambda start, end: download_futures_metrics_from_vision('BTCUSDT', start, end))
+    for source_file in [oi_file, oi_file.with_suffix('.manifest.json')]:
+        shutil.copyfile(source_file, LOCAL_BASE / 'raw' / source_file.name)
+    shutil.copyfile(oi_file.with_suffix('.manifest.json'), PERSIST / 'data/open_interest_input.manifest.json')
+    print('Sabit açık pozisyon girdisi:', oi_file)
 """),
 cell("code", """
 # Sabit yollar: sonraki Colab oturumunda da aynı imza kullanılabilsin.
@@ -156,6 +178,11 @@ cfg['data']['snapshot'] = str(LOCAL_BASE / 'raw')
 cfg['data']['frame'] = str(LOCAL_BASE / 'development_wavelet_off.parquet')
 cfg['data']['feature_config'] = str(REPO_DIR / 'config.yaml')
 cfg['data']['feature_columns_file'] = str(REPO_DIR / 'configs/advisor_full_features.txt')
+if any(name != 'A' for name in EXPERIMENTS):
+    cfg['data']['frame'] = str(LOCAL_BASE / 'development_full_wavelet_off.parquet')
+    cfg['data']['futures_metrics'] = str(LOCAL_BASE / 'raw/btc_futures_metrics.parquet')
+    cfg['data']['reference_a_manifest'] = str(reference_a)
+    cfg['data']['oi_policy'] = {'tolerance_minutes': 90, 'max_diff_gap_minutes': 15, 'min_coverage': .99}
 cfg['output'] = str(PERSIST / 'runs')  # Checkpointler her epoch sonunda doğrudan Drive'a yazılır.
 runtime_config = LOCAL_BASE / 'advisor_colab.yaml'
 runtime_config.write_text(yaml.safe_dump(cfg, sort_keys=False))
@@ -189,10 +216,13 @@ execute_logged([sys.executable, '-u', '-m', 'yenibot.training.advisor', 'prepare
                 '--config', str(runtime_config)], 'prepare.log')
 frame_path = Path(cfg['data']['frame'])
 manifest_path = frame_path.with_suffix('.manifest.json')
-shutil.copyfile(manifest_path, PERSIST / 'data/development_wavelet_off.manifest.json')
+shutil.copyfile(manifest_path, PERSIST / 'data' / manifest_path.name)
 prepared = json.loads(manifest_path.read_text())
 print('Geliştirme satırı:', prepared['rows'], '| Tarihler:', prepared['start'], prepared['end'])
 print('Eksik tam özellikler:', prepared['full_features_missing'])
+if prepared.get('open_interest_audit'):
+    print('A ile temel veri eşleşmesi:', prepared['reference_a_audit'])
+    print('Açık pozisyon kalite denetimi:', prepared['open_interest_audit'])
 if any(name != 'A' for name in EXPERIMENTS) and prepared['full_features_missing']:
     raise RuntimeError('B–D için eksik özellik kaynağı var. Eksik sütunlarla tam özellik deneyi yapılmaz.')
 
@@ -291,3 +321,40 @@ if __name__ == "__main__":
     target = Path(__file__).resolve().parents[1] / "notebooks/06_advisor_ablation_colab.ipynb"
     target.write_text(json.dumps(notebook, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"Generated {target.name}: {len(cells)} cells; code syntax validated")
+    full = copy.deepcopy(notebook)
+    full['metadata']['colab']['name'] = '07_advisor_full_features_colab.ipynb'
+    full['cells'][0] = cell('markdown', '''
+    # 07 — B Deneyi: Tüm Özellikler → GRU → BCE
+
+    Bu çalışma tamamlanmış A deneyindeki aynı saatlik satırları, etiketleri,
+    foldları ve eğitim ayarlarını kullanır. Wavelet kapalıdır; 34 özellik vardır.
+    Açık pozisyonun iki log-değişim özelliği gerçek arşiv verisinden eklenir.
+    **EXPERIMENTS = ['B'] bırakın; A'yı yeniden eğitmeyin.**
+
+    GPU seçip hücreleri baştan sırayla çalıştırın. A'nın tamamlandığı Drive alanını
+    kullanın. Kaynak yoksa Binance Vision arşivi indirilir; tamamlanan aylar
+    Drive'a kaydedilir ve kesinti sonrası yeniden indirilmez. İlk kurulum uzun sürebilir.
+    Kaynak hashleri ve yeniden üretilen temel veri A ile eşleşmezse eğitim durur.
+
+    OI geçmişe doğru eşleştirilir (en fazla 90 dakika). 15 dakikayı aşan kaynak
+    boşluğunda fark hesaplanmaz. En az %99 geçerli özellik kapsamı gerekir;
+    kalan sınırlı eksikler nötr sıfırla doldurulur ve tarihleri raporlanır.
+    Eksik kaynak veya düşük kapsamla eğitim başlatılmaz.
+
+    38 fold × 3 seed; eğitim/validation arası 24 saat, validation/ayrılmış bölüm
+    arası 24 saat. Epoch seçimi validation BCE ile yapılır. Test değerlendirilmez.
+    Checkpointler ve ilerleme kayıtları Drive'da; oturum kesilirse aynı kod/veri/
+    ortamla baştan çalıştırınca kayıttan devam edilir. ZIP A ve B kayıtlarını içerir.
+    ''')
+    full['cells'][0]['id'] = 'advisor-00'
+    full['cells'][1]['source'] = [line.replace("EXPERIMENTS = ['A']", "EXPERIMENTS = ['B']")
+                                .replace('# İlk aşamada yalnızca A.', '# Bu aşamada yalnızca B.')
+                                for line in full['cells'][1]['source']]
+    full['cells'][6]['source'] = [line for line in full['cells'][6]['source']
+                                if 'Bu ilk A çalışması' not in line]
+    full_target = target.with_name('07_advisor_full_features_colab.ipynb')
+    for index, entry in enumerate(full['cells']):
+        if entry['cell_type'] == 'code':
+            compile(''.join(entry['source']), f'full_cell_{index}', 'exec')
+    full_target.write_text(json.dumps(full, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
+    print(f'Generated {full_target.name}: {len(full["cells"])} cells; code syntax validated')

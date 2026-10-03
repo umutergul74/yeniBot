@@ -1,5 +1,34 @@
 # Danışman deneylerini Colab'da çalıştırma
 
+## B için güncel akış — 2026-10-03
+
+`notebooks/07_advisor_full_features_colab.ipynb` kullanın. Varsayılan
+`EXPERIMENTS = ['B']`; tamamlanmış A'yı tekrar eğitmeyin. Yeni notebooku
+GPU oturumunda baştan çalıştırın; A'nın aynı `colab_v1` Drive alanını kullanın.
+Eski notebookta yalnızca deney harfini değiştirmek OI kaynağını sağlamıyordu.
+
+Yeni akış tamamlanmış A'nın veri manifestini ayrı, değişmez referansa sabitler.
+1H/4H kaynak hashleri ve yeniden oluşturulan temel veri dosyasının hash'i A ile
+eşleşmelidir. Kütüphane/kod farkıyla eşleşme sağlanmazsa durur; A'yı otomatik
+yeniden çalıştırarak bu sorunu gizlemez. OI ekleme temel sütunları değiştirmez.
+
+Drive'da tüm dönem için mevcut `btc_futures_metrics.parquet` varsa kullanılır;
+yoksa mevcut Binance Vision indiricisi çağrılır. Tamamlanan aylar
+`inputs/oi_snapshot_v1/monthly_cache` altında kalır. Kesintiden sonra aynı
+notebookla tamamlanan aylar atlanır. Girdi hashleri sonraki oturumda doğrulanır.
+
+İki OI log-değişim özelliği geriye doğru eşleştirilir; en fazla 90 dakika
+eski kaynak kabul edilir. 15 dakikadan uzun kaynak boşluğunu aşan fark geçersiz
+sayılır. En az %99 geçerli kapsam şartı sağlanmadan eğitim başlamaz. Kalan
+sınırlı eksikler nötr sıfırla doldurulur; sayıları ve zamanları audit'te görünür.
+Bu bir veri kalite politikasıdır, başarı ölçütlerine göre ayarlanmaz.
+
+Hazırlık sonunda `Eksik tam özellikler: []`, A eşleşmesi ve OI kalite audit'i
+görülmelidir. 34 wavelet dışı özellik, GRU, saf BCE; önceki fold/seed/epoch
+kuralları korunur. Tam veri manifesti ayrı kaydedilir; A manifesti ezilmez.
+ZIP A ve B kayıtlarını birlikte içerir; performanslar validation sonuçlarıdır.
+Gerçek kullanıcı Drive/Colab çalıştırması henüz doğrulanmamıştır.
+
 Notebook: `notebooks/06_advisor_ablation_colab.ipynb`.
 Mevcut 00/01/04 notebookları incelenerek aynı GPU, Drive, Git ve çıktı
 düzeni kullanıldı. Eski notebookların deney/test değerlendirmesi çağrılmaz.

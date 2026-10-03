@@ -3,6 +3,24 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
+## Güncel durak — B kaynak hatası düzeltildi, Colab çalıştırması bekleniyor
+
+2026-10-03: B hazırlığı iki OI sütunu bulunmadığı için doğru biçimde durmuştu.
+`07_advisor_full_features_colab.ipynb` artık mevcut Drive OI kaynağını alır veya
+Binance Vision arşivini aylık devam kayıtlarıyla indirir. Tamamlanmış A referansı
+korunur; temel veri hash'i eşleşmeden B başlamaz. OI kapsamı en az %99 olmalıdır;
+küçük kalan eksikler açıkça raporlanan nötr doldurmadır. Tam özellik sayısı 34.
+
+26 protokol, ham veri, Colab ve OI testi geçti. İki notebookun nbformat şeması
+ve hücre sözdizimi doğrulandı. Ayrıca mevcut yerel temel veri ve **sentetik OI**
+ile hazırlık entegrasyonu doğrulandı: 33.551 temel satır değişmedi, eksik tam
+girdi kalmadı. Bu kontrol gerçek OI kapsamı veya B performans sonucu değildir.
+Yerel uzun eğitim başlatılmadı. B/C/D, wavelet ve loss eğitimleri bekleniyor.
+
+Sıradaki işlem: kullanıcı yeni 07 notebookunu aynı Drive alanında baştan
+çalıştırır, OI audit'i kontrol edilir, B tamamlanınca güncel ZIP incelenir.
+Nihai bağımsız test dönemi henüz sabitlenmedi; bu akış test değerlendirmez.
+
 ## Amaç ve sıra
 
 1. Bölüm sınırlarını 10 saatlik etiket ufkuna uygun yap; otomatik denetle.

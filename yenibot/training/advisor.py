@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader
 
 from yenibot.features.builder import build_feature_matrix
 from yenibot.data.advisor_validation import validate_advisor_klines
+from yenibot.features.advisor_oi import append_oi_features
 from yenibot.labeling.triple_barrier import add_long_only_labels
 from yenibot.training.advisor_models import build_advisor_model
 from yenibot.training.dataset import SequenceDataset
@@ -153,6 +154,33 @@ def prepare(config: dict) -> None:
     assert_hourly(frame)
     if frame[config["data"]["basic_features"]].replace([np.inf, -np.inf], np.nan).isna().any().any():
         raise ValueError("Basic feature values are unavailable")
+    reference_audit = None
+    oi_audit = None
+    metrics_path = config["data"].get("futures_metrics")
+    if metrics_path:
+        reference_path = config["data"].get("reference_a_manifest")
+        if not reference_path:
+            raise ValueError("Full-input preparation requires the completed A data reference")
+        reference = json.loads(Path(reference_path).read_text())
+        if reference["source_hashes"] != hashes:
+            raise ValueError("Raw 1H/4H inputs differ from completed A; do not compare these runs")
+        probe = Path(config["data"]["frame"]).with_suffix(".base_probe.parquet")
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(probe, index=False)
+        base_hash = sha256(probe)
+        probe.unlink()
+        if base_hash != reference["frame_sha256"]:
+            raise ValueError("Reconstructed base frame does not match completed A. Check source/code/library versions; do not silently rerun A.")
+        reference_audit = {"base_frame_sha256": base_hash, "matches_completed_a": True,
+                           "rows": len(frame), "reference_manifest": reference_path}
+        metrics_file = Path(metrics_path)
+        oi_manifest = json.loads(metrics_file.with_suffix(".manifest.json").read_text())
+        if sha256(metrics_file) != oi_manifest["sha256"]:
+            raise ValueError("Frozen open-interest source checksum mismatch")
+        frame, oi_audit = append_oi_features(frame, pd.read_parquet(metrics_file),
+                                            **config["data"].get("oi_policy", {}))
+        oi_audit["source_sha256"] = oi_manifest["sha256"]
+        print(f"A equality check passed; OI coverage: {oi_audit['coverage']:.4%}; neutral rows: {oi_audit['neutral_filled_rows']}", flush=True)
     # Freeze the explicit full input list before its first experiment.
     feature_path = Path(config["data"]["feature_columns_file"])
     full_features = feature_path.read_text().splitlines() if feature_path.exists() else []
@@ -167,11 +195,13 @@ def prepare(config: dict) -> None:
         "end": frame.timestamp.iloc[-1].isoformat(), "frame_sha256": sha256(output),
         "source_hashes": hashes, "feature_config": cfg, "protocol": config,
         "raw_quality_audits": raw_audits,
+        "reference_a_audit": reference_audit, "open_interest_audit": oi_audit,
         "preparation_source_hashes": {str(path): sha256(path) for path in [
             Path(__file__).parents[1] / "data/advisor_validation.py",
             Path(__file__).parents[1] / "features/builder.py",
             Path(__file__).parents[1] / "features/wavelet.py",
             Path(__file__).parents[1] / "labeling/triple_barrier.py",
+            Path(__file__).parents[1] / "features/advisor_oi.py",
         ]},
         "basic_features": config["data"]["basic_features"],
         "full_features_missing": missing, "test_evaluations": 0,
