@@ -50,7 +50,7 @@ def compare(bundle, output, experiments, previous=None):
     table.to_csv(output/f'{prefix}_validation_comparison.csv')
     tables = {name:pd.read_csv(output/name/'fold_seed_metrics.csv').set_index(['seed','fold']) for name in experiments}
     wins = {}
-    for before, after in [('A','C'),('B','C')]:
+    for before, after in [('A','C'),('B','C'),('A','D'),('B','D'),('C','D')]:
         if after not in experiments:
             continue
         delta = tables[after][keys]-tables[before][keys]
@@ -68,13 +68,15 @@ def compare(bundle, output, experiments, previous=None):
     for ax,key,title in zip(axes.flat,['bce','average_precision','f1','precision','recall','rank_ic'],
                            ['BCE (düşük daha iyi)','Average Precision','F1 — eşik 0,5','Precision — eşik 0,5','Recall — eşik 0,5','Spearman Rank IC']):
         values=[table.loc[key,name] for name in experiments]
-        bars=ax.bar([f'{name}: {descriptions[name]}' for name in experiments],values,color=['#287e8c','#d28843','#607fba','#9b6f9f'][:len(experiments)])
+        bars=ax.bar(experiments,values,color=['#287e8c','#d28843','#607fba','#9b6f9f'][:len(experiments)])
+        ax.tick_params(axis='x', labelsize=9)
         for bar,value in zip(bars,values):
             ax.annotate(f'{value:.4f}',(bar.get_x()+bar.get_width()/2,value),xytext=(0,5),textcoords='offset points',ha='center',fontsize=10)
         ax.set_title(title)
         ax.set_ylim(min(0,min(values)*1.25),max(values)*1.25)
         ax.spines[['top','right']].set_visible(False)
-    fig.suptitle(f'{" – ".join(experiments)}: özellik sayısı / mimari\nAynı BCE, aynı foldlar; yalnızca validation',fontsize=15)
+    legend = ' · '.join(f'{name}: {descriptions[name]}' for name in experiments)
+    fig.suptitle(f'{" – ".join(experiments)}: özellik sayısı / mimari\n{legend}\nAynı BCE, aynı foldlar; yalnızca validation',fontsize=13)
     fig.text(.5,.02,'38 fold × 3 seed ortalamaları. Nihai test ve istatistiksel anlamlılık sonucu değildir.',ha='center',fontsize=10)
     fig.tight_layout(rect=[0,.045,1,.91])
     fig.savefig(output/f'{prefix}_validation_comparison.png',dpi=160)

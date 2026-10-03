@@ -3,7 +3,42 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — A, B ve C tamamlandı; sırada D var
+## Güncel durak — A–D tamamlandı; bağımsız test dönemi kararı bekleniyor
+
+Paket: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (3).zip`.
+SHA256: `a96dde6cfbe5defd7078814060a187675ac237cdb1df6c629df97ca0f4db0aef`.
+D kapsamı `D_e4e9d0b149a6`: 38 fold × seed 42/43/44, 114 tamamlanmış eğitim,
+1.904 epoch, paralel TCN–GRU / 34 girdi / BCE. Kayıtlı parametre sayısı 246.145.
+2.344 envanter dosyasının hash/boyutları doğrulandı. D metrikleri tahminlerden
+yeniden hesaplandı; minimum validation BCE epoch seçimi ve 228 sınır denetimi
+geçti. Test değerlendirmesi 0.
+
+A/B/C'nin önceki paketteki 574'er çalışma dosyası değişmemiş. A–D'nin 114
+tahmin grubunda tarihler/etiketler/getiriler/satır konumları aynı; B/C/D'nin
+34 özellik listesi ve veri hash'i aynı. OI audit'i aynı (%99,7705 kapsam,
+77 saatlik satırda iki nötr OI kanalı). Fold/seed/eğitim ayarları/ortam eşleşiyor.
+
+D validation: BCE 0,605371; AP 0,408339; precision %37,72; recall %9,64;
+F1 0,132345; accuracy %68,50; Rank IC 0,013251. BCE sırası A → D → C → B.
+B F1 bakımından önde. D'nin BCE'si seed-ortalama 38 foldun 29'unda B'den,
+25'inde C'den, 10'unda A'dan iyi. İstatistiksel anlamlılık iddiası kurulmadı.
+
+Rapora göre A validation BCE ile bir sonraki aşama için seçim adayıdır;
+henüz nihai test başarısı veya genel GRU üstünlüğü iddia edilemez. A'nın
+6 girdisi ile B/C/D'nin 34 girdisi farklı setlerdir; kapasite de farklıdır.
+56/114 D eğitiminde ilk epoch seçilmiş; en iyi epoch ortalaması 1,70.
+
+Sıradaki gerekli karar: dokunulmamış nihai test dönemi. Kullanıcıdan Eylül
+2026'nın önceki eğitim/backtest/performans değerlendirmelerinde görülüp
+görülmediği soruldu; henüz yanıt yok. Yerel ham snapshot 30 Ağustos 2026'ya
+kadar uzanıyor; 2026 verileri eski araştırmalarda kullanılmış olabileceğinden
+2026'nın tamamı otomatik bağımsız test sayılamaz. Test tarihi henüz sabitlenmedi.
+Yeni wavelet/loss veya test eğitimi başlatılmadı; mevcut sonuçlar korunuyor.
+
+Ayrıntı: `docs/advisor-abcd-validation-review.md`.
+JSON/CSV/grafikler: `output/advisor_experiments/review_D_20261003`.
+
+## Önceki durak — A, B ve C tamamlandı
 
 Yeni kullanıcı paketi: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (2).zip`.
 SHA256: `bd762d77567ec36e1032ca8b3f5b16eb3e183909505c1f620ec8cd24d2f96fba`.
