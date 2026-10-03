@@ -50,7 +50,8 @@ Veri, model ağırlıkları ve çalışma anı JSON dosyaları Git'e eklenmez.
 - [x] GRU/TCN mimari seçenekleri ve validation odaklı eğitim komutu.
 - [x] Veri hazırlığı, kaynak hashleri ve başlangıç denetimi.
 - [x] Kesinti/devam testi ve küçük teknik eğitim kontrolü.
-- [ ] A deneyinin tam eğitimine başlama.
+- [x] A deneyinin tam eğitimine başlama.
+- [ ] A deneyinin 38 fold × 3 seed kapsamını tamamlama ve validation raporu.
 - [ ] B–D; wavelet ve loss deneyleri.
 - [ ] Ayrı nihai test.
 
@@ -77,8 +78,30 @@ Veri, model ağırlıkları ve çalışma anı JSON dosyaları Git'e eklenmez.
   sütunu eksik. Kaynak tamamlanmadan tam özellik deneyi başlatılmayacak.
 - Wavelet ve farklı loss aşamalarının çalıştırılması henüz uygulanmadı.
 
-Sonraki adım: A deneyini 38 fold × 3 seed, en fazla 100 epoch ve
-validation BCE / patience 15 ile ayrı arka plan işleminde başlatmak.
+## Aktif çalışma — önce burayı oku
+
+A deneyi 2026-10-03 13:54:56 yerel saatte ayrı Python işlemiyle başlatıldı.
+Başlatıldığı sıradaki PID: 14372 (yeniden başlatmada değişir).
+Çalışma dizini: `output/advisor_experiments/runs/A_bb0042fa3dde/`.
+Kapsam: 38 fold × seed 42/43/44 = 114 fold eğitimi.
+Üst sınır 100 epoch; validation BCE / patience 15.
+Başlatma kaydı: `output/advisor_experiments/logs/A-20261003_135456.launch.json`.
+Stdout: `output/advisor_experiments/logs/A-20261003_135456.stdout.log`.
+Stderr: `output/advisor_experiments/logs/A-20261003_135456.stderr.log`.
+
+Bu belgeden **daha güncel canlı durum**, çalışma dizinindeki `STATUS.md`
+ve `status.json` dosyalarında bulunur. Her foldun `STATUS.md` ve
+`progress.json` dosyası son kaydedilen epoch'u gösterir. İlk sağlık
+kontrolünde seed 42 için fold 0–4 tamamlandı, fold 5 çalışıyordu;
+bu anlık sayı güncel tamamlanma durumu olarak kullanılmamalı.
+
+Sonraki adım: A işleminin canlı durumunu ve hata günlüğünü kontrol et.
+Çalışıyorsa aynı işi tekrar başlatma. Tamamlandıysa validation raporunu
+hazırla; sonra B–D için açık pozisyon kaynağını ve aynı tarih/etiket/grid
+eşleşmesini tamamla. A'nın biten veri/ayar/kod imzasını değiştirme.
+Hiçbir aşamada bu validation sonuçlarını nihai test sonucu diye sunma.
+
+Kesinti sonrası **aynı komutla** kaldığı yerden devam:
 Komut: `powershell -NoProfile -File scripts/run_advisor_experiment.ps1 -Experiment A`.
 Devam ayrıntıları: `docs/advisor-experiment-runbook.md`.
 Bu belge eğitim tamamlandı veya akademik başarı sağlandı anlamına gelmez.
