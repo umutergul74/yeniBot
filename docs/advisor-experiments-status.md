@@ -3,7 +3,39 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — B kaynak hatası düzeltildi, Colab çalıştırması bekleniyor
+## Güncel durak — A ve B tamamlandı; sırada C var
+
+Yeni kullanıcı paketi: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (1).zip`.
+B kapsamı `B_67a0db4c5eb3`: 38 fold × seed 42/43/44 = 114 tamamlanmış eğitim,
+1.865 epoch. T4 oturumu, kaynak commit `43e6692`. Test değerlendirmesi 0.
+Paketin 1.178 envanter dosyasının SHA256/boyutları ve tahminlerden AP,
+precision/recall/F1/accuracy/Rank IC/BCE yeniden hesaplamaları doğrulandı.
+A'nın önceki paketteki 574 çalışma dosyası yeni pakette byte düzeyinde aynı.
+
+A–B: aynı etiket/zaman/getiri kayıtları 114 çift dosyada eşleşiyor. Eğitim,
+model ayarları, foldlar, seedler ve ortam aynı. A veri referans hash'i eşleşmiş.
+OI: 419.628 kaynak kaydı, 475 kullanılamayan kaynak ölçümü; geliştirme satırı
+kapsamı %99,7705, iki OI kanalında 77 nötr doldurma, piyasa satırı silinmedi.
+Sınır kontrolleri her deneyde 228 kayıt / 76 benzersiz sınır; hepsi geçti.
+
+Validation ortalamaları: A/B BCE 0,594507/0,612412; AP 0,420872/0,397423;
+F1 0,142418/0,159500; Rank IC 0,018313/0,001562. B'de eşik 0,5 precision ve
+recall artıyor; önceden belirlenen seçim ölçütü BCE ise A lehine. 38 foldun
+seed ortalamasında BCE bakımından B yalnızca 7 foldda daha iyi.
+
+Yorum sınırı: B A'nın üst kümesi değil. A'daki `realized_vol_14`, `gk_vol_14`,
+`atr_14_pct` B'nin dondurulmuş 34 özellik listesinde yok. Bu, iki özellik seti
+karşılaştırması; yalnızca ek özelliklerin veya OI'nin marjinal katkısı değil.
+C/D, B'nin aynı 34 girdisini kullanmalı; liste sonuçlara göre değiştirilmemeli.
+
+Yerel yeniden üretilebilir inceleme:
+`scripts/review_advisor_bundle.py --experiment A|B` ve
+`scripts/compare_advisor_ab.py`; çıktı `output/advisor_experiments/review_B_20261003`.
+Ayrıntı: `docs/advisor-ab-validation-review.md`.
+Sıradaki deney C (34 girdi → TCN → BCE); eğitim henüz başlatılmadı.
+Nihai bağımsız test dönemi sabitlenmeli; mevcut sonuçlar validation'dır.
+
+## Geçmiş durak — B kaynak hatalarının çözülmesi
 
 İkinci B hazırlık hatası (aynı gün): Mart 2022 OI arşivindeki sıfır ölçümler
 katı kaynak kontrolünde reddedildi. Gerçek arşiv indirildi ve doğrulandı:

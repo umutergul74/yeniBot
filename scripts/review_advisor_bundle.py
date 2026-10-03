@@ -17,7 +17,7 @@ from scipy.stats import spearmanr
 from sklearn.metrics import average_precision_score, accuracy_score, precision_recall_fscore_support
 
 
-def review(bundle: Path, output: Path):
+def review(bundle: Path, output: Path, experiment: str = "A"):
     output.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(bundle) as archive:
         names = archive.namelist()
@@ -32,13 +32,18 @@ def review(bundle: Path, output: Path):
             assert len(content) == record["size"]
             assert hashlib.sha256(content).hexdigest() == record["sha256"], record["path"]
         roots = [name[:-len("status.json")] for name in names if name.startswith("runs/") and name.endswith("/status.json")]
-        assert len(roots) == 1, "Review one experimental scope at a time"
+        roots = [root for root in roots if json.loads(archive.read(root + 'protocol.json'))['experiment'] == experiment]
+        assert len(roots) == 1, "Specify one uniquely identified experimental scope"
         root = roots[0]
         read_json = lambda name: json.loads(archive.read(name))
         read_csv = lambda name: pd.read_csv(io.BytesIO(archive.read(name)))
         protocol = read_json(root + "protocol.json")
         status = read_json(root + "status.json")
-        data = read_json("data/development_wavelet_off.manifest.json")
+        candidates = [read_json(name) for name in names if name.startswith('data/') and name.endswith('.manifest.json')]
+        data = next(item for item in candidates if item.get('frame_sha256') == protocol['data_sha256'])
+        session_candidates = [read_json(name) for name in names if name.startswith('sessions/') and name.endswith('/session.json')]
+        sessions = [item for item in session_candidates if item.get('status') == 'complete' and experiment in item.get('experiments', [])]
+        session = max(sessions, key=lambda item: item['session'])
         calendar = read_csv("data/fold_calendar.csv")
         summary = read_csv(root + "validation_summary.csv")
         cfg = protocol["config"]
@@ -48,7 +53,7 @@ def review(bundle: Path, output: Path):
         assert status["status"] == manifest["session"]["status"] == "complete"
         assert len(status["completed"]) == len(expected)
         assert all(value == 0 for value in [status["test_evaluations"], protocol["test_evaluations"], manifest["session"]["test_evaluations"]])
-        assert protocol["experiment"] == "A" and cfg["training"]["loss"] == "bce"
+        assert protocol["experiment"] == experiment and cfg["training"]["loss"] == "bce"
         assert cfg["training"]["selection_metric"] == "validation_bce"
         assert not cfg["data"]["wavelet"]
         assert cfg["walk_forward"]["purge_bars"] >= 10 and cfg["walk_forward"]["embargo_bars"] >= 10
@@ -66,7 +71,7 @@ def review(bundle: Path, output: Path):
             assert int(history.loc[history.bce.idxmin(), "epoch"]) == result["best_epoch"]
             assert abs(history.bce.min() - result["validation"]["bce"]) < 1e-7
             assert len(history) == result["epochs_trained"]
-            assert len(history) == result["best_epoch"] + cfg["training"]["patience"]
+            assert len(history) == min(cfg['training']['epochs'], result["best_epoch"] + cfg["training"]["patience"])
             epochs += len(history)
             for check in result["boundary_audit"].values():
                 assert check["passed"] and pd.Timestamp(check["last_target_timestamp"]) < pd.Timestamp(check["next_section_start"])
@@ -114,7 +119,7 @@ def review(bundle: Path, output: Path):
     avg = table.mean(numeric_only=True)
     fold_table = table.groupby("fold").mean(numeric_only=True)
     record = {"bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
-              "run": root, "session": manifest["session"], "audited_inventory_files": len(manifest["files"]),
+              "run": root, "session": session, "audited_inventory_files": len(manifest["files"]),
               "completed_fold_seed": len(table), "epochs_trained": epochs,
               "boundary_checks_in_artifacts": boundary_count, "unique_boundary_checks": len(protocol["folds"])*2,
               "validation_prediction_rows_with_repeats": int(table.samples.sum()),
@@ -123,7 +128,9 @@ def review(bundle: Path, output: Path):
               "positive_rank_ic_seed_averaged_folds": int((fold_table.rank_ic > 0).sum()),
               "zero_positive_prediction_runs": int((table.prediction_rate == 0).sum()),
               "macro_metrics": {key: float(avg[key]) for key in ["bce", "average_precision", "precision", "recall", "f1", "accuracy", "rank_ic", "prevalence", "ap_lift", "prediction_rate", "always_negative_accuracy"]},
-              "raw_quality_audits": data["raw_quality_audits"], "test_evaluations": 0}
+              "raw_quality_audits": data["raw_quality_audits"],
+              "open_interest_audit": data.get('open_interest_audit'),
+              "reference_a_audit": data.get('reference_a_audit'), "test_evaluations": 0}
     (output / "review_summary.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
@@ -149,15 +156,16 @@ def review(bundle: Path, output: Path):
         ax.set_xlabel("Fold")
         ax.set_xlim(1, 38)
         ax.set_xticks([1, 5, 10, 15, 20, 25, 30, 35, 38])
-    fig.suptitle("A deneyi — temel fiyat/hacim + GRU + BCE\nYalnızca validation; 38 fold × 3 seed", fontsize=16)
+    description = 'temel fiyat/hacim' if experiment == 'A' else 'tüm wavelet dışı özellikler'
+    fig.suptitle(f"{experiment} deneyi — {description} + GRU + BCE\nYalnızca validation; 38 fold × 3 seed", fontsize=16)
     fig.text(.5, .015, "Gölge: 3 seed'in min–max aralığı; güven aralığı değildir. Test değerlendirmesi: 0.", ha="center", fontsize=10)
     fig.tight_layout(rect=[0, .045, 1, .93])
-    fig.savefig(output / "A_validation_dashboard.png", dpi=160)
+    fig.savefig(output / f"{experiment}_validation_dashboard.png", dpi=160)
     plt.close(fig)
-    report = f"""# A deneyi: Colab sonuç incelemesi
+    report = f"""# {experiment} deneyi: Colab sonuç incelemesi
 
 Deney tamamlandı: 38 fold × 3 seed = {len(table)} eğitim. Toplam {epochs} epoch.
-Kaynak commit: `{manifest['session']['commit']}`; GPU: {manifest['session']['gpu']}.
+Kaynak commit: `{session['commit']}`; GPU: {session['gpu']}.
 ZIP SHA256: `{record['bundle_sha256']}`.
 Bu sonuçların tamamı validation sonuçlarıdır; nihai test değerlendirmesi yapılmadı.
 
@@ -227,13 +235,23 @@ iddiası kurulamaz. Bunlar validation odaklı geliştirmedir, nihai test henüz 
 
 ![Doğrulama görünümü](A_validation_dashboard.png)
 """
-    (output / "A_DENEYI_INCELEME.md").write_text(report, encoding="utf-8")
-    print(json.dumps(record, ensure_ascii=True, indent=2))
+    if experiment != 'A':
+        report = report.split('## Sıradaki aşama')[0] + f'''## Sıradaki aşama
+
+C: aynı 34 girdi ve aynı BCE ile TCN. Model seçimi A–D tamamlanmadan yapılmaz.
+OI kalite ve A eşleşme ayrıntıları `review_summary.json` içinde bulunur.
+
+![Doğrulama görünümü]({experiment}_validation_dashboard.png)
+'''
+    (output / f"{experiment}_DENEYI_INCELEME.md").write_text(report, encoding="utf-8")
+    print(json.dumps({key: record[key] for key in ['run', 'completed_fold_seed', 'epochs_trained', 'macro_metrics', 'test_evaluations']}, indent=2))
+    return record
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--experiment", choices=['A', 'B'], default='A')
     args = parser.parse_args()
-    review(args.bundle, args.output)
+    review(args.bundle, args.output, args.experiment)
