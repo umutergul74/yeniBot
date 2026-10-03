@@ -51,7 +51,7 @@ Veri, model ağırlıkları ve çalışma anı JSON dosyaları Git'e eklenmez.
 - [x] Veri hazırlığı, kaynak hashleri ve başlangıç denetimi.
 - [x] Kesinti/devam testi ve küçük teknik eğitim kontrolü.
 - [x] A deneyinin tam eğitimine başlama.
-- [ ] A deneyinin 38 fold × 3 seed kapsamını tamamlama ve validation raporu.
+- [x] A deneyinin 38 fold × 3 seed kapsamını tamamlama ve validation raporu.
 - [ ] B–D; wavelet ve loss deneyleri.
 - [ ] Ayrı nihai test.
 
@@ -78,7 +78,40 @@ Veri, model ağırlıkları ve çalışma anı JSON dosyaları Git'e eklenmez.
   sütunu eksik. Kaynak tamamlanmadan tam özellik deneyi başlatılmayacak.
 - Wavelet ve farklı loss aşamalarının çalıştırılması henüz uygulanmadı.
 
-## Aktif aşama — Colab geçişi
+## Aktif aşama — A tamamlandı, B için veri hazırlığı sırada
+
+Kullanıcının `advisor_latest_review_bundle.zip` paketi 2026-10-03 tarihinde
+incelendi. Colab A çalışması `A_81029f6d6d48` tamamlandı: 38 fold × 3 seed
+= 114 eğitim, 2.248 epoch, Tesla T4. Kaynak commit `d9fc084`.
+ZIP SHA256: `9b25fb39472545ba337afbd0185a18f8b7aad67a1947eac26181f12442e82a74`.
+588 dosyanın hash/boyutu, tüm tahminlerin metrikleri, epoch seçimleri ve
+76 benzersiz sınır kontrolü doğrulandı. Model ağırlıkları ZIP'e dahil değil;
+bu yüzden checkpoint içeriği yeniden yüklenip bağımsız doğrulanmadı.
+
+114 fold/seed ortalaması: validation BCE 0.594507; AP 0.420872;
+AP/sınıf oranı 1.355×; precision 0.410499; recall 0.096839;
+F1 0.142418; accuracy 0.687868; Rank IC 0.018313.
+Olumlu tahmin oranı %6.29, gerçek olumlu oranı %31.05. Hep-olumsuz
+referans accuracy'si %68.95; model %68.79. Sonuçlar validation'dır, test değil.
+115.938 tahmin kaydı 27.657 benzersiz validation saatini kapsar; seedler
+ve örtüşen foldlar bağımsız gözlem gibi sayılmadı.
+
+Ham audit: 2024-10-28 20:00 UTC'de tek bir doğrulanmış boş 1H barı korundu.
+Silinen/yapay doldurulan satır yok. İlk hazırlık hatasının kaynağı böylece
+pakette görüldü; önceki belirsizlik giderildi.
+
+Yerel rapor: `output/advisor_experiments/review_A_20261003/A_DENEYI_INCELEME.md`.
+Grafik: aynı dizinde `A_validation_dashboard.png`.
+Tekrarlama scripti: `scripts/review_advisor_bundle.py`.
+
+**Sıradaki iş:** B için eksik iki açık pozisyon girdisinin Drive kaynağını
+tamamlamak ve hazırlayıcıya eklemek. A'nın dondurulmuş ham girdileri, etiketleri,
+6 temel kanalı ve fold takvimi B ile eşleştirilmeli. Yerel farklı ham snapshot
+karşılaştırmaya kaynak yapılmamalı. B hazırlayıcısı henüz bu kaynağı okumuyor;
+sadece `EXPERIMENTS=['B']` yaparak eğitime geçme. Eşik/loss/mimariyi A sonucunu
+iyileştirmek için değiştirme; sırayı koru. Nihai test hâlâ ayrılmadı/değerlendirilmedi.
+
+## Colab geçişinin tarihsel kaydı
 
 Kullanıcı eğitimin Colab'a taşınmasını istedi. Yerel PID 14372 doğrulanıp
 durduruldu; 42/114 tamamlanmış fold/seed ve son checkpointler korundu.
@@ -109,7 +142,7 @@ Colab hazırlığı:
   3 Colab yardımcı testi geçti.
 - [x] Notebook şeması nbformat ile doğrulandı; bütün kod hücreleri derleniyor,
   notebookta kayıtlı çıktı/kişisel çalışma sonucu bulunmuyor.
-- [ ] Notebookun gerçek kullanıcı Colab/Drive oturumunda çalıştırılması.
+- [x] Notebookun gerçek kullanıcı Colab/Drive oturumunda çalıştırılması.
 
 2026-10-03 kullanıcı Colab hazırlık hücresinde `Non-positive price/trade
 count` hatası bildirdi. Önceki kontrol fiyat ve işlem sayısını aynı hata
