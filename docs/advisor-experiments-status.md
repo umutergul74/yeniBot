@@ -5,6 +5,17 @@ Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
 ## Güncel durak — B kaynak hatası düzeltildi, Colab çalıştırması bekleniyor
 
+İkinci B hazırlık hatası (aynı gün): Mart 2022 OI arşivindeki sıfır ölçümler
+katı kaynak kontrolünde reddedildi. Gerçek arşiv indirildi ve doğrulandı:
+8.928 beş dakikalık kaydın 117'sinde iki OI alanı sıfır. Yeni politika bu
+kayıtları silmeden ham snapshot'ta korur; ölçüm ve onu izleyen log-değişim
+kullanılamaz sayılır. Başka bir eski satıra geri doldurularak gizlenmez.
+Kaynak kalite sayıları, örnek değerler ve tarihler manifest/audit'e yazılır.
+%99 geliştirme satırı kapsam şartı korunur; düşük kapsam eğitim başlatmaz.
+Ocak/şubat gibi önceki sürümle tamamlanan aylık cache dosyaları yeniden kullanılır.
+13 OI/Colab testi geçti; gerçek Mart verisinde ayrıca ileriye eşleşme ve temel
+sütun değişimi olmadığı doğrulandı. Tüm dönem kapsamı hâlâ Colab'da ölçülecek.
+
 2026-10-03: B hazırlığı iki OI sütunu bulunmadığı için doğru biçimde durmuştu.
 `07_advisor_full_features_colab.ipynb` artık mevcut Drive OI kaynağını alır veya
 Binance Vision arşivini aylık devam kayıtlarıyla indirir. Tamamlanmış A referansı

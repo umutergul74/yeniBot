@@ -23,6 +23,14 @@ sayılır. En az %99 geçerli kapsam şartı sağlanmadan eğitim başlamaz. Kal
 sınırlı eksikler nötr sıfırla doldurulur; sayıları ve zamanları audit'te görünür.
 Bu bir veri kalite politikasıdır, başarı ölçütlerine göre ayarlanmaz.
 
+Arşivde sıfır/negatif/eksik OI ölçümü varsa ham kayıt tarihleriyle korunur;
+bu ölçüm ve hemen sonrasındaki log-değişim kullanılamaz sayılır. Kaynak
+kalite manifestinde bu kayıtlar listelenir. Sıfırın logaritması alınmaz,
+başka bir geçmiş ölçümle gizlenmez ve saatlik piyasa satırları silinmez.
+Mart 2022 kaynağında bu sorun doğrulanmıştır. Önceki ocak/şubat cache'leri
+geçerlidir; hatayı çözmek için Drive dosyalarını silmeyin. Runtime'ı yeniden
+başlatıp güncel 07 notebookunu baştan çalıştırın.
+
 Hazırlık sonunda `Eksik tam özellikler: []`, A eşleşmesi ve OI kalite audit'i
 görülmelidir. 34 wavelet dışı özellik, GRU, saf BCE; önceki fold/seed/epoch
 kuralları korunur. Tam veri manifesti ayrı kaydedilir; A manifesti ezilmez.

@@ -338,6 +338,8 @@ if __name__ == "__main__":
 
     OI geçmişe doğru eşleştirilir (en fazla 90 dakika). 15 dakikayı aşan kaynak
     boşluğunda fark hesaplanmaz. En az %99 geçerli özellik kapsamı gerekir;
+    Sıfır/negatif/eksik OI ölçümleri ham kayıtta korunur ve kalite raporuna yazılır;
+    bu kayıtlardan veya hemen sonrasından log-değişim üretilmez.
     kalan sınırlı eksikler nötr sıfırla doldurulur ve tarihleri raporlanır.
     Eksik kaynak veya düşük kapsamla eğitim başlatılmaz.
 

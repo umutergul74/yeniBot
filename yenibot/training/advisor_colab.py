@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from yenibot.features.advisor_oi import normalize_oi_source
+from yenibot.features.advisor_oi import normalize_oi_source, audit_oi_source
 
 from yenibot.training.advisor import atomic_json, sha256
 
@@ -108,7 +108,7 @@ def freeze_oi_inputs(source: Path | None, destination: Path, *, start: str, end:
         return target
     origin = str(source) if source else "Binance Vision monthly cached downloads"
     if source is not None:
-        frame = normalize_oi_source(pd.read_parquet(source))
+        frame = normalize_oi_source(pd.read_parquet(source), invalid_policy="preserve_unavailable")
     else:
         if downloader is None:
             raise FileNotFoundError("OI source not found and no archive downloader configured")
@@ -129,23 +129,26 @@ def freeze_oi_inputs(source: Path | None, destination: Path, *, start: str, end:
                 chunk = pd.read_parquet(path)
                 print(f"OI month {month:%Y-%m}: reused ({len(chunk)} rows)", flush=True)
             else:
-                chunk = normalize_oi_source(downloader(lower, upper))
+                chunk = normalize_oi_source(downloader(lower, upper), invalid_policy="preserve_unavailable")
                 temporary = path.with_suffix(".tmp.parquet")
                 chunk.to_parquet(temporary, index=False)
                 os.replace(temporary, path)
-                atomic_json(marker, {"lower": lower.isoformat(), "upper": upper.isoformat(), "sha256": sha256(path)})
-                print(f"OI month {month:%Y-%m}: downloaded ({len(chunk)} rows)", flush=True)
+                quality = audit_oi_source(chunk)
+                atomic_json(marker, {"lower": lower.isoformat(), "upper": upper.isoformat(), "sha256": sha256(path),
+                                     "source_quality": quality})
+                print(f"OI month {month:%Y-%m}: downloaded ({len(chunk)} rows; unavailable: {quality['invalid_source_rows']})", flush=True)
             chunks.append(chunk)
             month = next_month
-        frame = normalize_oi_source(pd.concat(chunks, ignore_index=True))
+        frame = normalize_oi_source(pd.concat(chunks, ignore_index=True), invalid_policy="preserve_unavailable")
     frame = frame.loc[frame.timestamp.between(pd.Timestamp(start), pd.Timestamp(end))].reset_index(drop=True)
-    frame = normalize_oi_source(frame)
+    frame = normalize_oi_source(frame, invalid_policy="preserve_unavailable")
     temporary = target.with_suffix(".tmp.parquet")
     frame.to_parquet(temporary, index=False)
     os.replace(temporary, target)
     atomic_json(manifest_path, {"start": start, "end": end, "sha256": sha256(target), "rows": len(frame),
                               "origin": origin, "first": frame.timestamp.iloc[0].isoformat(),
-                              "last": frame.timestamp.iloc[-1].isoformat(), "immutable": True})
+                              "last": frame.timestamp.iloc[-1].isoformat(), "immutable": True,
+                              "source_quality": audit_oi_source(frame)})
     return target
 
 

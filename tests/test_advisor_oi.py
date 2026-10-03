@@ -48,6 +48,37 @@ def test_invalid_or_conflicting_source_rejected():
         normalize_oi_source(raw)
 
 
+@pytest.mark.parametrize('invalid_value', [0., -1., np.nan, np.inf])
+def test_unavailable_measurement_preserved_but_never_used_as_log_return(invalid_value):
+    raw = source()
+    raw.loc[12, 'sum_open_interest'] = invalid_value
+    preserved = normalize_oi_source(raw, invalid_policy='preserve_unavailable')
+    assert len(preserved) == len(raw)
+    frame = pd.DataFrame({'timestamp': raw.timestamp.iloc[[11, 12, 13, 14]].reset_index(drop=True),
+                          'label': [1, 0, 1, 0]})
+    with pytest.raises(ValueError, match='coverage'):
+        append_oi_features(frame, preserved)  # Production 99% gate remains enforced.
+    result, audit = append_oi_features(frame, preserved, min_coverage=.5)
+    np.testing.assert_allclose(result.fut_oi_log_return, [.001, 0, 0, .001])
+    assert result.oi_source_timestamp.iloc[1] == raw.timestamp.iloc[12]
+    assert audit['neutral_filled_rows'] == 2
+    assert audit['source_quality']['invalid_source_rows'] == 1
+    assert audit['source_quality']['dropped_rows'] == 0
+    pd.testing.assert_frame_equal(frame, result[frame.columns])
+
+
+def test_freeze_keeps_invalid_raw_rows_and_audits_them(tmp_path):
+    raw = source()
+    raw.loc[12, 'sum_open_interest_value'] = 0
+    path = freeze_oi_inputs(None, tmp_path, start=raw.timestamp.iloc[0].isoformat(),
+                            end=raw.timestamp.iloc[-1].isoformat(), downloader=lambda *args: raw)
+    stored = pd.read_parquet(path)
+    assert len(stored) == 25 and stored.sum_open_interest_value.iloc[12] == 0
+    audit = json.loads(path.with_suffix('.manifest.json').read_text())['source_quality']
+    assert audit['invalid_source_rows'] == 1 and audit['dropped_rows'] == 0
+    assert audit['invalid_timestamps'] == [str(raw.timestamp.iloc[12])]
+
+
 def test_monthly_download_resume_and_frozen_checksum(tmp_path):
     calls = []
     def download(lower, upper):
@@ -58,6 +89,11 @@ def test_monthly_download_resume_and_frozen_checksum(tmp_path):
     settings = dict(start='2022-01-01T00:00:00Z', end='2022-02-01T00:10:00Z', downloader=download)
     with pytest.raises(RuntimeError, match='disconnect'):
         freeze_oi_inputs(None, tmp_path, **settings)
+    # January/February caches written by the prior notebook had no quality field.
+    marker = tmp_path / 'monthly_cache/202201.manifest.json'
+    old_marker = json.loads(marker.read_text())
+    old_marker.pop('source_quality', None)
+    marker.write_text(json.dumps(old_marker))
     path = freeze_oi_inputs(None, tmp_path, **settings)
     assert calls == [1, 2, 2]  # January was persisted before interruption.
     assert freeze_oi_inputs(None, tmp_path, **settings) == path
