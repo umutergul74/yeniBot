@@ -10,6 +10,7 @@ data:
   frame: output/advisor_experiments/data/development_wavelet_off.parquet
   feature_config: config.yaml
   wavelet: false
+  zero_activity_policy: preserve_verified_empty
   feature_columns_file: configs/advisor_full_features.txt
   basic_features: [log_return, volume_log_zscore, realized_vol_14, gk_vol_14, atr_14_pct, vwap_dist_atr]
 labeling:

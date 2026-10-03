@@ -27,6 +27,23 @@ hedefin olgunlaşması içindir. Geliştirme gözlemleri önceki deneyle aynı
 2022-03-01 04:00–2025-12-28 02:00 UTC aralığıdır.
 Eksik saat veya eksik tarih kapsamı varsa eğitim başlamaz.
 
+### Sıfır işlemli kaynak barları
+
+`data.zero_activity_policy=preserve_verified_empty` açık politika olarak
+belirlendi. İşlem/hacim/taker/quote alanlarının tümü sıfır, OHLC tamamen
+aynı pozitif fiyat ve önceki kapanışla aynı olduğunda kaynak barı korunur.
+Satır silinmez, yapay fiyat/işlem üretilmez; 10 bar = 10 saat eşitliği korunur.
+İlk barın önceki kapanışı olmadığı için sıfır işlemli ilk bar doğrulanamaz
+ve reddedilir. Negatif değerler, NaN/inf, sıfır fiyat, bozuk OHLC aralığı,
+taker tutarsızlığı ve hacim var/işlem yok gibi durumlar yine hata verir.
+Hata tarih ve sütun değerlerini gösterir. Uygulanan politika ve korunan
+bar tarihleri hazırlanmış veri manifestinde `raw_quality_audits` altında
+ve Drive inceleme ZIP'inde bulunur. Eski global `zero_volume_policy=drop`
+değiştirilmedi; bu saatlik deney ayrı sözleşmeyi kullanır.
+Mevcut özellik hesaplayıcısının sıfır bölme için 0 dönüşü değişmedi;
+sıfır işlemde bu değer gerçek bir işlem başına ortalama olarak yorumlanmaz.
+Kodun reddettiği gerçek bozuk satırları bu politika onarmış saymayız.
+
 Ham veri Colab'ın `/content` diskine kopyalanır; hazırlanan tablo buradan
 okunur. Büyük veri okumaları Drive'a yüklenmez. Küçük checkpointler her
 epoch sonunda Drive'a atomik dosya değişimiyle yazılır. Bu kalıcılık

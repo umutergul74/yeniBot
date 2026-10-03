@@ -118,6 +118,9 @@ yoksa mevcut `data/raw` dosyaları kullanılır. Eksik dosya varsa mevcut indiri
 sabit tarih aralığı için indirilir; eski ham dosyaların üzerine yazılmaz.
 Girdiler bu araştırmanın ayrı alanında bir kez dondurulur, hashleri sonraki oturumlarda kontrol edilir.
 Eksik saatler veya yetersiz tarih kapsamı eğitimi durdurur; tarih/örnek sayısı sessizce küçültülmez.
+İşlem olmayan bir kaynak barı yalnızca işlem/hacim alanlarının tamamı sıfır,
+OHLC fiyatları eşit ve önceki kapanışla aynıysa korunur; tarihleri kalite raporuna yazılır.
+Sıfır fiyat, negatif değer veya tutarsız sıfır işlem kaydı kabul edilmez; satır uydurulmaz/silinmez.
 Bu ilk A çalışması için açık pozisyon indirilmez. B–D öncesinde o kaynak ayrıca tamamlanacaktır.
 """),
 cell("code", """

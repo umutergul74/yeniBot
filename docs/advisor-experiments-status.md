@@ -111,6 +111,15 @@ Colab hazırlığı:
   notebookta kayıtlı çıktı/kişisel çalışma sonucu bulunmuyor.
 - [ ] Notebookun gerçek kullanıcı Colab/Drive oturumunda çalıştırılması.
 
+2026-10-03 kullanıcı Colab hazırlık hücresinde `Non-positive price/trade
+count` hatası bildirdi. Önceki kontrol fiyat ve işlem sayısını aynı hata
+altında reddediyordu; Drive'daki sorunlu satırın değeri/tarihi henüz görülmedi.
+Yeni `validate_advisor_klines` yalnızca doğrulanmış boş barları açık politika
+ile korur, satırları düşürmez; gerçek bozuk veride tarih/değer örnekleri verir.
+Ham kalite audit'i ve hazırlık kaynak hashleri çıktı manifestine kaydedilir.
+Kullanıcı en yeni kodu çekmek için Colab oturumunu yeniden başlatıp
+notebooku baştan çalıştırmalı; mevcut sabit ham snapshot silinmez.
+
 ## Yerel A deneyi — durdurulmuş tarihsel kayıt
 
 A deneyi 2026-10-03 13:54:56 yerel saatte ayrı Python işlemiyle başlatıldı.

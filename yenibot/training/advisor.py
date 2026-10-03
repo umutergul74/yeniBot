@@ -29,6 +29,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from yenibot.features.builder import build_feature_matrix
+from yenibot.data.advisor_validation import validate_advisor_klines
 from yenibot.labeling.triple_barrier import add_long_only_labels
 from yenibot.training.advisor_models import build_advisor_model
 from yenibot.training.dataset import SequenceDataset
@@ -132,6 +133,7 @@ def prepare(config: dict) -> None:
     manifest = json.loads((snapshot / "snapshot_manifest.json").read_text())
     raw = {}
     hashes = {}
+    raw_audits = {}
     stop = pd.Timestamp(config["development"]["end"]) + pd.Timedelta(hours=config["labeling"]["max_holding_bars"])
     for interval in ("1h", "4h"):
         path = snapshot / f"btc_{interval}.parquet"
@@ -140,15 +142,10 @@ def prepare(config: dict) -> None:
             raise ValueError(f"Snapshot checksum mismatch: {interval}")
         part = pd.read_parquet(path)
         part["timestamp"] = pd.to_datetime(part["timestamp"], utc=True)
-        if part["timestamp"].duplicated().any() or not part["timestamp"].is_monotonic_increasing:
-            raise ValueError("Raw timestamps not unique and ordered")
-        if not part["timestamp"].diff().iloc[1:].eq(pd.Timedelta(hours=int(interval[:-1]))).all():
-            raise ValueError("Raw grid has missing bars")
-        if (part[["open", "high", "low", "close", "num_trades"]] <= 0).any().any():
-            raise ValueError("Non-positive price/trade count")
-        if (part["volume"] <= 0).any() or ((part["taker_buy_base_vol"] < 0) | (part["taker_buy_base_vol"] > part["volume"])).any():
-            raise ValueError("Invalid volume/taker columns")
-        raw[interval] = part.loc[part["timestamp"] <= stop].copy()
+        part = part.loc[part["timestamp"] <= stop].copy()
+        raw[interval], raw_audits[interval] = validate_advisor_klines(
+            part, interval, zero_activity_policy=config["data"].get("zero_activity_policy", "error"))
+        print(f"Raw audit {interval}: {raw_audits[interval]}", flush=True)
     frame = build_feature_matrix(raw["1h"], raw["4h"], cfg).frame
     frame = add_long_only_labels(frame, **config["labeling"])
     frame["label_end_timestamp"] = frame["timestamp"] + pd.Timedelta(hours=config["labeling"]["max_holding_bars"])
@@ -169,6 +166,13 @@ def prepare(config: dict) -> None:
         "rows": len(frame), "start": frame.timestamp.iloc[0].isoformat(),
         "end": frame.timestamp.iloc[-1].isoformat(), "frame_sha256": sha256(output),
         "source_hashes": hashes, "feature_config": cfg, "protocol": config,
+        "raw_quality_audits": raw_audits,
+        "preparation_source_hashes": {str(path): sha256(path) for path in [
+            Path(__file__).parents[1] / "data/advisor_validation.py",
+            Path(__file__).parents[1] / "features/builder.py",
+            Path(__file__).parents[1] / "features/wavelet.py",
+            Path(__file__).parents[1] / "labeling/triple_barrier.py",
+        ]},
         "basic_features": config["data"]["basic_features"],
         "full_features_missing": missing, "test_evaluations": 0,
         "role": "historical_development_not_unseen_test",
