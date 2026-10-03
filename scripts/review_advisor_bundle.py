@@ -53,9 +53,18 @@ def review(bundle: Path, output: Path, experiment: str = "A"):
         assert status["status"] == manifest["session"]["status"] == "complete"
         assert len(status["completed"]) == len(expected)
         assert all(value == 0 for value in [status["test_evaluations"], protocol["test_evaluations"], manifest["session"]["test_evaluations"]])
-        assert protocol["experiment"] == experiment and cfg["training"]["loss"] == "bce"
+        assert protocol["experiment"] == experiment
+        allowed_losses = {'bce','weighted_bce','focal','bce_pearson','focal_pearson'} if protocol.get('role')=='advisor_development_stage' else {'bce'}
+        assert cfg['training']['loss'] in allowed_losses
         assert cfg["training"]["selection_metric"] == "validation_bce"
-        assert not cfg["data"]["wavelet"]
+        if protocol.get('role')=='advisor_development_stage':
+            original = protocol['stage_architecture_selection']['features']
+            replacements = cfg['stage']['specification']['wavelet']['replacements']
+            expected_features = [replacements.get(name,name) if protocol['wavelet_enabled'] else name for name in original]
+            assert protocol['features']==expected_features
+            assert data['wavelet_audit']['base_columns_unchanged'] and data['wavelet_audit']['labels_from_raw_prices']
+        else:
+            assert not cfg["data"]["wavelet"]
         assert cfg["walk_forward"]["purge_bars"] >= 10 and cfg["walk_forward"]["embargo_bars"] >= 10
         details, unique_timestamps, label_cache = [], set(), {}
         epochs = 0
@@ -68,6 +77,12 @@ def review(bundle: Path, output: Path, experiment: str = "A"):
             assert result["status"] == "complete" and result["test_evaluations"] == 0
             assert result["signature"] == status["signature"]
             assert result["features"] == protocol["features"]
+            if protocol.get('role')=='advisor_development_stage':
+                objective = result['objective_audit']
+                assert objective['kind']==protocol['objective']['kind']
+                assert objective['training_sequence_positives']+objective['training_sequence_negatives']==result['train_sequences']
+                if objective['kind']=='weighted_bce':
+                    assert abs(objective['pos_weight']-objective['training_sequence_negatives']/objective['training_sequence_positives'])<1e-7
             assert int(history.loc[history.bce.idxmin(), "epoch"]) == result["best_epoch"]
             assert abs(history.bce.min() - result["validation"]["bce"]) < 1e-7
             assert len(history) == result["epochs_trained"]
@@ -131,6 +146,8 @@ def review(bundle: Path, output: Path, experiment: str = "A"):
               "raw_quality_audits": data["raw_quality_audits"],
               "open_interest_audit": data.get('open_interest_audit'),
               "reference_a_audit": data.get('reference_a_audit'), "test_evaluations": 0}
+    record['wavelet_audit'] = data.get('wavelet_audit')
+    record['objective'] = protocol.get('objective',{'kind':'bce'})
     (output / "review_summary.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
@@ -156,9 +173,9 @@ def review(bundle: Path, output: Path, experiment: str = "A"):
         ax.set_xlabel("Fold")
         ax.set_xlim(1, 38)
         ax.set_xticks([1, 5, 10, 15, 20, 25, 30, 35, 38])
-    description = 'temel fiyat/hacim' if experiment == 'A' else 'tüm wavelet dışı özellikler'
+    description = 'temel fiyat/hacim' if experiment == 'A' or protocol.get('role')=='advisor_development_stage' else 'tüm wavelet dışı özellikler'
     architecture = cfg['experiments'][experiment]['architecture'].upper().replace('_', '–')
-    fig.suptitle(f"{experiment} deneyi — {description} + {architecture} + BCE\nYalnızca validation; 38 fold × 3 seed", fontsize=16)
+    fig.suptitle(f"{experiment} deneyi — {description} + {architecture}\nEğitim: {cfg['training']['loss']}; epoch seçimi: validation BCE", fontsize=16)
     fig.text(.5, .015, "Gölge: 3 seed'in min–max aralığı; güven aralığı değildir. Test değerlendirmesi: 0.", ha="center", fontsize=10)
     fig.tight_layout(rect=[0, .045, 1, .93])
     fig.savefig(output / f"{experiment}_validation_dashboard.png", dpi=160)
@@ -239,7 +256,7 @@ iddiası kurulamaz. Bunlar validation odaklı geliştirmedir, nihai test henüz 
     if experiment != 'A':
         report = report.split('## Sıradaki aşama')[0] + f'''## Sıradaki aşama
 
-{ {'B': 'C: aynı 34 girdi ve aynı BCE ile TCN.', 'C': 'D: aynı 34 girdi ve aynı BCE ile paralel TCN–GRU.', 'D': 'Önceden tanımlanan validation ölçütüyle seçim, ardından wavelet karşılaştırması.'}[experiment] } Model seçimi A–D tamamlanmadan yapılmaz.
+{ {'B': 'C: aynı 34 girdi ve aynı BCE ile TCN.', 'C': 'D: aynı 34 girdi ve aynı BCE ile paralel TCN–GRU.', 'D': 'Önceden tanımlanan validation ölçütüyle seçim, ardından wavelet karşılaştırması.'}.get(experiment, 'Wavelet/loss seçim dosyalarını ve tamamlanmış tüm karşılaştırmaları birlikte incele; bağımsız test metrikleri henüz yok.') }
 OI kalite ve A eşleşme ayrıntıları `review_summary.json` içinde bulunur.
 
 ![Doğrulama görünümü]({experiment}_validation_dashboard.png)
@@ -253,6 +270,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--experiment", choices=['A', 'B', 'C', 'D'], default='A')
+    parser.add_argument("--experiment", choices=['A','B','C','D','W_ON','L_WEIGHTED_BCE','L_FOCAL','L_BCE_PEARSON','L_FOCAL_PEARSON'], default='A')
     args = parser.parse_args()
     review(args.bundle, args.output, args.experiment)

@@ -14,12 +14,14 @@ Wavelet kapalı karşılaştırmada bunların ayrıca ham girdileri zaten bulund
 için B–D için 34 benzersiz, açıkça listelenmiş özellik donduruldu.
 Bu, bütün mevcut girdilerin wavelet kapalı karşılığıdır; eski 38 boyutlu
 modelin aynısı değildir. `configs/advisor_full_features.txt` sütun sırasını
-sabitler. İki açık pozisyon sütunu yerel kaynakta eksiktir; tamamlanmadan
-B–D çalıştırılamaz. Eksik sütunları atlamak ve 32 girdiyi 'tüm özellikler'
-diye sunmak yasaktır. Wavelet karşılaştırmasında seçilen 34 kanallı yapıda
-1H/4H getiri ve hacim kanalları filtrelenmiş karşılıklarıyla değiştirilecek;
-boyut, etiketler ve ortak değerlendirme tarihleri sabit tutulacak. Bu aşama
-henüz uygulanmadı ve öncesinde ayrı protokol kaydı yapılacak.
+sabitler. Açık pozisyon girdileri Colab'da denetlenmiş sabit kaynakla
+tamamlandı; A–D deneylerinin her biri 114 fold/seed ile tamamlandı.
+Eksik sütunları atlamak ve 32 girdiyi 'tüm özellikler' diye sunmak yasaktır.
+Ortalama validation BCE sıralaması A, D, C, B'dir; sonraki aşamaların
+temeli 6 özellikli GRU olan A'dır. A'nın üç oynaklık özelliği B'de
+bulunmadığından A–B karşılaştırması yalnızca özellik ekleme deneyi değildir.
+Wavelet ve loss aşamalarının sabit ayarları `configs/advisor_stages.yaml`,
+çalıştırma ayrıntıları `docs/advisor-wavelet-loss-runbook.md` içindedir.
 
 Her modelde ortak 128 boyutlu karar katmanı vardır. GRU, tek yönlü 2 katman
 128 birim; TCN, 64 kanal ve [1,2,4,8,16] genişlemeler; hibrit paraleldir.

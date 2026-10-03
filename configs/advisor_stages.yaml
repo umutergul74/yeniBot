@@ -1,0 +1,44 @@
+protocol: advisor_wavelet_loss_v1
+base_config: configs/advisor_ablation.yaml
+holdout_config: configs/advisor_final_test.yaml
+reference_runs:
+  A: A_81029f6d6d48
+  B: B_67a0db4c5eb3
+  C: C_de8fa1965470
+  D: D_e4e9d0b149a6
+selection:
+  metric: bce
+  aggregation: equal_weight_mean_all_fold_seed
+  expected_folds: 38
+  expected_seeds: [42, 43, 44]
+  architecture_tie_order: [A, B, C, D]
+  wavelet_tie_order: [W_OFF, W_ON]
+  # Audit already established A as the validation-BCE winner; fail on drift.
+  expected_architecture_winner: A
+wavelet:
+  window: 256
+  wavelet: db4
+  level: 2
+  threshold_scale: 0.5
+  replacements:
+    log_return: close_denoised_log_return
+    volume_log_zscore: volume_denoised_log_zscore
+  loss: bce
+losses:
+  L_WEIGHTED_BCE:
+    kind: weighted_bce
+    pos_weight: train_sequence_negative_count_over_positive_count
+  L_FOCAL:
+    kind: focal
+    alpha: 0.6
+    gamma: 2.0
+  L_BCE_PEARSON:
+    kind: bce_pearson
+    pearson_weight: 0.05
+  L_FOCAL_PEARSON:
+    kind: focal_pearson
+    alpha: 0.6
+    gamma: 2.0
+    pearson_weight: 0.05
+loss_tie_order: [L_BCE, L_WEIGHTED_BCE, L_FOCAL, L_BCE_PEARSON, L_FOCAL_PEARSON]
+# No weight/gamma/alpha/window search; these values precede this comparison.

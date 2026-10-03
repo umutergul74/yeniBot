@@ -87,9 +87,13 @@ epoch sonunda Drive'a atomik dosya değişimiyle yazılır. Bu kalıcılık
 karşılığında bir miktar Drive yazma maliyeti vardır; performans ölçülmeden
 checkpoint sıklığı düşürülmez. Drive erişim hataları saklanmaz.
 
-A deneyi 6 fiyat/hacim özelliği + GRU + BCE'dir. Bu notebookun ilk sürümü
-B/C/D için eksik açık pozisyon girdilerini üretmez; onları eksik sütunlarla
-çalıştırmak yerine durur. Wavelet/loss aşaması da daha sonra ayrı adımda.
+A deneyi 6 fiyat/hacim özelliği + GRU + BCE'dir. İlk notebookun eksik
+açık pozisyon kaynağı 07 notebookunda denetlenerek tamamlandı; A–D'nin
+114'er fold/seed sonuçları alındı. Sonraki aşamalar için sırasıyla
+`08_advisor_wavelet_colab.ipynb` ve `09_advisor_losses_colab.ipynb` kullanılır.
+A–D sonuçları ve sabit kaynaklar aynı Drive alanında korunur.
+Seçilen kontrol A'dır; wavelet/loss ayrıntıları ve kesinti adımları
+`docs/advisor-wavelet-loss-runbook.md` içindedir.
 
 ## Kesinti ve ortam değişikliği
 
@@ -124,5 +128,6 @@ kalır, sonraki oturum bunlardan devam eder ve ZIP'i yeniler.
 
 ZIP'i sohbete ekleyin veya bilgisayara senkronize edilen dosyanın yolunu
 paylaşın. Bu sohbetin Google Drive'a otomatik erişimi bulunmuyor.
-Notebook hazırlandı ve yerel kontroller geçti; kullanıcı Drive oturumunda
-henüz çalıştırılmadı. Hazır notebook ile tamamlanmış Colab deneyi ayrıdır.
+08/09 hazırlandı ve yerel kontroller yapıldı; kullanıcı Drive oturumunda
+henüz çalıştırılmadı. A–D tamamlandı; wavelet/loss henüz tamamlanmadı.
+Hazır notebook ile tamamlanmış Colab deneyi ayrıdır.

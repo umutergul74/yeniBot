@@ -3,7 +3,35 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — A–D tamamlandı; Eylül 2026 test için ayrıldı
+## Güncel durak — wavelet/loss Colab altyapısı hazır (2026-10-04)
+
+A–D tamamlandı. Ortak validation BCE seçimi A'yı (6 özellik/GRU) seçti.
+`configs/advisor_stages.yaml` ile iki kanal için sabit wavelet dönüşümü ve
+beş loss adayı önceden tanımlandı. Yeni notebooklar:
+`08_advisor_wavelet_colab.ipynb`, sonra `09_advisor_losses_colab.ipynb`.
+Kontrol BCE sonuçları yeniden eğitilmez; W_ON ve dört yeni loss için
+toplam 570 yeni fold/seed eğitimi planlandı. Tamamlanan yeni eğitim: **0**.
+Yerelde tam eğitim başlatılmadı; Eylül 2026 verisi okunmadı.
+
+Epoch ve yöntem seçimleri ortak validation BCE ile yapılır. Train/validation
+arasında 24 saat purge, validation/takvim test bölümü arasında 24 saat
+boşluk korunur. Raw etiketler değişmez; modelin boyutu 64 × 6 kalır.
+Checkpoint/ilerleme/karar dosyaları ve ZIP Drive'da korunur. Aynı
+commit/ayar/veri/ortamla kesinti sonrası devam edilir; farklı ortamla
+cached kontrolün birleştirilmesi engellenir.
+
+Teknik doğrulama: 50 ilgili test geçti. Yeni BCE yolu eski yolla CPU ve CUDA'da aynı ağırlıkları
+ve sonuçları verdi; Focal+Pearson kesinti/devam, wavelet geçmiş nedenselliği
+ve seçim kapıları test edildi. Gerçek yerel 33.551 geliştirme satırında
+hazırlık ve cache kontrolü yapıldı; base girdiler/etiketler değişmedi.
+Colab gerçek oturum doğrulaması kullanıcı çalıştırdıktan sonra yapılacak.
+
+**Devam:** 08'i Colab T4 üzerinde aynı Drive alanında çalıştır; tamamlanmış
+wavelet ZIP'ini incele; sonra 09'u çalıştır. Kullanım ve kavramsal açıklama:
+`docs/advisor-wavelet-loss-runbook.md`. Sonrasında final eğitim/artifact
+kilitleme geliştirilecek, en son Eylül 2026 testi değerlendirilecek.
+
+## Eylül 2026 test rezervasyonu
 
 Kullanıcı Eylül 2026'da eğitim/backtest/performans incelemesi yapmadığını
 doğrudan doğruladı ve bu dönemin test olarak kullanılmasını istedi.
