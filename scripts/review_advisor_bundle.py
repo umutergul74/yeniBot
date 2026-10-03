@@ -157,7 +157,8 @@ def review(bundle: Path, output: Path, experiment: str = "A"):
         ax.set_xlim(1, 38)
         ax.set_xticks([1, 5, 10, 15, 20, 25, 30, 35, 38])
     description = 'temel fiyat/hacim' if experiment == 'A' else 'tüm wavelet dışı özellikler'
-    fig.suptitle(f"{experiment} deneyi — {description} + GRU + BCE\nYalnızca validation; 38 fold × 3 seed", fontsize=16)
+    architecture = cfg['experiments'][experiment]['architecture'].upper().replace('_', '–')
+    fig.suptitle(f"{experiment} deneyi — {description} + {architecture} + BCE\nYalnızca validation; 38 fold × 3 seed", fontsize=16)
     fig.text(.5, .015, "Gölge: 3 seed'in min–max aralığı; güven aralığı değildir. Test değerlendirmesi: 0.", ha="center", fontsize=10)
     fig.tight_layout(rect=[0, .045, 1, .93])
     fig.savefig(output / f"{experiment}_validation_dashboard.png", dpi=160)
@@ -238,7 +239,7 @@ iddiası kurulamaz. Bunlar validation odaklı geliştirmedir, nihai test henüz 
     if experiment != 'A':
         report = report.split('## Sıradaki aşama')[0] + f'''## Sıradaki aşama
 
-C: aynı 34 girdi ve aynı BCE ile TCN. Model seçimi A–D tamamlanmadan yapılmaz.
+{ {'B': 'C: aynı 34 girdi ve aynı BCE ile TCN.', 'C': 'D: aynı 34 girdi ve aynı BCE ile paralel TCN–GRU.', 'D': 'Önceden tanımlanan validation ölçütüyle seçim, ardından wavelet karşılaştırması.'}[experiment] } Model seçimi A–D tamamlanmadan yapılmaz.
 OI kalite ve A eşleşme ayrıntıları `review_summary.json` içinde bulunur.
 
 ![Doğrulama görünümü]({experiment}_validation_dashboard.png)
@@ -252,6 +253,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--experiment", choices=['A', 'B'], default='A')
+    parser.add_argument("--experiment", choices=['A', 'B', 'C', 'D'], default='A')
     args = parser.parse_args()
     review(args.bundle, args.output, args.experiment)

@@ -3,7 +3,37 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — A ve B tamamlandı; sırada C var
+## Güncel durak — A, B ve C tamamlandı; sırada D var
+
+Yeni kullanıcı paketi: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (2).zip`.
+SHA256: `bd762d77567ec36e1032ca8b3f5b16eb3e183909505c1f620ec8cd24d2f96fba`.
+C `C_de8fa1965470`: 38 fold × seed 42/43/44, 114 eğitim, 1.892 epoch.
+1.764 envanter dosyasının hash/boyutları doğrulandı. C metrikleri tahminlerden
+yeniden hesaplandı; epoch seçimleri validation BCE ile uyumlu; 228 kayıtlı
+sınır kontrolü geçti. Test değerlendirmesi 0.
+
+Önceki paketle A'nın 574, B'nin 574 çalışma dosyası byte düzeyinde aynı.
+B/C aynı 34 girdiye ve veri hash'ine sahip; A/B/C'nin 114 tahmin grubunda
+etiket, tarih, getiri ve satır konumları eşleşti. Split/seed/eğitim ayarları
+ve ortam aynı. A'nın farklı altı özellik setiyle ilgili yorum sınırı korunur.
+
+C validation: BCE 0,607080; AP 0,397981; precision %37,99; recall %8,69;
+F1 0,121095; accuracy %68,58; Rank IC 0,007430. BCE'de C, B'den iyi fakat
+A'dan zayıf. Seed ortalamasında 38 foldun 25'inde B'den, 8'inde A'dan daha iyi.
+C 67.457, B 178.945 parametreli; kapasite eşitlenmiş mimari karşılaştırması değildir.
+C'de 60/114 eğitim için ilk epoch seçilmiş. Uzun eğitimin faydası varsayılmamalı;
+erken durdurma kaydı korunur, mevcut deneyin ayarları sonuçla değiştirilmez.
+
+C iki oturum kaydında var: 18:30:15 UTC oturumu eğitim loglarını içeriyor;
+19:07:03 UTC tekrarı tamamlanmış scope'u yeniden kullanmış. İkinci kısa
+oturumun süresi tüm eğitimin süresi olarak yorumlanmamalı.
+
+Rapor: `docs/advisor-abc-validation-review.md`.
+Yerel JSON/CSV/grafik: `output/advisor_experiments/review_C_20261003`.
+Sonraki aşama: 07 notebookunda `EXPERIMENTS = ['D']`, aynı 34 girdi → paralel
+TCN–GRU → BCE. D henüz çalıştırılmadı. Nihai test dönemi hâlâ tanımlanmadı.
+
+## Önceki durak — A ve B tamamlandı
 
 Yeni kullanıcı paketi: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (1).zip`.
 B kapsamı `B_67a0db4c5eb3`: 38 fold × seed 42/43/44 = 114 tamamlanmış eğitim,
