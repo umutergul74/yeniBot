@@ -181,6 +181,13 @@ Run in strict order:
 4. [`04_training_walk_forward.ipynb`](notebooks/04_training_walk_forward.ipynb)
 5. [`05_diagnostics_validation.ipynb`](notebooks/05_diagnostics_validation.ipynb)
 
+Advisor-guided ablation experiments use a separate validation-only workflow:
+[`06_advisor_ablation_colab.ipynb`](notebooks/06_advisor_ablation_colab.ipynb).
+It fetches `codex/advisor-ablation-protocol`, pins market inputs, saves epoch
+checkpoints to Drive, and exports a small review ZIP. Start with experiment A;
+this notebook does not call the legacy experiment/test evaluation matrix.
+See [the Colab runbook](docs/advisor-colab-runbook.md) for resume and output paths.
+
 After every `git pull`, use **Runtime -> Restart session** before importing the
 package again. Colab otherwise retains stale Python modules in memory.
 

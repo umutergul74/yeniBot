@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import random
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
+import sklearn
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, average_precision_score, log_loss, precision_recall_fscore_support
 from sklearn.preprocessing import RobustScaler
@@ -64,7 +66,13 @@ def atomic_text(path: Path, value: str) -> None:
 def exclusive_run(directory: Path):
     """OS lock releases on process death; no stale PID unlock guessing required."""
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "run.lock").open("a+b") as stream:
+    lock_directory = directory
+    if os.environ.get("ADVISOR_LOCK_ROOT"):
+        # Drive mounts may not implement POSIX flock; use the runtime's disk.
+        key = hashlib.sha256(str(directory.resolve()).encode()).hexdigest()[:24]
+        lock_directory = Path(os.environ["ADVISOR_LOCK_ROOT"]) / key
+        lock_directory.mkdir(parents=True, exist_ok=True)
+    with (lock_directory / "run.lock").open("a+b") as stream:
         stream.seek(0)
         stream.write(b"0")
         stream.flush()
@@ -380,6 +388,9 @@ def run(config: dict, name: str, fold_ids: list[int] | None = None, seeds: list[
                 "source_hashes": {str(p): sha256(p) for p in source_files},
                 "folds": [fold.fold for fold in selected], "seeds": selected_seeds,
                 "torch": torch.__version__, "numpy": np.__version__, "device": str(device),
+                "python": sys.version, "pandas": pd.__version__, "sklearn": sklearn.__version__,
+                "gpu": torch.cuda.get_device_name(0) if device.type == "cuda" else None,
+                "cuda": torch.version.cuda, "cudnn": torch.backends.cudnn.version(),
                 "selection": "validation_bce_only", "test_evaluations": 0}
     signature = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
     directory = Path(config["output"]) / f"{name}_{signature[:12]}"

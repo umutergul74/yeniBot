@@ -78,7 +78,40 @@ Veri, model ağırlıkları ve çalışma anı JSON dosyaları Git'e eklenmez.
   sütunu eksik. Kaynak tamamlanmadan tam özellik deneyi başlatılmayacak.
 - Wavelet ve farklı loss aşamalarının çalıştırılması henüz uygulanmadı.
 
-## Aktif çalışma — önce burayı oku
+## Aktif aşama — Colab geçişi
+
+Kullanıcı eğitimin Colab'a taşınmasını istedi. Yerel PID 14372 doğrulanıp
+durduruldu; 42/114 tamamlanmış fold/seed ve son checkpointler korundu.
+Yerel eğitim artık çalışmıyor. Eski durum satırları aşağıda tarihsel kayıttır.
+
+Yeni çalışma girişi: `notebooks/06_advisor_ablation_colab.ipynb`.
+Notebook ayrı dalın güncel kodunu çeker, commit ve ortamı kaydeder, Drive'a
+kalıcı checkpoint/rapor yazar. Colab sürümleri ve kod imzası farklı
+olduğundan yerel kısmi eğitimle Colab sonuçları tek çalışma gibi birleştirilmez.
+Colab'da A deneyi yeni bir imza ile başlar; sonraki aynı ortamlı Colab
+oturumları Drive'daki epoch checkpointinden devam eder.
+
+Kalıcı Colab alanı:
+`MyDrive/yeniBot/advisor_experiments/colab_v1/`.
+İnceleme ZIP'i: `reports/advisor_latest_review_bundle.zip`.
+Sonraki adım: GitHub'daki notebooku Colab'da GPU runtime ile çalıştır;
+Drive bağlantısını ver; ilk A çıktısını ZIP olarak bu çalışma alanına getir.
+Bu yerel sohbetin Drive'a otomatik dosya erişimi yoktur.
+
+Colab hazırlığı:
+- [x] Mevcut 00/01/04 notebooklarının hücre akışı incelendi.
+- [x] 14 hücreli yeni Colab notebooku ve kaynak üretici script oluşturuldu.
+- [x] Sabit ham kaynak hashleri, yerel SSD veri kopyası ve Drive checkpointleri.
+- [x] Ortam/cihaz sürümleri eğitim imzasına eklendi.
+- [x] Drive yerine runtime diskinde OS kilidi; iki ayrı runtime eşzamanlı kullanılmaz.
+- [x] Ağırlıksız inceleme ZIP'i ve ortam/commit kayıtları.
+- [x] 17 protokol/Colab/eğitim testi; ayrıca yeni kilit testini içeren
+  3 Colab yardımcı testi geçti.
+- [x] Notebook şeması nbformat ile doğrulandı; bütün kod hücreleri derleniyor,
+  notebookta kayıtlı çıktı/kişisel çalışma sonucu bulunmuyor.
+- [ ] Notebookun gerçek kullanıcı Colab/Drive oturumunda çalıştırılması.
+
+## Yerel A deneyi — durdurulmuş tarihsel kayıt
 
 A deneyi 2026-10-03 13:54:56 yerel saatte ayrı Python işlemiyle başlatıldı.
 Başlatıldığı sıradaki PID: 14372 (yeniden başlatmada değişir).
@@ -95,13 +128,12 @@ ve `status.json` dosyalarında bulunur. Her foldun `STATUS.md` ve
 kontrolünde seed 42 için fold 0–4 tamamlandı, fold 5 çalışıyordu;
 bu anlık sayı güncel tamamlanma durumu olarak kullanılmamalı.
 
-Sonraki adım: A işleminin canlı durumunu ve hata günlüğünü kontrol et.
-Çalışıyorsa aynı işi tekrar başlatma. Tamamlandıysa validation raporunu
-hazırla; sonra B–D için açık pozisyon kaynağını ve aynı tarih/etiket/grid
-eşleşmesini tamamla. A'nın biten veri/ayar/kod imzasını değiştirme.
-Hiçbir aşamada bu validation sonuçlarını nihai test sonucu diye sunma.
+Yerel kısmi sonuçlar sadece korunur; kullanıcı Colab tercih ettiği için
+yerel GPU eğitimini yeniden başlatma. B–D öncesinde açık pozisyon kaynağını
+ve aynı tarih/etiket/grid eşleşmesini tamamla. Hiçbir aşamada validation
+sonuçlarını nihai test sonucu diye sunma.
 
-Kesinti sonrası **aynı komutla** kaldığı yerden devam:
+Eski yerel çalıştırma komutu (Colab geçişinden sonra otomatik kullanma):
 Komut: `powershell -NoProfile -File scripts/run_advisor_experiment.ps1 -Experiment A`.
 Devam ayrıntıları: `docs/advisor-experiment-runbook.md`.
 Bu belge eğitim tamamlandı veya akademik başarı sağlandı anlamına gelmez.
