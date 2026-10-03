@@ -24,7 +24,16 @@ class PurgedWalkForwardCV:
         step_bars: int,
         purge_bars: int,
         embargo_bars: int,
+        label_horizon_bars: int | None = None,
     ) -> None:
+        sizes = (train_bars, val_bars, test_bars, step_bars)
+        if any(value <= 0 for value in sizes) or min(purge_bars, embargo_bars) < 0:
+            raise ValueError("Window lengths and step must be positive; gaps must be nonnegative")
+        if label_horizon_bars is not None:
+            if label_horizon_bars <= 0:
+                raise ValueError("label_horizon_bars must be positive")
+            if min(purge_bars, embargo_bars) < label_horizon_bars:
+                raise ValueError("Both boundary gaps must cover the label horizon")
         self.train_bars = train_bars
         self.val_bars = val_bars
         self.test_bars = test_bars

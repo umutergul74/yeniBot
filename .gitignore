@@ -47,4 +47,5 @@ regime_metrics.csv
 summary.md
 test_predictions.parquet
 threshold_metrics.csv
+output/advisor_experiments/
 tsne_embeddings.parquet
