@@ -3,7 +3,37 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — A–D tamamlandı; bağımsız test dönemi kararı bekleniyor
+## Güncel durak — A–D tamamlandı; Eylül 2026 test için ayrıldı
+
+Kullanıcı Eylül 2026'da eğitim/backtest/performans incelemesi yapmadığını
+doğrudan doğruladı ve bu dönemin test olarak kullanılmasını istedi.
+`configs/advisor_final_test.yaml` ayrı rezervasyon protokolüdür:
+2026-09-01 00:00–2026-09-30 23:00 UTC, 720 tahmin zaman damgası.
+Bu geriye dönük dokunulmamış holdout'tur; ileriye dönük deney iddiası değildir.
+
+24 saat ön boşluk: 31 Ağustos. Son eğitim/validation örneği en geç
+30 Ağustos 23:00 UTC; tam 10 saatlik etiket ufku testten önce bitmeli.
+İlk test dizisi için geçmiş 63 gözlem kullanılabilir (asgari dizi bağlamı
+29 Ağustos 09:00'dan); bu gözlemler testte fit işlemi gerektirmez.
+Özelliklerin daha uzun geçmiş hesaplamaları ayrıca korunacak. Son etiket
+için 1 Ekim 09:00 barı (10:00 UTC'de tamamlanan) gerekir. Plan 720 test
+tahminidir; geçmiş bağlam sağlandığından test içinde ilk 63 saat atılmaz.
+
+Model/özellik/wavelet/loss/final eğitim penceresi ve ağırlıklar henüz
+kilitlenmedi. Test değerlendirmesi hâlâ 0. Test verisi okunmadı/indirilmedi,
+yeni eğitim başlatılmadı. A–D config'leri/imzaları aynen korundu; eski
+config'teki test durumu o deneylerin tarihsel kaydıdır, güncel rezervasyon
+ayrı dosyadadır. Seedler 42/43/44, eşik 0,5; test seedleri ayrı raporlanacak,
+ardından aritmetik ortalama/std; olasılık ensemble'ı planlanmadı.
+
+`yenibot.training.advisor_holdout` rezervasyonu denetler; test metriği
+hesaplamaz. Gelecek final eğitim adaptörü için tarih/etiket fit-scope guard'ı
+sağlandı; henüz bir final eğitim/değerlendirme notebook'una bağlanmadı.
+5 rezervasyon/sınır testi geçti. Devam: wavelet/loss protokolünü geliştirme
+verisi için netleştir, sonra final eğitim ve artifact freeze, en son test.
+Çalıştırma ayrıntısı: `docs/advisor-final-test-protocol.md`.
+
+## Önceki durak — D incelemesi, test tarihi kararından önce
 
 Paket: `C:/Users/Umut/Downloads/advisor_latest_review_bundle (3).zip`.
 SHA256: `a96dde6cfbe5defd7078814060a187675ac237cdb1df6c629df97ca0f4db0aef`.

@@ -1,0 +1,57 @@
+# Reserved before inspecting September performance. Separate from A-D run configs.
+protocol: advisor_september_holdout_v1
+status: reserved_not_evaluated
+reservation:
+  recorded_on: '2026-10-03'
+  user_confirmed_no_prior_training_backtest_or_performance_review: true
+  design: retrospective_untouched_holdout
+market:
+  symbol: BTCUSDT
+  venue: binance_usdt_m_perpetual
+  interval: 1h
+  timezone: UTC
+test:
+  start: '2026-09-01T00:00:00Z'
+  end: '2026-09-30T23:00:00Z'
+  expected_prediction_timestamps: 720
+  sequence_length: 64
+  context_policy: use_63_preceding_past_rows_no_fitting
+  label_horizon_bars: 10
+  tp_multiplier: 2.0
+  sl_multiplier: 5.0
+boundaries:
+  pre_test_gap_bars: 24
+  # Latest fitting/validation sample timestamp, not latest label-source timestamp.
+  latest_fitting_sample: '2026-08-30T23:00:00Z'
+selection:
+  performance_access: blocked_until_model_and_training_plan_frozen
+  architecture_wavelet_loss_selection: development_validation_only
+  epoch_selection: pre_test_validation_only
+  test_may_change_methods_or_thresholds: false
+  threshold: 0.5
+  seeds: [42, 43, 44]
+  reporting: each_seed_separately_then_arithmetic_mean_and_std
+  seed_selection_using_test: false
+  # No fold/seed voting or probability ensemble is implied by a seed mean.
+  probability_ensemble: not_planned
+  final_training_window: not_frozen
+  selected_method: not_frozen
+  comparator_methods: not_frozen
+  frozen_artifact_manifest: null
+metrics:
+  - bce
+  - average_precision
+  - precision
+  - recall
+  - f1
+  - accuracy
+  - rank_ic
+  - prevalence
+baselines:
+  - always_negative_classification
+  - constant_probability_from_training_prevalence
+execution:
+  model_weights_frozen_before_test_predictions: true
+  test_fit_operations_allowed: 0
+  update_weights_during_test: false
+  test_evaluations: 0

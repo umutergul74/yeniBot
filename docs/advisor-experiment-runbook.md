@@ -48,7 +48,10 @@ Geliştirme sınırı: 2022-03-01 04:00–2025-12-28 02:00 UTC.
 Ham verinin son etiketleri hesaplamak için 10 saatlik devamı kullanılır;
 bu devam girdi veya değerlendirme örneği yapılmaz. Ham kaynak daha yeni
 veri içerse de yeni dönem bu deneyde değerlendirilmez. Nihai testin
-tarihleri henüz kilitlenmedi. Sonraki fold validation'ları eski testlerle
+tarihleri, kullanıcı onayıyla Eylül 2026 olarak ayrı
+`configs/advisor_final_test.yaml` dosyasında ayrıldı; mevcut A–D config
+imzaları değiştirilmedi. Final eğitim ve test adaptörü henüz hazır değil.
+Sonraki fold validation'ları eski testlerle
 örtüşebildiği için tarihsel fold testleri nihai bağımsız kanıt değildir.
 
 ## Çalıştırma ve devam
