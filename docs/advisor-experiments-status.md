@@ -3,7 +3,34 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — final Colab akışı hazır (2026-10-04)
+## Güncel durak — final test tamamlandı ve incelendi (2026-10-04)
+
+`advisor_final_latest_review_bundle.zip` denetlendi: 64 ZIP üyesi, final
+holdout scored. Manifest hashleri, kilit sözleşmesi, 720 tarih/3 seed,
+metrik yeniden hesaplama, mean/std, validation epoch seçimi ve referans
+kontrolleri geçti. Çalışma commit `af6d81e`, Tesla T4.
+
+Final modeller seed 42/43/44 için best epoch 4/2/1; eğitim toplamları
+19/17/16 epoch (patience 15). Üç checkpoint test indirmeden önce kilitlendi.
+720 benzersiz test saati, 231 pozitif/489 negatif etiket; üç seed aynı
+dönem üzerinde. 2.160 kayıt bağımsız test örneği olarak yorumlanmaz.
+
+Mean test BCE 0.590713 (train-frekans referansı 0.627701), AP 0.443801
+(referans 0.320833), precision 0.379590, recall 0.101010, F1 0.143704,
+accuracy 0.669444 (hep-negatif 0.679167), Rank IC 0.007261.
+Seed 42/43/44 F1 0.320000/0.055336/0.055777; güçlü seed duyarlılığı var.
+Çalıştırma hatası veya metrik uyuşmazlığı bulunmadı; performans sınırlı.
+Model/scaler ham tablolar ZIP'e dahil olmadığından yeniden çıkarım yapılmadı.
+
+İkinci oturum aynı kilit ve test sonuçlarını yeniden kullandı; logda
+`Completed fixed test reused; no new evaluation` doğrulandı. Test fit 0,
+tek sabit holdout değerlendirmesi 1; metrikler tüm seedler için raporlandı.
+Eylül 2026 artık görüldü. Sonuca göre seed/model/eşik seçimi yapılmamalı;
+olası geliştirmeler ayrı protokol ve yeni dokunulmamış değerlendirme gerektirir.
+**Devam:** sonuçları hocaya raporla, güçlü/zayıf yönleri ve gelecekteki
+araştırma hedefini görüş. Ayrıntılar `docs/advisor-final-results.md`.
+
+## Final altyapı hazırlığının tarihsel kaydı (2026-10-04)
 
 `configs/advisor_final_execution.yaml`, `yenibot.training.advisor_final`,
 `10_advisor_final_test_colab.ipynb` ve ayrı final ZIP inceleyicisi hazırlandı.
