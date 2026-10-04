@@ -3,14 +3,37 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — wavelet/loss Colab altyapısı hazır (2026-10-04)
+## Güncel durak — wavelet tamamlandı; loss sırada (2026-10-04)
+
+Kullanıcının `advisor_latest_review_bundle (4).zip` paketi incelendi.
+`W_ON_e170a14b3a9d`: 38 fold × 3 seed = 114/114 tamamlandı, toplam 2.189
+epoch. Colab commit `021d59a`, Tesla T4; kontrol A ile ortam eşleşiyor.
+ZIP manifest hash denetimi ve tahminlerden metrik yeniden hesaplama geçti.
+Önceki paketteki 2.296 A–D çalışma dosyası byte düzeyinde korundu.
+114 eşleşen tahmin grubunda tarih/etiket/ileri getiri/satır konumları aynı.
+
+Ortalama validation BCE: W_OFF/A 0.5945067672; W_ON 0.5952590469.
+Önceden belirlenen ölçüte göre seçim **W_OFF**. Fark +0.0007522796;
+istatistiksel anlamlılık iddiası yok. Seed ortalamasıyla 38 foldun 16'sında
+wavelet daha iyi; tüm dönemlerde tutarlı iyileşme yok.
+Karar Drive `data/stages_wavelet_selection.json` içinde kaydedildi.
+Nihai test değerlendirmesi hâlâ 0. Ayrıntılar `docs/advisor-wavelet-results.md`.
+
+**Sonraki adım:** 09 notebookunu aynı Drive alanında/T4 ortamında çalıştır.
+09 W_OFF seçimini otomatik alır; A'nın ham 6 özelliği + GRU ile ağırlıklı
+BCE, Focal, BCE+Pearson, Focal+Pearson denenir. BCE kontrolü tamamlanmış
+A'dır; tekrar eğitim gerekmez. Dört yeni loss için 456 fold/seed kaldı.
+Loss sonucu henüz yok; final eğitim ve test adaptörü henüz tamamlanmadı.
+
+## Altyapı hazırlığının tarihsel kaydı (2026-10-04)
 
 A–D tamamlandı. Ortak validation BCE seçimi A'yı (6 özellik/GRU) seçti.
 `configs/advisor_stages.yaml` ile iki kanal için sabit wavelet dönüşümü ve
 beş loss adayı önceden tanımlandı. Yeni notebooklar:
 `08_advisor_wavelet_colab.ipynb`, sonra `09_advisor_losses_colab.ipynb`.
 Kontrol BCE sonuçları yeniden eğitilmez; W_ON ve dört yeni loss için
-toplam 570 yeni fold/seed eğitimi planlandı. Tamamlanan yeni eğitim: **0**.
+toplam 570 yeni fold/seed eğitimi planlandı. Hazırlık anında tamamlanan
+yeni eğitim 0'dı; güncel tamamlanan sayı yukarıdaki durakta bulunur.
 Yerelde tam eğitim başlatılmadı; Eylül 2026 verisi okunmadı.
 
 Epoch ve yöntem seçimleri ortak validation BCE ile yapılır. Train/validation
@@ -24,7 +47,8 @@ Teknik doğrulama: 50 ilgili test geçti. Yeni BCE yolu eski yolla CPU ve CUDA'd
 ve sonuçları verdi; Focal+Pearson kesinti/devam, wavelet geçmiş nedenselliği
 ve seçim kapıları test edildi. Gerçek yerel 33.551 geliştirme satırında
 hazırlık ve cache kontrolü yapıldı; base girdiler/etiketler değişmedi.
-Colab gerçek oturum doğrulaması kullanıcı çalıştırdıktan sonra yapılacak.
+Hazırlık anında Colab doğrulaması bekleniyordu; 08'in kullanıcı çalışması
+yukarıdaki güncel durakta doğrulandı, 09 henüz çalıştırılmadı.
 
 **Devam:** 08'i Colab T4 üzerinde aynı Drive alanında çalıştır; tamamlanmış
 wavelet ZIP'ini incele; sonra 09'u çalıştır. Kullanım ve kavramsal açıklama:
