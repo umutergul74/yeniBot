@@ -1,5 +1,11 @@
 # Eylül 2026 bağımsız test rezervasyonu
 
+Güncelleme 2026-10-04: Aşağıdaki metin rezervasyon anının tarihsel kaydıdır.
+Yöntem seçimi tamamlandı: 6 özellik/GRU/wavelet kapalı/saf BCE. Ayrı
+`configs/advisor_final_execution.yaml` ve 10 Colab notebooku final eğitim,
+artifact freeze ve test akışını somutlaştırır. Güncel çalıştırma ayrıntıları
+`docs/advisor-final-colab-runbook.md`; gerçek final eğitim/test henüz yapılmadı.
+
 2026-10-03 tarihinde kullanıcı Eylül 2026 ile daha önce eğitim, backtest
 veya performans değerlendirmesi yapmadığını doğruladı. Bu dönem model,
 özellik ve yöntem seçimlerinden ayrı tutulmak üzere ayrıldı. Bu, dönem

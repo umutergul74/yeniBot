@@ -3,7 +3,29 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — A–D, wavelet ve loss tamamlandı (2026-10-04)
+## Güncel durak — final Colab akışı hazır (2026-10-04)
+
+`configs/advisor_final_execution.yaml`, `yenibot.training.advisor_final`,
+`10_advisor_final_test_colab.ipynb` ve ayrı final ZIP inceleyicisi hazırlandı.
+Yöntem 6 özellik/GRU/W_OFF/BCE; 210 gün train, 45 gün validation,
+24 saat purge ve 24 saat test ön boşluğu korundu. Final train
+18.12.2025–15.07.2026; validation 17.07.2026–30.08.2026; test Eylül 2026.
+
+Train → üç validation-selected model/scaler kilidi → test indirme → test
+değerlendirme aşamaları ayrı. Kilit doğrulanmadan test indirilmez. Her seed
+720 tahmin, ayrı metrik ve mean/std. Testte fit/ensemble yok.
+Checkpoint, kaldığı adım, seed sonuçları ve ayrı final ZIP Drive'da korunur.
+
+Gerçek final eğitim/test henüz yapılmadı; yerelde Eylül piyasa verisi
+okunmadı. Sentetik teknik kontroller ve eski 33.551 geliştirme satırında
+özellik/ATR/etiket/ileri getiri paritesi kontrol edildi. Teknik doğrulama
+sonucu aşağıdaki runbook'ta bulunur.
+
+**Devam:** 10 notebookunu aynı Drive alanında/T4 ortamında sırayla çalıştır;
+`final_test_v1/reports/advisor_final_latest_review_bundle.zip` dosyasını getir.
+Çalıştırma ve kesinti ayrıntıları `docs/advisor-final-colab-runbook.md`.
+
+## Loss incelemesinin tarihsel kaydı (2026-10-04)
 
 `advisor_latest_review_bundle (5).zip` incelendi. Dört yeni lossun her biri
 114/114 fold/seed tamamlandı: toplam 456 eğitim ve 10.615 epoch.
