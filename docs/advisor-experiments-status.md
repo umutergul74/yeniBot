@@ -3,7 +3,30 @@
 Başlangıç: 2026-10-03. Dal: `codex/advisor-ablation-protocol`.
 Kaynak dal: `main`; geçmiş deney ve sonuçlar korunur.
 
-## Güncel durak — wavelet tamamlandı; loss sırada (2026-10-04)
+## Güncel durak — A–D, wavelet ve loss tamamlandı (2026-10-04)
+
+`advisor_latest_review_bundle (5).zip` incelendi. Dört yeni lossun her biri
+114/114 fold/seed tamamlandı: toplam 456 eğitim ve 10.615 epoch.
+Önceki paketin 2.870 çalışma dosyası byte düzeyinde korundu. Yeni 456
+tahmin grubunun tarih/etiket/ileri getiri/satır konumları A ile eşleşti;
+6 ham özellik, GRU (168.193 parametre), ortak ayarlar ve ortam korundu.
+ZIP hashleri, tahminlerden metrikler ve minimum BCE epoch seçimleri doğrulandı.
+
+Ortalama validation BCE: saf BCE 0.5945067672; BCE+Pearson 0.5970701241;
+Focal 0.6301167743; Focal+Pearson 0.6439998552; weighted BCE 0.6471739380.
+Önceden tanımlanan ölçüte göre **L_BCE** seçildi. Son yapı: **6 özellik,
+GRU, wavelet kapalı, saf BCE**. Drive `data/stages_loss_selection.json`
+kararı aynı. Weighted BCE'nin F1/recall artışı ayrıca raporlandı; bu
+ikincil ölçütlere bakılarak seçim kuralı değiştirilmedi.
+
+Test değerlendirmesi hâlâ 0. Final eğitim/scaler/ağırlık kilitleme ve
+Eylül 2026 değerlendirme adaptörü henüz hazırlanmadı. **Devam:** final
+train/validation takvimini, karşılaştırma kapsamını ve artifact freeze
+kurallarını teste bakmadan netleştir; Colab final eğitim/değerlendirme
+notebookunu hazırla. Sonra donmuş modelleri rezervasyon döneminde değerlendir.
+Loss analizi: `docs/advisor-loss-results.md`.
+
+## Wavelet incelemesinin tarihsel kaydı (2026-10-04)
 
 Kullanıcının `advisor_latest_review_bundle (4).zip` paketi incelendi.
 `W_ON_e170a14b3a9d`: 38 fold × 3 seed = 114/114 tamamlandı, toplam 2.189
