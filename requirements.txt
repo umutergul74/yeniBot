@@ -6,6 +6,8 @@ PyYAML>=6.0
 scikit-learn>=1.4
 scipy>=1.11
 torch>=2.2
+# PYSEC-2026-3447: prevent retaining vulnerable runner/Colab preinstalled versions.
+setuptools>=83.0.0
 numba>=0.59
 PyWavelets>=1.6
 hmmlearn>=0.3.2
