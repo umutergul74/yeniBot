@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,19 +32,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
-      - name: Run unit and integration tests
-        run: pytest -q --ignore=tests/test_experiments.py
+      - name: Run static, repository and CPU contract checks
+        run: python scripts/quality.py quick
 
-      - name: Run experiment contract tests
-        run: >
-          pytest -q tests/test_experiments.py
-          -k "not test_experiment_matrix_and_diagnostics_write_profile_comparison
-          and not test_experiment_diagnostics_evaluates_reserved_holdout
-          and not test_experiment_diagnostics_recovers_standard_holdout_when_manifest_lacks_metadata
-          and not test_seed_audit_writes_isolated_seed_summaries
-          and not test_experiment_run_id_reuses_latest_matching_signature"
+      - name: Audit installed project dependencies
+        run: |
+          python scripts/environment_snapshot.py --audit > /tmp/yenibot-dependencies.txt
+          python -m venv /tmp/yenibot-audit
+          /tmp/yenibot-audit/bin/python -m pip install pip-audit==2.10.0
+          /tmp/yenibot-audit/bin/python -m pip_audit --no-deps --disable-pip -r /tmp/yenibot-dependencies.txt
 
   full-experiment-integration:
     if: github.event_name == 'workflow_dispatch'
@@ -60,7 +62,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       - name: Run full experiment integration suite
-        run: pytest -q tests/test_experiments.py
+        run: python scripts/quality.py full

@@ -35,12 +35,30 @@ class LoadedConfig:
     data: ConfigNode
 
 
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Reject ambiguous YAML mappings rather than silently overriding policy."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen = set()
+        for key_node, _ in node.value:
+            # Preserve YAML merge semantics; explicit duplicate keys still fail.
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise ValueError(
+                    f"Duplicate configuration key at line {key_node.start_mark.line + 1}"
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 def load_config(path: str | Path = "config.yaml") -> ConfigNode:
     """Load project configuration from YAML."""
 
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle)
+        raw = yaml.load(handle, Loader=UniqueKeySafeLoader)
     if not isinstance(raw, Mapping):
         raise ValueError(f"Config file must contain a mapping: {config_path}")
     return _to_node(raw)

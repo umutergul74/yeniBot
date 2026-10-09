@@ -32,12 +32,17 @@ METADATA_COLUMNS = {
 
 LABEL_COLUMNS = {
     "label",
+    "forward_return",
     "fwd_return_10h",
     "tb_return",
     "hit_type",
     "exit_timestamp",
     "exit_bar",
 }
+
+
+def is_target_column(column: str) -> bool:
+    return column in LABEL_COLUMNS or column.startswith("fwd_return_")
 
 
 @dataclass(frozen=True)
@@ -847,7 +852,7 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
     excluded_prefixes = ("pred_", "regime_", "fold")
     columns: list[str] = []
     for column in frame.columns:
-        if column in excluded:
+        if column in excluded or is_target_column(column):
             continue
         if any(column.startswith(prefix) for prefix in excluded_prefixes):
             continue
@@ -857,6 +862,9 @@ def select_feature_columns(frame: pd.DataFrame) -> list[str]:
 
 
 def filter_feature_columns(feature_columns: list[str], config: object) -> list[str]:
+    targets = [column for column in feature_columns if is_target_column(column)]
+    if targets:
+        raise ValueError(f"Target columns cannot be model features: {targets}")
     exclude_columns = set(_config_get(config, ["features", "exclude_columns"], []) or [])
     exclude_patterns = list(_config_get(config, ["features", "exclude_patterns"], []) or [])
     profile = resolve_feature_profile(config)

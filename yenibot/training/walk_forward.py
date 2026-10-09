@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Iterator
 
 import numpy as np
@@ -25,6 +26,13 @@ class PurgedWalkForwardCV:
         purge_bars: int,
         embargo_bars: int,
     ) -> None:
+        values = {"train_bars": train_bars, "val_bars": val_bars,
+                  "test_bars": test_bars, "step_bars": step_bars,
+                  "purge_bars": purge_bars, "embargo_bars": embargo_bars}
+        for name, value in values.items():
+            minimum = 0 if name in {"purge_bars", "embargo_bars"} else 1
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
         self.train_bars = train_bars
         self.val_bars = val_bars
         self.test_bars = test_bars
@@ -33,6 +41,8 @@ class PurgedWalkForwardCV:
         self.embargo_bars = embargo_bars
 
     def split(self, n_rows: int) -> Iterator[FoldIndices]:
+        if isinstance(n_rows, bool) or not isinstance(n_rows, Integral) or n_rows < 0:
+            raise ValueError("n_rows must be a nonnegative integer")
         fold = 0
         start = 0
         while True:

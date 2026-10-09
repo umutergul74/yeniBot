@@ -14,7 +14,7 @@ from sklearn.preprocessing import RobustScaler
 from torch.utils.data import DataLoader
 
 from yenibot.diagnostics.metrics import classification_metrics, phase1_report, rank_ic
-from yenibot.features.builder import filter_feature_columns, select_feature_columns
+from yenibot.features.builder import filter_feature_columns, is_target_column, select_feature_columns
 from yenibot.losses import FocalLossWithLogits, PairwiseLabelMarginLoss, PairwiseReturnOrderLoss, RankICLoss
 from yenibot.models import HybridEncoder
 from yenibot.regime import OnlineGaussianHMM
@@ -82,9 +82,7 @@ def _build_model(n_features: int, config: Any) -> HybridEncoder:
 
 def _make_dataset(part: pd.DataFrame, feature_columns: list[str], config: Any) -> SequenceDataset:
     seq_len = int(_cfg(config, ["model", "seq_len"], 64))
-    forward_column = f"fwd_return_{int(_cfg(config, ['labeling', 'max_holding_bars'], 10))}h"
-    if forward_column not in part.columns:
-        forward_column = "fwd_return_10h"
+    forward_column = _forward_return_column(part, config)
     return SequenceDataset(
         part[feature_columns].to_numpy(dtype=np.float32),
         part["label"].to_numpy(dtype=np.float32),
@@ -96,13 +94,16 @@ def _make_dataset(part: pd.DataFrame, feature_columns: list[str], config: Any) -
 def _forward_return_column(frame: pd.DataFrame, config: Any) -> str:
     forward_column = f"fwd_return_{int(_cfg(config, ['labeling', 'max_holding_bars'], 10))}h"
     if forward_column not in frame.columns:
-        forward_column = "fwd_return_10h"
+        raise ValueError(f"Training frame is missing configured return target: {forward_column}")
     return forward_column
 
 
 def _assert_training_inputs_available(frame: pd.DataFrame, feature_columns: list[str], config: Any) -> None:
     required = list(feature_columns)
     required.extend(str(column) for column in list(_cfg(config, ["hmm", "features"], []) or []))
+    targets = [column for column in required if is_target_column(column)]
+    if targets:
+        raise ValueError(f"Target columns cannot be model/HMM features: {targets}")
     required.extend(["label", _forward_return_column(frame, config)])
     required = list(dict.fromkeys(required))
     missing = [column for column in required if column not in frame.columns]
@@ -245,6 +246,7 @@ def train_one_fold(
 ) -> dict[str, Any]:
     """Train one purged walk-forward fold and return metrics plus predictions."""
 
+    _assert_training_inputs_available(frame, feature_columns, config)
     torch_device = _device(device)
     fold_seed = _base_seed(config) + int(fold.fold)
     set_random_seed(fold_seed, deterministic=_deterministic(config))

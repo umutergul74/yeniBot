@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
-from yenibot.data.binance import KLINE_COLUMNS, interval_to_milliseconds
+from yenibot.data.binance import KLINE_COLUMNS, NUMERIC_COLUMNS, interval_to_milliseconds
 
 
 def validate_full_kline_frame(
@@ -25,6 +26,20 @@ def validate_full_kline_frame(
 
     df = frame.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    if df[["timestamp", "close_time"]].isna().any().any():
+        raise ValueError("Kline timestamps and close times must not be missing")
+    for column in NUMERIC_COLUMNS:
+        df[column] = pd.to_numeric(df[column], errors="raise")
+        if not np.isfinite(df[column].to_numpy(dtype=float, na_value=np.nan)).all():
+            raise ValueError(f"Kline column {column} must contain only finite values")
+    prices = df[["open", "high", "low", "close"]]
+    if (prices <= 0).any().any():
+        raise ValueError("Kline OHLC prices must be positive")
+    if (
+        (df["low"] > prices[["open", "close"]].min(axis=1))
+        | (df["high"] < prices[["open", "close"]].max(axis=1))
+    ).any():
+        raise ValueError("Kline OHLC prices must satisfy low <= open/close <= high")
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     if df["timestamp"].duplicated().any():

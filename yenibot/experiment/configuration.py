@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 from yenibot.features import filter_feature_columns, resolve_feature_profile, select_feature_columns
 from yenibot.training import PurgedWalkForwardCV
+from yenibot.training.trainer import _forward_return_column
 
 from yenibot.experiment.common import (
     _cfg,
@@ -720,8 +721,9 @@ def _training_signature(
     fold_ids: list[int] | None,
     fold_scope: str,
 ) -> dict[str, Any]:
+    training_config = profile_config(config, profile)
     return {
-        "signature_version": "profile_training_v2",
+        "signature_version": "profile_training_v3",
         "profile": profile,
         "fold_scope": fold_scope,
         "fold_ids": fold_ids,
@@ -736,7 +738,9 @@ def _training_signature(
             columns=[
                 "timestamp",
                 *feature_columns,
+                *list(_cfg(training_config, ["hmm", "features"], []) or []),
                 "label",
+                _forward_return_column(frame, training_config),
                 "fwd_return_10h",
                 "forward_return",
                 "tb_return",

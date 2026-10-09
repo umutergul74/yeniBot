@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers"
+markers = ["slow: synthetic end-to-end experiment training and diagnostics"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+include = ["yenibot/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+extend-exclude = ["output", "data", "reports", "checkpoints", "tmp", ".codex_tmp", ".codex_pytest_run", ".testtmp"]
+
+[tool.ruff.lint]
+# Start with correctness checks; avoid a repository-wide formatting rewrite.
+select = ["E4", "E9", "F"]

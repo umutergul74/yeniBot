@@ -3671,6 +3671,7 @@ def test_profile_experiment_writes_isolated_outputs_and_resumes(synthetic_klines
     assert (first["output_dir"] / "training_manifest.json").exists()
 
 
+@pytest.mark.slow
 def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["profiles"] = {
@@ -4187,6 +4188,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
     assert (tmp_path / "slim_reports" / "experiments" / "matrix" / "phase1_transition_plan.json").exists()
 
 
+@pytest.mark.slow
 def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["paths"] = {"data_dir": str(tmp_path / "data")}
@@ -4386,6 +4388,7 @@ def test_experiment_diagnostics_evaluates_reserved_holdout(synthetic_klines, tin
     assert "holdout_run/profile_score_policy_selection.csv" in names
 
 
+@pytest.mark.slow
 def test_experiment_diagnostics_recovers_standard_holdout_when_manifest_lacks_metadata(
     synthetic_klines,
     tiny_config,
@@ -4446,6 +4449,7 @@ def test_experiment_diagnostics_recovers_standard_holdout_when_manifest_lacks_me
     assert str(reservation.loc[0, "holdout_path"]).endswith("holdout_1h.parquet")
 
 
+@pytest.mark.slow
 def test_seed_audit_writes_isolated_seed_summaries(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["profiles"] = {
@@ -4544,6 +4548,7 @@ def test_seed_audit_coverage_reports_missing_and_invalid_folds() -> None:
     assert coverage.loc[0, "status"] == "invalid_configured_fold_ids"
 
 
+@pytest.mark.slow
 def test_experiment_run_id_reuses_latest_matching_signature(synthetic_klines, tiny_config, tmp_path) -> None:
     config = copy.deepcopy(tiny_config)
     config["features"]["profiles"] = {

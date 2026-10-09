@@ -274,7 +274,7 @@ def _scorecard_frame(
         if not rank_ic_evidence.empty
         else None,
     )
-    skill = _first(
+    _skill = _first(
         classification_skill,
         (classification_skill["candidate"].astype(str) == control_profile)
         & classification_skill["fold_scope"].astype(str).eq("full")

@@ -21,6 +21,10 @@ artifact-verified evidence for or against promotion.
 
 ## Current Status
 
+For prospective notebook runs and the October engineering review, read
+[main research hardening](docs/main-hardening.md). The evidence snapshot below
+is historical; code tests do not update it or authorize a new holdout evaluation.
+
 **Model evidence passes the active `v4_evidence` research charter. Phase 2 is
 still blocked.**
 
