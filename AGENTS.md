@@ -8,8 +8,13 @@ Use `docs/architecture.md` for ownership and `docs/main-hardening.md` for workfl
 - Start with `git status --short` and targeted `rg` in `yenibot`, `tests`,
   `configs`, or `scripts`. Do not recursively read output/data/checkpoints,
   notebooks, archives, or copied research repositories without a task need.
-- Preserve pre-existing edits and untracked artifacts. Do not commit, push,
-  run migrations, deploy, trade, or start paid services without authorization.
+- Preserve pre-existing edits and untracked artifacts.
+- Standing user authorization (2026-10-10): perform task-related commits, pushes,
+  PR creation/updates and merges without asking again. Merge only after relevant
+  checks pass for the current PR head and blocking review findings are resolved;
+  then synchronize the local main safely. Never include unrelated local changes.
+  This authorization does not cover force pushes or discarding existing work.
+- Do not run migrations, deploy, trade, or start paid services without authorization.
 - Keep credentials out of code, logs and prompts. Model/joblib/pickle artifacts
   are trusted-code inputs; a checksum proves identity, not trustworthiness.
 - Preserve Phase 1 gates and one-shot holdout reservations. Do not build or
