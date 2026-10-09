@@ -1147,7 +1147,6 @@ def _phase1_decision_ladder_payload(
 ) -> dict[str, Any]:
     readiness = phase2_readiness or {}
     blockers = [str(item) for item in readiness.get("blockers", []) or []]
-    active_charter = str(readiness.get("active_validation_charter") or "v3_legacy")
     only_future_oos_blocked = bool(blockers) and set(blockers).issubset(
         {
             "future_unseen_oos_not_ready",

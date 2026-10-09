@@ -1,0 +1,4 @@
+-r requirements.txt
+# Tool version already validated in the local development environment.
+ruff==0.12.12
+packaging==25.0

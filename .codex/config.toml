@@ -1,0 +1,14 @@
+# Project defaults for new sessions; host/admin/session policy takes precedence.
+# Deliberately inherit the user's model and reasoning preference.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = false
+
+[agents]
+max_concurrent_threads_per_session = 2
+
+[agents.research_reviewer]
+description = "Read-only review of temporal integrity, artifact identity and regression risks."
+config_file = "agents/research-reviewer.toml"

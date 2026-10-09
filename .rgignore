@@ -1,0 +1,12 @@
+# Local generated copies are not the active source tree. Use rg --no-ignore
+# with an explicit artifact path when investigating a saved run.
+/output/
+/data/
+/reports/
+/checkpoints/
+/tmp/
+/.codex_pytest_run/
+/.codex_tmp/
+/.testtmp/
+*.zip
+desktop.ini

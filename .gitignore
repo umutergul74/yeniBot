@@ -9,6 +9,11 @@ checkpoints/*.pt
 checkpoints/*.pkl
 checkpoints/*.parquet
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+desktop.ini
 .venv/
 venv/
 __pycache__/
