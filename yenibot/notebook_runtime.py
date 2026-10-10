@@ -13,6 +13,7 @@ import platform
 import re
 import subprocess
 import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -35,6 +36,30 @@ def environment_identity() -> dict:
                 if dist.metadata.get("Name")}
     return {"python": platform.python_version(), "platform": platform.system(),
             "machine": platform.machine(), "packages": dict(sorted(packages.items()))}
+
+
+def resolve_data_settings(cutoff_value: str, research_id: str, commit: str, config: dict,
+                          *, now: datetime | None = None, environment: dict | None = None):
+    """Resolve automatic ingestion settings once; downstream notebooks use the printed values."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("Current time must be timezone-aware")
+    if cutoff_value == "latest_complete_day":
+        cutoff = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        try:
+            cutoff = datetime.fromisoformat(cutoff_value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Set DATA_END_UTC or use latest_complete_day in notebook 01") from exc
+    if cutoff.tzinfo is None or cutoff > now:
+        raise ValueError("DATA_END_UTC must be a past timezone-aware cutoff")
+    cutoff = cutoff.astimezone(timezone.utc)
+    if research_id == "auto":
+        identity = {"commit": commit, "config": config, "cutoff": cutoff.isoformat(),
+                    "environment": environment if environment is not None else environment_identity()}
+        digest = hashlib.sha256(_json_bytes(identity)).hexdigest()[:16]
+        research_id = f"data_{cutoff:%Y%m%d}_{digest}"
+    return cutoff.isoformat(), research_id
 
 
 def initialize_workspace(base: Path, research_id: str, repository: Path,

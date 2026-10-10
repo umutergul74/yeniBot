@@ -76,13 +76,11 @@ print("Research cells now execute in:", ISOLATED_PYTHON)
 REMOTE_CONFIG = '''import os
 from datetime import datetime, timezone
 from yenibot.config import load_config
-from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table
+from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table, resolve_data_settings
 
-cutoff = datetime.fromisoformat(DATA_END_UTC.replace("Z", "+00:00"))
-if cutoff.tzinfo is None or cutoff > datetime.now(timezone.utc):
-    raise ValueError("DATA_END_UTC must be an explicit past timezone-aware cutoff")
 cfg = load_config(REPO_DIR / "config.yaml")
-cfg['binance']['end_date'] = cutoff.astimezone(timezone.utc).isoformat()
+DATA_END_UTC, RESEARCH_ID = resolve_data_settings(DATA_END_UTC, RESEARCH_ID, REPO_COMMIT, cfg)
+cfg['binance']['end_date'] = DATA_END_UTC
 WORKSPACE = initialize_workspace(DRIVE_BASE / "research", RESEARCH_ID, REPO_DIR, REPO_COMMIT, cfg)
 DATA_DIR = str(WORKSPACE / "data")
 CHECKPT_DIR = str(WORKSPACE / "checkpoints")
@@ -91,6 +89,10 @@ cfg['paths']['data_dir'] = DATA_DIR
 cfg['paths']['checkpoint_dir'] = CHECKPT_DIR
 print("Research workspace:", WORKSPACE)
 print("Policy status:", cfg.get('experiments', {}).get('policy_review', {}).get('status'))
+print("Resolved settings (copy to notebooks 02 onward):")
+print("REPO_COMMIT =", repr(REPO_COMMIT))
+print("RESEARCH_ID =", repr(RESEARCH_ID))
+print("DATA_END_UTC =", repr(DATA_END_UTC))
 '''
 
 
@@ -127,7 +129,15 @@ def update_notebook(path: Path) -> None:
     notebook = json.loads(path.read_text(encoding="utf-8"))
     cells = notebook["cells"]
     for index, source in {1: SETTINGS, 2: DRIVE, 3: CHECKOUT, 4: INSTALL, 5: CONFIG}.items():
+        if index == 1 and path.name.startswith("01_"):
+            source = source.replace('RESEARCH_ID = ""  # Required unique name; preserve old runs and frozen evidence.',
+                                    'RESEARCH_ID = "auto"  # New date/config/environment gets a separate workspace.')
+            source = source.replace('DATA_END_UTC = ""  # Required explicit exclusive cutoff, e.g. 2026-08-01T00:00:00+00:00.',
+                                    'DATA_END_UTC = "latest_complete_day"  # Resolves once to today 00:00 UTC; prints exact downstream settings.')
         cells[index]["source"] = source.splitlines(keepends=True)
+    if path.name.startswith("01_"):
+        cells[6]["source"] = ['from yenibot.data.preparation import prepare_raw_data\n',
+            'prepare_raw_data(cfg, DATA_DIR, archive_cache=DRIVE_BASE / "archive_cache")\n']
     for cell in cells[6:]:
         if cell["cell_type"] != "code":
             continue
