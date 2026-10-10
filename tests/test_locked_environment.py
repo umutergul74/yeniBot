@@ -15,14 +15,14 @@ def fixture_contract(root):
     source.write_text("example>=1\n", encoding="utf-8")
     dev = root / "requirements-dev.txt"
     dev.write_text("-r requirements.txt\n", encoding="utf-8")
-    text = 'schema = 1\nlock = "requirements/lock.txt"\n[target]\npython = "3.12"\nsystem = "Linux"\nmachine = "x86_64"\n[files]\n'
+    text = 'schema = 1\nlock = "requirements/lock.txt"\n[target]\npython = "3.13"\nsystem = "Linux"\nmachine = "x86_64"\n[files]\n'
     for path in (lock, source, dev):
         text += f'{json.dumps(path.relative_to(root).as_posix())} = "{contract.text_hash(path)}"\n'
     (root / "requirements/environment.toml").write_text(text, encoding="utf-8")
 
 
 def target(monkeypatch):
-    monkeypatch.setattr(contract.sys, "version_info", SimpleNamespace(major=3, minor=12))
+    monkeypatch.setattr(contract.sys, "version_info", SimpleNamespace(major=3, minor=13))
     monkeypatch.setattr(contract.platform, "system", lambda: "Linux")
     monkeypatch.setattr(contract.platform, "machine", lambda: "x86_64")
 
@@ -89,3 +89,40 @@ def test_colab_smoke_notebook_compiles_without_saved_outputs():
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), "environment_smoke", "exec")
             assert not cell["outputs"]
+
+
+def test_pipless_bootstrap_targets_new_environment(tmp_path, monkeypatch):
+    import runpy
+    import sys
+    monkeypatch.syspath_prepend(str(contract.ROOT / "scripts"))
+    module = runpy.run_path(str(contract.ROOT / "scripts/prepare_environment.py"))
+    monkeypatch.setitem(module["main"].__globals__, "verify", lambda: {})
+    creations = []
+    calls = []
+    class Builder:
+        def __init__(self, **kwargs):
+            assert kwargs == {"with_pip": False, "system_site_packages": False}
+        def create(self, directory):
+            creations.append(directory)
+    monkeypatch.setattr(module["venv"], "EnvBuilder", Builder)
+    monkeypatch.setattr(module["subprocess"], "run", lambda command, **kwargs: calls.append(command))
+    directory = tmp_path / "new"
+    monkeypatch.setattr(sys, "argv", ["prepare", "--directory", str(directory), "--report", str(tmp_path / "report.json")])
+    module["main"]()
+    assert creations == [directory]
+    assert calls[0][:5] == [sys.executable, "-m", "pip", "--python", str(directory / "bin/python")]
+    assert "--require-hashes" in calls[0]
+    assert calls[1][0] == str(directory / "bin/python")
+
+
+def test_smoke_cells_refuse_out_of_order_execution():
+    notebook = json.loads((contract.ROOT / "notebooks/environment_smoke.ipynb").read_text(encoding="utf-8"))
+    for index in (2, 3):
+        with pytest.raises(RuntimeError, match="Complete"):
+            exec("".join(notebook["cells"][index]["source"]), {})
+
+
+def test_research_setup_blocks_workspace_after_failed_install():
+    from scripts.harden_phase1_notebooks import CONFIG
+    with pytest.raises(RuntimeError, match="Complete environment setup"):
+        exec(CONFIG, {"_ENVIRONMENT_READY": False})

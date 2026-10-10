@@ -1,7 +1,8 @@
-"""Create a NEW isolated Linux/Python 3.12 environment and run a synthetic smoke."""
+"""Create a NEW isolated Linux/Python 3.13 environment and run a synthetic smoke."""
 from pathlib import Path
 import argparse
 import subprocess
+import sys
 import venv
 
 from verify_environment import ROOT, verify
@@ -17,11 +18,11 @@ def main() -> None:
     if args.directory.exists() or args.report.exists():
         parser.error("Directory/report already exists; use new paths without replacing existing evidence")
     directory = args.directory.resolve()
-    venv.EnvBuilder(with_pip=True, system_site_packages=False).create(directory)
+    venv.EnvBuilder(with_pip=False, system_site_packages=False).create(directory)
     python = str(directory / "bin/python")
-    subprocess.run([python, "-m", "pip", "--isolated", "install", "--require-hashes",
+    subprocess.run([sys.executable, "-m", "pip", "--python", python, "--isolated", "install", "--require-hashes",
                     "--only-binary=:all:", "--index-url", "https://pypi.org/simple",
-                    "-r", str(ROOT / "requirements/locks/linux-py312.txt")], check=True)
+                    "-r", str(ROOT / "requirements/locks/linux-py313.txt")], check=True)
     command = [python, str(ROOT / "scripts/environment_smoke.py"), "--report", str(args.report.resolve())]
     if args.gpu:
         command.append("--gpu")

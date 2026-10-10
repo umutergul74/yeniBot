@@ -2,3 +2,5 @@
 # Tool version already validated in the local development environment.
 ruff==0.12.12
 packaging==25.0
+# Pin pip inside the isolated environment, including pipless Colab bootstrap.
+pip==26.2.1
