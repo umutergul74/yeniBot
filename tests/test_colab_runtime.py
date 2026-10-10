@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 import pytest
 
@@ -70,11 +71,23 @@ def test_real_kernel_retains_state_renders_output_and_stops_on_failure(tmp_path,
     hostile.mkdir()
     (hostile / "host_only_dependency.py").write_text("raise AssertionError('host contamination')")
     monkeypatch.setenv("PYTHONPATH", str(hostile))
+    # Colab's machine-wide config selects a class absent from the isolated venv.
+    bad_config = tmp_path / "colab_config.py"
+    bad_config.write_text("c = get_config()\nc.IPKernelApp.kernel_class = 'google.colab._kernel.Kernel'\n")
+    baseline = subprocess.run([sys.executable, "-m", "ipykernel_launcher", "--config=" + str(bad_config)],
+                              env=runtime.child_environment(), capture_output=True, text=True, timeout=20)
+    assert baseline.returncode != 0
+    assert "google.colab._kernel.Kernel" in baseline.stderr
+    from jupyter_client import KernelManager
+    original_start = KernelManager.start_kernel
+    def start_with_colab_config(manager, **kwargs):
+        return original_start(manager, extra_arguments=["--config=" + str(bad_config)], **kwargs)
+    monkeypatch.setattr(KernelManager, "start_kernel", start_with_colab_config)
     messages = []
     python = Path(sys.executable)
     kernel = runtime.ResearchKernel(python, tmp_path, output_hook=messages.append)
     try:
-        kernel.execute("import importlib.util; assert importlib.util.find_spec('host_only_dependency') is None\nvalue = 40")
+        kernel.execute("assert type(get_ipython().kernel).__module__ == 'ipykernel.ipkernel'\nimport importlib.util; assert importlib.util.find_spec('host_only_dependency') is None\nvalue = 40")
         result = tmp_path / "result.json"
         kernel.execute("import sys, json; from pathlib import Path\n"
                        f"Path({str(result)!r}).write_text(json.dumps({{'value': value + 2, 'python': sys.executable}}))\n"
