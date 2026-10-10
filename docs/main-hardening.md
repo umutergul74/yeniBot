@@ -111,6 +111,12 @@ that script after changing its templates and inspect the resulting notebook diff
 
 ## Remaining requirements before a new parameter campaign
 
+Update 2026-10-10: the prospective Linux/Python 3.12 hash lock, isolated installer
+and synthetic smoke are described in [reproducible environment](reproducible-environment.md).
+The [read-only evidence inventory](research-readiness-2026-10-10.md) separates
+main's frozen candidate from the advisor's already-seen September test. The
+original 00–05 notebooks have not yet been migrated to the isolated interpreter.
+
 - Build and test a clean, isolated environment with reviewed, hash-locked
   dependencies for the target Colab/Linux runtime. Current requirements contain
   ranges. The earlier local dependency audit reported advisories; this work did

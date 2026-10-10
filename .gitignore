@@ -15,6 +15,7 @@ checkpoints/*.parquet
 *.key
 desktop.ini
 .venv/
+.venv-ci/
 venv/
 __pycache__/
 *.pyc
