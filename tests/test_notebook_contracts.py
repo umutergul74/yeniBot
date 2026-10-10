@@ -16,7 +16,9 @@ NOTEBOOKS = sorted((ROOT / "notebooks").glob("0[0-5]_*.ipynb"))
 
 
 def code(path, index):
-    return "".join(json.loads(path.read_text(encoding="utf-8"))["cells"][index]["source"])
+    from scripts.harden_phase1_notebooks import remote_source
+    source = "".join(json.loads(path.read_text(encoding="utf-8"))["cells"][index]["source"])
+    return remote_source(source) if index >= 6 else source
 
 
 @pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.stem)

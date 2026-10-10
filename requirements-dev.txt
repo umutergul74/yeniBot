@@ -4,3 +4,6 @@ ruff==0.12.12
 packaging==25.0
 # Pin pip inside the isolated environment, including pipless Colab bootstrap.
 pip==26.2.1
+# Isolated notebook kernel; Colab host packages remain untouched.
+ipykernel>=6.29
+jupyter-client>=8.6

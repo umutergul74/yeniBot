@@ -5,12 +5,15 @@ Run this script after editing these templates, then run notebook contract tests.
 """
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SETTINGS = '''_ENVIRONMENT_READY = False
+SETTINGS = '''if "RESEARCH" in globals():
+    RESEARCH.close()
+_ENVIRONMENT_READY = False
 import sys
 import platform
 from pathlib import Path
@@ -26,6 +29,8 @@ DATA_END_UTC = ""  # Required explicit exclusive cutoff, e.g. 2026-08-01T00:00:0
 REPO_URL = "https://github.com/umutergul74/yeniBot.git"
 REPO_DIR = Path("/content/yenibot_repo")
 DRIVE_BASE = Path("/content/drive/MyDrive/yeniBot")
+REQUIRE_GPU = False  # Set True when running training in a GPU runtime.
+ENV_DIR = Path("/content/yenibot_locked_env")
 AUTO_UNASSIGN = False  # Release only after successful completion when explicitly enabled.
 '''
 
@@ -55,31 +60,20 @@ print("Pinned commit:", REPO_COMMIT)
 '''
 
 INSTALL = '''_ENVIRONMENT_READY = False
-# Install reviewed hashes in the Colab kernel. Restart after any package change.
-import json
-from importlib import metadata
+if "RESEARCH" in globals():
+    RESEARCH.close()
 sys.path.insert(0, str(REPO_DIR))
-from scripts.verify_environment import verify
-contract = verify()
-before = {}
-for name in contract["packages"]:
-    try:
-        before[name] = metadata.version(name)
-    except metadata.PackageNotFoundError:
-        before[name] = None
-subprocess.run([sys.executable, "-m", "pip", "--isolated", "install", "--require-hashes",
-                "--only-binary=:all:", "--index-url", "https://pypi.org/simple",
-                "-r", str(REPO_DIR / "requirements/locks/linux-py313.txt")], check=True)
-if before != contract["packages"]:
-    raise RuntimeError("Packages changed. Restart the session (not factory reset), then rerun from the first cell before research.")
-subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
-verify(installed=True)
+from scripts.colab_runtime import prepare, ResearchKernel
+ISOLATED_PYTHON = prepare(REPO_DIR, ENV_DIR, gpu=REQUIRE_GPU)
+RESEARCH = ResearchKernel(ISOLATED_PYTHON, REPO_DIR)
+RESEARCH.execute("from scripts.verify_environment import verify; verify(installed=True)")
+RESEARCH.execute("from pathlib import Path; import sys; assert Path(sys.prefix) == Path(" + repr(str(ENV_DIR)) + "), 'Wrong research interpreter'")
+RESEARCH.execute("%matplotlib inline")
 _ENVIRONMENT_READY = True
+print("Research cells now execute in:", ISOLATED_PYTHON)
 '''
 
-CONFIG = '''if not globals().get("_ENVIRONMENT_READY", False):
-    raise RuntimeError("Complete environment setup successfully before research")
-import os
+REMOTE_CONFIG = '''import os
 from datetime import datetime, timezone
 from yenibot.config import load_config
 from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table
@@ -100,6 +94,35 @@ print("Policy status:", cfg.get('experiments', {}).get('policy_review', {}).get(
 '''
 
 
+CONFIG = '''if not globals().get("_ENVIRONMENT_READY", False):
+    raise RuntimeError("Complete environment setup successfully before research")
+context = {
+    "REPO_COMMIT": REPO_COMMIT, "RESEARCH_ID": RESEARCH_ID,
+    "EXPERIMENT_RUN_ID": EXPERIMENT_RUN_ID, "DATA_END_UTC": DATA_END_UTC,
+    "REPO_DIR": str(REPO_DIR), "DRIVE_BASE": str(DRIVE_BASE), "AUTO_UNASSIGN": False,
+}
+RESEARCH.execute("globals().update(" + repr(context) + ")")
+RESEARCH.execute("from pathlib import Path; import re; REPO_DIR = Path(REPO_DIR); DRIVE_BASE = Path(DRIVE_BASE)")
+''' + "RESEARCH.execute(" + repr(REMOTE_CONFIG) + ")\n"
+
+
+def remote_source(source: str) -> str:
+    """Recover reviewed domain code from the thin execution wrapper."""
+    tree = ast.parse(source)
+    if tree.body and isinstance(tree.body[0], ast.Expr):
+        value = tree.body[0].value
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and isinstance(value.func.value, ast.Name) and value.func.value.id == "RESEARCH"
+                and value.func.attr == "execute"):
+            return ast.literal_eval(value.args[0])
+    return source
+
+
+def wrap_remote(source: str) -> str:
+    escaped = source.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    return 'RESEARCH.execute("""' + escaped + '""")\n'
+
+
 def update_notebook(path: Path) -> None:
     notebook = json.loads(path.read_text(encoding="utf-8"))
     cells = notebook["cells"]
@@ -108,7 +131,7 @@ def update_notebook(path: Path) -> None:
     for cell in cells[6:]:
         if cell["cell_type"] != "code":
             continue
-        source = "".join(cell["source"])
+        source = remote_source("".join(cell["source"]))
         source = source.replace("AUTO_UNASSIGN = True", "# AUTO_UNASSIGN is set in the settings cell.")
         source = source.replace("pd.read_parquet(", "verified_table(")
         source = source.replace("REPORT_DIR = f'{DRIVE_BASE}/reports'", "REPORT_DIR = str(WORKSPACE / 'reports')")
@@ -144,7 +167,11 @@ def update_notebook(path: Path) -> None:
                 "    if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', EXPERIMENT_RUN_ID):\n        raise ValueError('Set EXPERIMENT_RUN_ID to the exact run printed by notebook 00 or 04')\n    run_dir = Path(CHECKPT_DIR) / 'experiments' / EXPERIMENT_RUN_ID\n    if not run_dir.is_dir():\n        raise FileNotFoundError(run_dir)\n    print('Selected experiment run:', run_dir)")
             source = source.replace("        output_dir=REPORT_DIR,\n        write_full_bundles=", "        output_dir=REPORT_DIR,\n        run_id=EXPERIMENT_RUN_ID,\n        write_full_bundles=")
         source = source.replace("if variable in locals():", "if locals().get(variable) is not None:")
-        cell["source"] = source.splitlines(keepends=True)
+        source = source.replace("from google.colab import runtime", "# Runtime lifecycle belongs to the Colab host.")
+        source = source.replace("runtime.unassign()", "pass  # Host releases only after every cell succeeds.")
+        cell["source"] = wrap_remote(source).splitlines(keepends=True)
+    last_code = next(cell for cell in reversed(cells[6:]) if cell["cell_type"] == "code")
+    last_code["source"].append("RESEARCH.finish(release=AUTO_UNASSIGN)\n")
     for index, cell in enumerate(cells):
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"{path.name}:cell{index}", "exec")

@@ -10,5 +10,5 @@ machine = "x86_64"
 
 [files]
 "requirements.txt" = "5292b53af17fc6a9a21f817816834fd4c39f2daba30d013dbfce51b7ed9123d3"
-"requirements-dev.txt" = "21116174c20904327cb4c04e299f9511ed1512a28d3903b52fb284ac5a4e1a8f"
-"requirements/locks/linux-py313.txt" = "8c214789710463802b1c50dcc3581400475185bd24c5a9765ddcbefc3169e3da"
+"requirements-dev.txt" = "69e6806860f1785734bbc63a2ed584ec3f8c9ebc13999c02bc1b0a7c1c29fce4"
+"requirements/locks/linux-py313.txt" = "596e76c952885ac660fb746e203a7a037308741cba711bdbc0f15b1bb14d2216"
