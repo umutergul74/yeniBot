@@ -10,6 +10,15 @@ import pandas as pd
 
 from yenibot.features.wavelet import causal_wavelet_denoise
 
+
+def _utc_nanoseconds(timestamps: pd.Series) -> pd.Series:
+    """Use one lossless join-key resolution across Parquet inputs and arithmetic.
+
+    to_datetime(..., utc=True) alone preserves ms/us units in newer pandas.
+    Nanoseconds preserve sub-millisecond funding availability without rounding.
+    """
+    return pd.to_datetime(timestamps, utc=True).astype("datetime64[ns, UTC]")
+
 RAW_COLUMNS = {
     "timestamp",
     "open",
@@ -167,7 +176,7 @@ def compute_bar_features(frame: pd.DataFrame, config: object) -> FeatureResult:
     """Compute causal microstructure features for a single timeframe."""
 
     df = frame.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = _utc_nanoseconds(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     wavelet_enabled = bool(_config_get(config, ["features", "wavelet", "enabled"], True))
@@ -268,7 +277,7 @@ def compute_intrahour_order_flow_features(intrabar_frame: pd.DataFrame, config: 
     stable_tanh_scale = float(_config_get(cfg, ["stable_tanh_scale"], 2.0))
 
     df = intrabar_frame.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = _utc_nanoseconds(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     df["hour_timestamp"] = df["timestamp"].dt.floor("h")
     df["taker_buy_ratio"] = _safe_divide(df["taker_buy_base_vol"], df["volume"], default=0.5).clip(0.0, 1.0)
@@ -1027,7 +1036,7 @@ def compute_futures_metrics_features(metrics_frame: pd.DataFrame, config: object
     oi_change_windows = [int(item) for item in (_config_get(cfg, ["oi_change_windows"], [12, 36, 96, 288]) or [])]
 
     df = metrics_frame.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = _utc_nanoseconds(df["timestamp"])
     df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
     numeric_columns = [
         "sum_open_interest",
@@ -1099,7 +1108,7 @@ def compute_funding_rate_features(funding_frame: pd.DataFrame, config: object) -
     funding_windows = [int(item) for item in (_config_get(cfg, ["funding_windows"], [3, 6, 12]) or [])]
 
     df = funding_frame.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = _utc_nanoseconds(df["timestamp"])
     df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
     df["funding_rate"] = pd.to_numeric(df["funding_rate"], errors="coerce")
     df[f"{prefix}_funding_rate"] = df["funding_rate"].clip(-0.05, 0.05)
@@ -1164,6 +1173,8 @@ def build_feature_matrix(
         intrahour_result = compute_intrahour_order_flow_features(intrabar_frame, config)
         if intrahour_result.feature_columns:
             intrahour_features = intrahour_result.frame[["timestamp", *intrahour_result.feature_columns]].copy()
+            # Building a frame from grouped Timestamp scalars can infer us units.
+            intrahour_features["timestamp"] = _utc_nanoseconds(intrahour_features["timestamp"])
             merged = merged.merge(intrahour_features, on="timestamp", how="left")
             missing_col = f"{_config_get(config, ['features', 'intrahour_order_flow', 'prefix'], 'ih15')}_missing"
             missing = merged[intrahour_result.feature_columns].isna().all(axis=1)
