@@ -524,6 +524,29 @@ def test_future_oos_preflight_reports_ready_without_refitting(tmp_path: Path) ->
     assert result["fit_operations_performed"] == 0
 
 
+def test_future_oos_preflight_reads_shared_raw_maturity_without_writes(tmp_path: Path) -> None:
+    from yenibot.data.shared_store import prepare_shared_table
+
+    config, checkpoint_dir, manifests = _preflight_fixture(tmp_path, fresh_rows=24)
+    data_dir = Path(config["paths"]["data_dir"])
+    labeled = pd.read_parquet(data_dir / "processed/labeled_1h.parquet")
+    cutoff = labeled.timestamp.max() + pd.Timedelta(hours=11)
+
+    def download(lo, hi):
+        return pd.DataFrame({"timestamp": pd.date_range(lo, hi, freq="h", inclusive="left")})
+
+    raw_path = data_dir / "raw/btc_1h.parquet"
+    prepare_shared_table(raw_path, tmp_path / "raw_store", {"source": "synthetic"},
+                         labeled.timestamp.min(), cutoff, download, lambda frame, lo, hi: frame, {})
+    assert not raw_path.exists()
+    before = {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = future_oos_preflight(checkpoint_dir=checkpoint_dir, config=config, manifests=manifests)
+    assert result["data"]["label_tail_matured"] is True
+    assert result["data"]["label_maturity_lag_hours"] == 10
+    assert result["fit_operations_performed"] == 0
+    assert before == {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+
 def test_future_oos_preflight_fails_closed_on_missing_frozen_feature(tmp_path: Path) -> None:
     config, checkpoint_dir, manifests = _preflight_fixture(
         tmp_path,

@@ -19,6 +19,8 @@ notebooks
 ```
 
 - `data`: download and validate full Binance kline/futures context data.
+  Shared raw partitions live outside research workspaces; each workspace pins
+  an immutable partition-list snapshot, resolved by `notebook_runtime.verified_table`.
 - `features`: causal feature construction and deterministic profile selection.
 - `labeling`: long-only triple-barrier labels and label-quality checks.
 - `training`: model, losses, walk-forward splits, fold training, and HMM logic.
