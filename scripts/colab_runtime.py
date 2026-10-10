@@ -91,7 +91,8 @@ class ResearchKernel:
         spec.mkdir(parents=True)
         # Temporary, private specification: no registration or global kernel change.
         (spec / "kernel.json").write_text(json.dumps({
-            "argv": [str(python.absolute()), "-m", "ipykernel_launcher", "-f", "{connection_file}",
+            "argv": [str(python.absolute()), "-I", str(Path(__file__).with_name("isolated_kernel.py")),
+                     "-f", "{connection_file}",
                      "--IPKernelApp.kernel_class=ipykernel.ipkernel.IPythonKernel"],
             "display_name": "yeniBot isolated research", "language": "python",
         }), encoding="utf-8")
@@ -102,13 +103,19 @@ class ResearchKernel:
                                      ip="127.0.0.1" if os.name == "nt" else str(scratch / "channel"))
         environment = child_environment()
         environment["IPYTHONDIR"] = str(scratch / "ipython")
+        self.startup_log = repository.parent / f"yenibot_kernel_{uuid.uuid4().hex}.log"
         try:
-            self.manager.start_kernel(cwd=str(repository), env=environment)
-            self.client = self.manager.client()
-            self.client.start_channels()
-            self.client.wait_for_ready(timeout=90)
+            with self.startup_log.open("x", encoding="utf-8") as log:
+                self.manager.start_kernel(cwd=str(repository), env=environment,
+                                          stdout=log, stderr=subprocess.STDOUT)
+                self.client = self.manager.client()
+                self.client.start_channels()
+                self.client.wait_for_ready(timeout=90)
         except BaseException:
             self.close()
+            print(f"Kernel startup log: {self.startup_log}")
+            if self.startup_log.exists():
+                print(self.startup_log.read_text(encoding="utf-8", errors="replace")[-16000:])
             raise
         atexit.register(self.close)
 

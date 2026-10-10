@@ -73,11 +73,20 @@ def test_real_kernel_retains_state_renders_output_and_stops_on_failure(tmp_path,
     monkeypatch.setenv("PYTHONPATH", str(hostile))
     # Colab's machine-wide config selects a class absent from the isolated venv.
     bad_config = tmp_path / "colab_config.py"
-    bad_config.write_text("c = get_config()\nc.IPKernelApp.kernel_class = 'google.colab._kernel.Kernel'\n")
+    bad_config.write_text("c = get_config()\nc.IPKernelApp.kernel_class = 'google.colab._kernel.Kernel'\n"
+                          "c.InteractiveShellApp.extensions = ['google.colab']\n"
+                          "c.InteractiveShellApp.reraise_ipython_extension_failures = True\n"
+                          "c.InteractiveShellApp.exec_lines = [\"raise RuntimeError('host startup code')\"]\n")
     baseline = subprocess.run([sys.executable, "-m", "ipykernel_launcher", "--config=" + str(bad_config)],
                               env=runtime.child_environment(), capture_output=True, text=True, timeout=20)
     assert baseline.returncode != 0
     assert "google.colab._kernel.Kernel" in baseline.stderr
+    previous_fix = subprocess.run(
+        [sys.executable, "-m", "ipykernel_launcher", "--config=" + str(bad_config),
+         "--IPKernelApp.kernel_class=ipykernel.ipkernel.IPythonKernel"],
+        env=runtime.child_environment(), capture_output=True, text=True, timeout=20)
+    assert previous_fix.returncode != 0
+    assert "No module named 'google'" in previous_fix.stderr
     from jupyter_client import KernelManager
     original_start = KernelManager.start_kernel
     def start_with_colab_config(manager, **kwargs):
