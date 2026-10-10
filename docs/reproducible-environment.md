@@ -40,12 +40,23 @@ not establish compatibility with the Colab GPU driver. Record a successful GPU
 smoke before GPU training. Do not suppress a CUDA failure or reinterpret it as
 a model-performance result.
 
-The 00–05 research notebooks use Python 3.13 and the same hashed lock in their
-Colab kernel. They require a session restart after package changes and verify
-installed versions and pip consistency before workspace initialization. Colab's
-preinstalled extra packages are not isolated; conflicts stop setup and must be
-resolved before research. The smoke uses a separate isolated environment and
-does not switch the research notebook kernel.
+The 00–05 research notebooks run their configuration, data, feature, label,
+training and diagnostic cells in a persistent Jupyter kernel launched with the
+isolated interpreter. Colab only mounts Drive, manages the UI and forwards text,
+plots and rich output over Jupyter channels. No project package is installed
+into the host kernel; `pip check` runs in the isolated environment.
+
+The bridge uses Colab's existing `jupyter_client` to communicate with the child;
+`ipykernel` and its dependencies in the child are hash-locked. A temporary kernel
+specification selects the exact interpreter without registering or replacing
+any host kernels. Python path injection and user site-packages are disabled.
+Each cell retains the child's namespace. A failed or interrupted cell closes
+the child and blocks later cells; rerun setup to create a fresh kernel. Runtime
+release is opt-in and occurs in the host only after every notebook cell succeeds.
+
+Existing isolated environments are reused only after a fresh smoke, installed
+version verification and dependency check. Incomplete or incompatible environments
+are rejected, not silently repaired. Setup logs and reports use unique names.
 Existing frozen artifacts retain their
 historical environment; this lock is for prospective research, not automatic
 artifact migration.
@@ -81,7 +92,13 @@ and [pip repeatable installs](https://pip.pypa.io/en/stable/topics/repeatable-in
    training step to run afterward. Existing research eligibility and frozen OOS
    gates still apply; passing environment checks does not authorize bypassing them.
 
-The kernel installer intentionally stops after it changes packages. Choose
-**Restart session**, then rerun from the first cell. Do not delete the runtime at
-that point, because doing so removes the installed packages. If `pip check`
-reports a conflict with Colab's extra packages, preserve that output and stop.
+For migration from the old host installer, first download any logs you need,
+then disconnect and delete the old Colab runtime and reconnect to a fresh Python
+3.13 runtime. An ordinary session restart does not undo installed host packages.
+Use a new research ID because both the code and environment contract changed.
+The isolated installer does not require the old package-change restart cycle.
+
+The earlier CPU/T4 smoke reports at `ea90bac` validate the earlier lock. The
+new lock adds kernel infrastructure, so the new notebook reruns smoke checks
+before any research. Set `REQUIRE_GPU = True` for GPU training; data preparation
+can use CPU. Environment success still does not establish model eligibility.
