@@ -470,3 +470,47 @@ def _synthetic_funding_rates(periods: int) -> pd.DataFrame:
             "mark_price": 40000.0 + 50.0 * idx,
         }
     )
+
+
+@pytest.mark.parametrize("units", [("ms", "ms", "us", "us", "ms"),
+                                  ("us", "ms", "ms", "s", "ns")])
+def test_mixed_parquet_timestamp_units_preserve_causal_joins(
+    synthetic_klines, tiny_config, tmp_path, units,
+):
+    config = copy.deepcopy(tiny_config)
+    config["features"]["futures_context"] = {
+        "enabled": True, "stable_window": 3, "funding_stable_window": 3,
+        "oi_change_windows": [2], "funding_windows": [2],
+    }
+    config["features"]["intrahour_order_flow"] = {"enabled": True, "stable_window": 3}
+    frames = [synthetic_klines(96, "1h"), synthetic_klines(30, "4h"),
+              synthetic_klines(96 * 4, "15m"), _synthetic_futures_metrics(96 * 12),
+              _synthetic_funding_rates(12)]
+    # A settlement just after an hourly boundary must not become visible at that boundary.
+    offset = pd.Timedelta(milliseconds=6) if units[-1] == "ms" else pd.Timedelta(nanoseconds=1)
+    frames[-1]["timestamp"] = frames[-1]["timestamp"].astype("datetime64[ns, UTC]") + offset
+    for frame in frames:
+        frame["timestamp"] = frame["timestamp"].astype("datetime64[ns, UTC]")
+    expected = build_feature_matrix(frames[0], frames[1], config,
+        intrabar_frame=frames[2], futures_metrics_frame=frames[3], funding_frame=frames[4])
+    mixed = []
+    for index, (frame, unit) in enumerate(zip(frames, units)):
+        frame = frame.copy()
+        frame["timestamp"] = frame["timestamp"].astype(f"datetime64[{unit}, UTC]")
+        path = tmp_path / f"input_{index}.parquet"
+        frame.to_parquet(path, index=False)
+        mixed.append(pd.read_parquet(path))
+    originals = [frame.copy(deep=True) for frame in mixed]
+    actual = build_feature_matrix(mixed[0], mixed[1], config,
+        intrabar_frame=mixed[2], futures_metrics_frame=mixed[3], funding_frame=mixed[4])
+    assert not actual.frame.empty
+    assert actual.feature_columns == expected.feature_columns
+    pd.testing.assert_frame_equal(actual.frame, expected.frame)
+    for frame, original in zip(mixed, originals):
+        pd.testing.assert_frame_equal(frame, original)
+    boundary = pd.Timestamp("2022-01-03T00:00:00Z")
+    row = actual.frame.loc[actual.frame.timestamp == boundary].iloc[0]
+    prior = frames[-1].loc[frames[-1].timestamp < boundary].iloc[-1]
+    assert row["fut_funding_rate"] == pytest.approx(prior.funding_rate)
+    assert row["4h_available_timestamp"] == boundary
+    assert row["4h_source_timestamp"] == boundary - pd.Timedelta(hours=4)
