@@ -26,13 +26,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/locks/linux-py312.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+          python scripts/prepare_environment.py --directory .venv-ci --report reports/environment-smoke.json
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
 
       - name: Run static, repository and CPU contract checks
         run: python scripts/quality.py quick
@@ -56,13 +57,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/locks/linux-py312.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+          python scripts/prepare_environment.py --directory .venv-ci --report reports/environment-smoke.json
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
 
       - name: Run full experiment integration suite
         run: python scripts/quality.py full

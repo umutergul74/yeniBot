@@ -30,6 +30,7 @@ def main() -> int:
     commands = [
         ("lint", [sys.executable, "-m", "ruff", "check", "yenibot", "scripts", "tests"], 120),
         ("repository", [sys.executable, "scripts/check_repository.py"], 120),
+        ("lock_contract", [sys.executable, "scripts/verify_environment.py", "--structure-only"], 120),
     ]
     if args.scope != "static":
         command = [sys.executable, "-m", "pytest", "tests", "-q", "--tb=short"]
