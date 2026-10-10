@@ -76,7 +76,7 @@ print("Research cells now execute in:", ISOLATED_PYTHON)
 REMOTE_CONFIG = '''import os
 from datetime import datetime, timezone
 from yenibot.config import load_config
-from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table, resolve_data_settings
+from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table, resolve_data_settings, table_exists
 
 cfg = load_config(REPO_DIR / "config.yaml")
 DATA_END_UTC, RESEARCH_ID = resolve_data_settings(DATA_END_UTC, RESEARCH_ID, REPO_COMMIT, cfg)
@@ -137,7 +137,7 @@ def update_notebook(path: Path) -> None:
         cells[index]["source"] = source.splitlines(keepends=True)
     if path.name.startswith("01_"):
         cells[6]["source"] = ['from yenibot.data.preparation import prepare_raw_data\n',
-            'prepare_raw_data(cfg, DATA_DIR, archive_cache=DRIVE_BASE / "archive_cache")\n']
+            'prepare_raw_data(cfg, DATA_DIR, archive_cache=DRIVE_BASE / "archive_cache", shared_store=DRIVE_BASE / "raw_store")\n']
     for cell in cells[6:]:
         if cell["cell_type"] != "code":
             continue
@@ -161,6 +161,7 @@ def update_notebook(path: Path) -> None:
             source = source.replace("print('Funding rate download skipped; Binance REST may be restricted from this runtime:', repr(exc))",
                 "raise RuntimeError('Configured funding source failed; stop rather than reuse stale data') from exc")
         if path.name.startswith("02_"):
+            source = source.replace("os.path.exists(", "table_exists(")
             source = source.replace("intrabar = None", "intrabar_path = metrics_path = funding_path = None\nintrabar = None") if "intrabar_path = metrics_path = funding_path = None" not in source else source
             source = source.replace("print('Intrabar data missing; 15m profiles will run without ih15 features until 01 is rerun:', intrabar_path)", "raise FileNotFoundError(intrabar_path)")
             source = source.replace("print('Futures metrics missing; futures-context profiles will run without fut metrics until 01 is rerun:', metrics_path)", "raise FileNotFoundError(metrics_path)")

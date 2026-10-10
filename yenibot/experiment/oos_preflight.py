@@ -13,6 +13,7 @@ import pandas as pd
 from yenibot.experiment.common import _cfg
 from yenibot.experiment.configuration import experiment_root
 from yenibot.experiment.frozen import verify_frozen_manifest_artifacts
+from yenibot.notebook_runtime import table_exists, verified_table
 
 __all__ = [
     "future_oos_preflight",
@@ -172,8 +173,9 @@ def future_oos_preflight(
 
     label_horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
     warnings: list[str] = []
-    if raw_path.exists() and not labeled.empty:
-        raw = pd.read_parquet(raw_path, columns=["timestamp"])
+    if table_exists(raw_path) and not labeled.empty:
+        raw = (verified_table(raw_path) if raw_path.with_suffix(".parquet.manifest.json").exists()
+               else pd.read_parquet(raw_path, columns=["timestamp"]))
         raw_ts = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce").dropna()
         labeled_end = pd.to_datetime(data["data_end"], utc=True, errors="coerce")
         raw_end = raw_ts.max() if not raw_ts.empty else pd.NaT

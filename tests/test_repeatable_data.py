@@ -130,16 +130,19 @@ def test_latest_cutoff_is_frozen_and_new_date_or_environment_has_separate_identi
         resolve_data_settings("", "", "a" * 40, {})
 
 
-def test_preparation_resumes_verified_artifacts_and_refuses_changed_contract(tmp_path, monkeypatch):
+@pytest.mark.parametrize("shared", [False, True])
+def test_preparation_resumes_verified_artifacts_and_refuses_changed_contract(tmp_path, monkeypatch, shared):
     config = {"binance": {"symbol": "BTCUSDT", "start_date": "2026-09-30",
         "end_date": "2026-10-02", "base_url": "unused", "vision_base_url": "unused",
         "primary_interval": "1h", "htf_interval": "4h", "funding_rates": {"enabled": True},
         "futures_metrics": {"enabled": True}}}
     funding_calls, kline_calls, metric_calls = [], [], []
 
-    def download(*args, **kwargs):
+    def download(symbol, start, end, **kwargs):
         funding_calls.append(True)
-        return funding.funding_rates_to_dataframe(rows())
+        frame = funding.funding_rates_to_dataframe(rows())
+        lo, hi = pd.to_datetime(start, utc=True), pd.to_datetime(end, utc=True)
+        return frame.loc[(frame.timestamp >= lo) & (frame.timestamp < hi)].reset_index(drop=True)
 
     def klines(symbol, interval, start, end, **kwargs):
         kline_calls.append(interval)
@@ -157,17 +160,28 @@ def test_preparation_resumes_verified_artifacts_and_refuses_changed_contract(tmp
         return pd.DataFrame({"timestamp": pd.date_range(start, end, inclusive="left", freq="5min", tz="UTC")})
 
     monkeypatch.setattr(preparation, "download_futures_metrics_from_vision", metrics)
+    kwargs = {"archive_cache": tmp_path / "cache"}
+    if shared:
+        kwargs["shared_store"] = tmp_path / "raw_store"
     for _ in range(2):
-        preparation.prepare_raw_data(config, tmp_path / "data", archive_cache=tmp_path / "cache")
-    assert len(funding_calls) == 1 and kline_calls == ["1h", "4h"]
-    assert metric_calls == ["BTCUSDT"]
+        preparation.prepare_raw_data(config, tmp_path / "data", **kwargs)
+    assert len(funding_calls) == (2 if shared else 1)
+    assert kline_calls == (["1h", "1h", "4h", "4h"] if shared else ["1h", "4h"])
+    assert metric_calls == (["BTCUSDT"] * (2 if shared else 1))
+    if shared:
+        preparation.prepare_raw_data(config, tmp_path / "another_workspace/data", **kwargs)
+        assert len(funding_calls) == 2 and len(kline_calls) == 4 and len(metric_calls) == 2
+        assert not list((tmp_path / "another_workspace").rglob("*.parquet"))
     config["binance"]["end_date"] = "2026-10-03"
     with pytest.raises(ValueError, match="contract differs"):
-        preparation.prepare_raw_data(config, tmp_path / "data", archive_cache=tmp_path / "cache")
+        preparation.prepare_raw_data(config, tmp_path / "data", **kwargs)
     config["binance"]["end_date"] = "2026-10-02"
-    (tmp_path / "data/raw/btc_funding_rates.parquet.manifest.json").unlink()
+    if shared:
+        next((tmp_path / "raw_store").rglob("*.parquet")).unlink()
+    else:
+        (tmp_path / "data/raw/btc_funding_rates.parquet.manifest.json").unlink()
     with pytest.raises(FileNotFoundError):
-        preparation.prepare_raw_data(config, tmp_path / "data", archive_cache=tmp_path / "cache")
+        preparation.prepare_raw_data(config, tmp_path / "data", **kwargs)
 
 
 def test_bounds_rejects_unpublished_tail():

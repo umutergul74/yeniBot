@@ -95,12 +95,28 @@ def verified_table(path: Path) -> pd.DataFrame:
     path = Path(path)
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
     record = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if record.get("schema") == 2:
+        from yenibot.data.shared_store import read_snapshot
+        return read_snapshot(path, record)
     if record.get("schema") != 1 or record.get("sha256") != file_sha256(path):
         raise ValueError(f"Dataset identity mismatch: {path.name}")
     frame = pd.read_parquet(path)
     if len(frame) != record.get("rows") or list(frame.columns) != record.get("columns"):
         raise ValueError(f"Dataset contract mismatch: {path.name}")
     return frame
+
+
+def table_exists(path: Path) -> bool:
+    """Logical shared snapshots have a manifest, without a duplicate parquet."""
+    path = Path(path)
+    return path.exists() or path.with_suffix(path.suffix + ".manifest.json").exists()
+
+
+def table_identity(path: Path) -> str:
+    """Byte hash for legacy tables; canonical partition-list hash for shared snapshots."""
+    path = Path(path)
+    verified_table(path)
+    return json.loads(path.with_suffix(path.suffix + ".manifest.json").read_text(encoding="utf-8"))["sha256"]
 
 
 def publish_table(frame: pd.DataFrame, path: Path, *, parents: list[Path] = (),
@@ -114,8 +130,7 @@ def publish_table(frame: pd.DataFrame, path: Path, *, parents: list[Path] = (),
     path.parent.mkdir(parents=True, exist_ok=True)
     parent_records = []
     for parent in parents:
-        verified_table(parent)
-        parent_records.append({"name": Path(parent).name, "sha256": file_sha256(parent)})
+        parent_records.append({"name": Path(parent).name, "sha256": table_identity(parent)})
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
     try:

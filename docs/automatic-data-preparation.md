@@ -45,12 +45,41 @@ Binance sources:
 
 ## Resume and freshness
 
-Completed normalized files are reused only after their hashes and source
-contracts verify. Partial or conflicting artifacts are not overwritten. A Drive
-cache of successful ZIP downloads avoids fetching the historical archives every
-week. Its hashes check cache integrity, not independent provider authenticity.
-Missing archives (404) and REST/website responses are never cached. Only one
-notebook writer should use a given workspace/cache at a time.
+Normalized raw data now lives once under `MyDrive/yeniBot/raw_store/`, in immutable
+Parquet partitions. Initial history is split at month boundaries; later refreshes
+add only uncovered ranges. For example, extending a cutoff from October 10 to
+October 17 downloads and writes only October 10–17. The downloader may read a
+provider's whole monthly ZIP to obtain that range, but the ZIP cache is reused.
+
+Each research workspace stores small `*.parquet.manifest.json` snapshots in its
+`data/raw/` directory, not another full set of raw Parquets. A snapshot pins its
+cutoff, partition list, hashes, row count and source/normalization contract. Later
+appends never alter an earlier snapshot. `verified_table` reads either these new
+snapshots or legacy Parquets; notebook 02 uses that API and manifest-aware
+existence checks. New raw snapshot identities hash the canonical descriptor;
+legacy and processed table identities remain byte hashes. Processed parents pin
+the appropriate identity through `table_identity`.
+
+A code commit or Python patch change still creates a separate research workspace
+but reuses raw partitions when the ingestion contract is unchanged. Raw source,
+symbol, cleaning or gap-policy changes use a separate store contract. Developers
+must increment `normalization_version` when ingestion semantics change; it is
+deliberately independent of unrelated feature/training commits. Historical source
+corrections require an explicit new store contract, never replacement of pinned
+bytes. Feature and label outputs remain per-workspace.
+
+The first run with this storage version builds the shared store once using the
+existing ZIP cache where available. Older research Parquets are neither imported
+automatically nor deleted. They remain available to reproduce those experiments.
+Seeing their old copies in Drive after upgrade is expected. Do not delete shared
+partitions while any workspace references them; there is no automatic cleanup.
+
+Completed data is reused only after hashes and source contracts verify. Partial
+or conflicting artifacts stop execution rather than being overwritten. A failed
+refresh retains completed partitions for resumption, and does not publish a
+partial snapshot. Cache hashes check integrity, not independent provider
+authenticity. Missing archives (404) and REST/website responses are never cached.
+Only one notebook writer should use a given workspace/shared store/cache at a time.
 
 Transient 429/5xx and connection failures have bounded retries. Kline and metric
 start/end coverage is checked before publication; funding also checks continuity.

@@ -46,6 +46,7 @@ def test_features_stop_before_build_when_configured_context_is_missing(tmp_path,
 
     monkeypatch.setattr(yenibot.features, "build_feature_matrix", unexpected)
     namespace = {"DATA_DIR": str(tmp_path), "os": os, "Path": Path,
+                 "table_exists": lambda path: False,
                  "verified_table": lambda path: pd.DataFrame(),
                  "cfg": {"binance": {"intrabar_intervals": ["15m"]}}}
     with pytest.raises(FileNotFoundError, match="btc_15m"):
