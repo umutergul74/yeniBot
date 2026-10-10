@@ -8,6 +8,8 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import platform
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -44,10 +46,54 @@ def run_logged(command: list[str], log: Path, *, cwd: Path) -> None:
         raise RuntimeError(f"Environment command failed (exit {code}); see {log}")
 
 
-def prepare(repository: Path, directory: Path, *, gpu: bool = False) -> Path:
+def prepare_exact_python(repository: Path, directory: Path, version: str) -> Path:
+    """Build separately from the host; never replace an existing environment."""
+    if not re.fullmatch(r"3\.13\.\d+", version):
+        raise ValueError("Research Python must be an exact 3.13 patch version")
+    directory = directory.absolute()
+    python = directory / "bin/python"
+    if directory.exists():
+        actual = subprocess.check_output(
+            [str(python), "-I", "-c", "import platform; print(platform.python_version())"],
+            text=True, env=child_environment()).strip()
+        if actual != version:
+            raise RuntimeError(f"Existing environment Python {actual} differs from {version}")
+        return python
+    if platform.python_version() == version:
+        return python  # prepare_environment creates this using the matching host.
+    scratch = Path(tempfile.mkdtemp(prefix="yenibot-bootstrap-", dir=directory.parent))
+    log = scratch / "setup.log"
+    bootstrap = scratch / "tools"
+    commands = [
+        [sys.executable, "-m", "venv", "--without-pip", str(bootstrap)],
+        [sys.executable, "-m", "pip", "--python", str(bootstrap / "bin/python"),
+         "--isolated", "install", "--index-url", "https://pypi.org/simple", "uv"],
+        [str(bootstrap / "bin/python"), "-m", "uv", "venv", "--python", version, str(directory)],
+        [sys.executable, "-m", "pip", "--python", str(python), "--isolated", "install",
+         "--require-hashes", "--only-binary=:all:", "--index-url", "https://pypi.org/simple",
+         "-r", str(repository / "requirements/locks/linux-py313.txt")],
+    ]
+    for index, command in enumerate(commands):
+        run_logged(command, log.with_name(f"setup-{index}.log"), cwd=repository)
+    actual = subprocess.check_output(
+        [str(python), "-I", "-c", "import platform; print(platform.python_version())"],
+        text=True, env=child_environment()).strip()
+    if actual != version:
+        raise RuntimeError(f"Installed Python {actual} differs from {version}")
+    return python
+
+
+def prepare(repository: Path, directory: Path, *, gpu: bool = False,
+            python_version: str | None = None) -> Path:
     from scripts.verify_environment import verify
 
     verify(repository)
+    if python_version is not None:
+        if not re.fullmatch(r"3\.13\.\d+", python_version):
+            raise ValueError("Research Python must be an exact 3.13 patch version")
+        if not directory.name.endswith("-" + python_version):
+            directory = directory.with_name(directory.name + "-" + python_version)
+        prepare_exact_python(repository, directory, python_version)
     directory = directory.absolute()
     python = directory / "bin/python"
     token = uuid.uuid4().hex

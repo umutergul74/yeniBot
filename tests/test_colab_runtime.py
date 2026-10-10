@@ -54,6 +54,42 @@ def test_notebook_installer_never_changes_host_packages():
     assert "ResearchKernel(ISOLATED_PYTHON" in INSTALL
 
 
+def test_exact_python_rejects_existing_patch_drift(tmp_path, monkeypatch):
+    directory = tmp_path / "env"
+    directory.mkdir()
+    monkeypatch.setattr(runtime.subprocess, "check_output", lambda *a, **k: "3.13.15\n")
+    with pytest.raises(RuntimeError, match="differs"):
+        runtime.prepare_exact_python(tmp_path, directory, "3.13.16")
+    with pytest.raises(ValueError, match="exact"):
+        runtime.prepare_exact_python(tmp_path, directory, "../invalid")
+
+
+def test_patch_bootstrap_is_isolated_and_hash_locked(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime.platform, "python_version", lambda: "3.13.15")
+    monkeypatch.setattr(runtime.subprocess, "check_output", lambda *a, **k: "3.13.16\n")
+    calls = []
+    monkeypatch.setattr(runtime, "run_logged", lambda command, *a, **k: calls.append(command))
+    python = runtime.prepare_exact_python(tmp_path, tmp_path / "env", "3.13.16")
+    assert len(calls) == 4
+    assert "--without-pip" in calls[0]
+    assert "--python" in calls[1]
+    assert calls[2][-3:] == ["--python", "3.13.16", str(tmp_path / "env")]
+    assert "--require-hashes" in calls[3]
+    assert str(python) in calls[3]
+
+
+def test_versioned_directory_is_stable_on_setup_rerun(tmp_path, monkeypatch):
+    from scripts import verify_environment
+    monkeypatch.setattr(verify_environment, "verify", lambda repo: {})
+    directory = tmp_path / "env-3.13.16"
+    (directory / "bin").mkdir(parents=True)
+    (directory / "bin/python").touch()
+    (directory / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+    monkeypatch.setattr(runtime.subprocess, "check_output", lambda *a, **k: "3.13.16\n")
+    monkeypatch.setattr(runtime, "run_logged", lambda *a, **k: None)
+    assert runtime.prepare(tmp_path, directory, python_version="3.13.16") == directory / "bin/python"
+
+
 def test_wrapper_preserves_code_with_quotes_and_backslashes():
     source = 'value = """line\\nquoted"""\nprint(value)\n'
     assert remote_source(wrap_remote(source)) == source
