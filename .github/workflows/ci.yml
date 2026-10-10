@@ -26,9 +26,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements/locks/linux-py312.txt
+          cache-dependency-path: requirements/locks/linux-py313.txt
 
       - name: Install dependencies
         run: |
@@ -57,9 +57,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements/locks/linux-py312.txt
+          cache-dependency-path: requirements/locks/linux-py313.txt
 
       - name: Install dependencies
         run: |

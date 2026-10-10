@@ -1,14 +1,14 @@
 schema = 1
-lock = "requirements/locks/linux-py312.txt"
+lock = "requirements/locks/linux-py313.txt"
 generator = "uv 0.13.0"
 hash_normalization = "UTF-8 with LF line endings"
 
 [target]
-python = "3.12"
+python = "3.13"
 system = "Linux"
 machine = "x86_64"
 
 [files]
 "requirements.txt" = "5292b53af17fc6a9a21f817816834fd4c39f2daba30d013dbfce51b7ed9123d3"
-"requirements-dev.txt" = "593def1fd475a122284fcec0f645fc00623fdd9fd8c63df31a07882ce9b64bdb"
-"requirements/locks/linux-py312.txt" = "9dbdc914eedb84d1ea9e6931e30704f640526b1db77d9ce189091eee73573037"
+"requirements-dev.txt" = "21116174c20904327cb4c04e299f9511ed1512a28d3903b52fb284ac5a4e1a8f"
+"requirements/locks/linux-py313.txt" = "8c214789710463802b1c50dcc3581400475185bd24c5a9765ddcbefc3169e3da"

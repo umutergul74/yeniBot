@@ -10,8 +10,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SETTINGS = '''import sys
+SETTINGS = '''_ENVIRONMENT_READY = False
+import sys
+import platform
 from pathlib import Path
+
+if sys.version_info[:2] != (3, 13) or platform.system() != "Linux" or platform.machine() != "x86_64":
+    raise RuntimeError("Use a fresh Linux x86_64 / Python 3.13 runtime")
 
 # New research only: publish/review the code first, then pin its full Git SHA.
 REPO_COMMIT = ""  # Required 40-character commit, never a moving branch.
@@ -49,14 +54,32 @@ subprocess.run(["git", "-C", str(REPO_DIR), "checkout", "--detach", REPO_COMMIT]
 print("Pinned commit:", REPO_COMMIT)
 '''
 
-INSTALL = '''# Dependency ranges remain compatible with the original project. The workspace
-# admission check below rejects runtime drift; this is not a portable environment lock.
-subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(REPO_DIR / "requirements.txt")], check=True)
-subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
+INSTALL = '''_ENVIRONMENT_READY = False
+# Install reviewed hashes in the Colab kernel. Restart after any package change.
+import json
+from importlib import metadata
 sys.path.insert(0, str(REPO_DIR))
+from scripts.verify_environment import verify
+contract = verify()
+before = {}
+for name in contract["packages"]:
+    try:
+        before[name] = metadata.version(name)
+    except metadata.PackageNotFoundError:
+        before[name] = None
+subprocess.run([sys.executable, "-m", "pip", "--isolated", "install", "--require-hashes",
+                "--only-binary=:all:", "--index-url", "https://pypi.org/simple",
+                "-r", str(REPO_DIR / "requirements/locks/linux-py313.txt")], check=True)
+if before != contract["packages"]:
+    raise RuntimeError("Packages changed. Restart the session (not factory reset), then rerun from the first cell before research.")
+subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
+verify(installed=True)
+_ENVIRONMENT_READY = True
 '''
 
-CONFIG = '''import os
+CONFIG = '''if not globals().get("_ENVIRONMENT_READY", False):
+    raise RuntimeError("Complete environment setup successfully before research")
+import os
 from datetime import datetime, timezone
 from yenibot.config import load_config
 from yenibot.notebook_runtime import initialize_workspace, publish_table, verified_table
