@@ -25,7 +25,12 @@ The canonical environment is Google Colab with:
 - a CUDA runtime for notebook 04
 - Google Drive mounted at `/content/drive`
 - the repository cloned to `/content/yenibot_repo`
-- dependencies installed from `requirements.txt`
+- dependencies installed in the isolated Python 3.13 environment from the
+  committed hash lock (see `reproducible-environment.md`)
+
+For weekly refreshes without manual funding uploads, follow
+[automatic data preparation](automatic-data-preparation.md). Notebook 01 resolves
+the current cutoff and prints the exact settings to reuse downstream.
 
 After every pull:
 
