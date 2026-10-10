@@ -31,6 +31,7 @@ REPO_DIR = Path("/content/yenibot_repo")
 DRIVE_BASE = Path("/content/drive/MyDrive/yeniBot")
 REQUIRE_GPU = False  # Set True when running training in a GPU runtime.
 ENV_DIR = Path("/content/yenibot_locked_env")
+RESEARCH_PYTHON = "3.13.16"  # Same exact interpreter across CPU/GPU accounts.
 AUTO_UNASSIGN = False  # Release only after successful completion when explicitly enabled.
 '''
 
@@ -64,7 +65,8 @@ if "RESEARCH" in globals():
     RESEARCH.close()
 sys.path.insert(0, str(REPO_DIR))
 from scripts.colab_runtime import prepare, ResearchKernel
-ISOLATED_PYTHON = prepare(REPO_DIR, ENV_DIR, gpu=REQUIRE_GPU)
+ISOLATED_PYTHON = prepare(REPO_DIR, ENV_DIR, gpu=REQUIRE_GPU, python_version=RESEARCH_PYTHON)
+ENV_DIR = ISOLATED_PYTHON.parent.parent
 RESEARCH = ResearchKernel(ISOLATED_PYTHON, REPO_DIR)
 RESEARCH.execute("from scripts.verify_environment import verify; verify(installed=True)")
 RESEARCH.execute("from pathlib import Path; import sys; assert Path(sys.prefix) == Path(" + repr(str(ENV_DIR)) + "), 'Wrong research interpreter'")
