@@ -91,7 +91,8 @@ class ResearchKernel:
         spec.mkdir(parents=True)
         # Temporary, private specification: no registration or global kernel change.
         (spec / "kernel.json").write_text(json.dumps({
-            "argv": [str(python.absolute()), "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+            "argv": [str(python.absolute()), "-m", "ipykernel_launcher", "-f", "{connection_file}",
+                     "--IPKernelApp.kernel_class=ipykernel.ipkernel.IPythonKernel"],
             "display_name": "yeniBot isolated research", "language": "python",
         }), encoding="utf-8")
         manager = KernelSpecManager(kernel_dirs=[str(spec.parent)], ensure_native_kernel=False)
