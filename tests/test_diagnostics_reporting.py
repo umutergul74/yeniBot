@@ -217,7 +217,7 @@ def test_official_gate_requires_validation_eligibility_even_with_good_test_metri
         "threshold_source": "validation_selected_threshold", "f1": .99, "precision": .99,
         "pred_long_rate": .4, "validation_guard_ok": False,
     })
-    result = training.summarize_profile_predictions(_predictions(), {}, profile="base",
+    result = training.summarize_profile_predictions(_predictions(), {"features": {"profiles": {"base": {}}}}, profile="base",
         feature_columns=[], fold_scope="full")
     assert not result["row"]["passed_phase1_official_threshold"]
 
