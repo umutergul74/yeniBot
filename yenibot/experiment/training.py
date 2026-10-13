@@ -161,6 +161,7 @@ def _select_official_threshold_candidate(
         str(raw_candidate.get("threshold_source", "")),
     )
     candidates = [raw_candidate]
+    summaries = [raw_threshold_summary]
     if calibrated_threshold_report:
         calibrated_candidate = _threshold_guard_from_report(calibrated_threshold_report, prefix="calibrated")
         calibrated_candidate["candidate_order"] = 1
@@ -169,14 +170,21 @@ def _select_official_threshold_candidate(
             str(calibrated_candidate.get("threshold_source", "")),
         )
         candidates.append(calibrated_candidate)
+        summaries.append(calibrated_threshold_summary)
+    for candidate, summary in zip(candidates, summaries):
+        prefix = "source_constrained" if "constrained" in candidate["threshold_source"] else "source_best"
+        candidate["validation_guard_ok"] = (
+            _threshold_summary_metric(summary, "source_is_validation") == 1.0
+            and _threshold_candidate_is_guarded({
+                "f1": _threshold_summary_metric(summary, prefix + "_f1"),
+                "precision": _threshold_summary_metric(summary, prefix + "_precision"),
+                "pred_long_rate": _threshold_summary_metric(summary, prefix + "_pred_long_rate"),
+            }, max_pred_long_rate=max_pred_long_rate, min_precision=min_precision)
+        )
     guarded_candidates = [
         candidate
         for candidate in candidates
-        if _threshold_candidate_is_guarded(
-            candidate,
-            max_pred_long_rate=max_pred_long_rate,
-            min_precision=min_precision,
-        )
+        if candidate["validation_guard_ok"]
     ]
     if guarded_candidates:
         selected = max(
@@ -192,6 +200,9 @@ def _select_official_threshold_candidate(
     selected["uses_calibration"] = str(selected.get("threshold_source", "")).startswith("calibrated_")
     selected["candidate_count"] = len(candidates)
     selected["guarded_candidate_count"] = len(guarded_candidates)
+    if not guarded_candidates:
+        selected["passed"] = False
+        selected["reject_reason"] = "no_validation_eligible_threshold_candidate"
     return selected
 
 def _apply_official_threshold_fields(
@@ -373,6 +384,7 @@ def summarize_profile_predictions(
     official_f1 = _optional_float(row.get("test_f1_at_official_threshold"))
     official_pred_rate = _optional_float(row.get("test_pred_long_rate_at_official_threshold"))
     official_checks = dict(report.get("checks", {}) or {})
+    official_checks["validation_threshold_eligible"] = bool(official_threshold.get("validation_guard_ok", False))
     official_checks["long_f1"] = bool(official_f1 is not None and official_f1 > min_long_f1)
     official_checks["threshold_pred_long_rate"] = bool(
         official_pred_rate is not None and official_pred_rate <= max_pred_long_rate

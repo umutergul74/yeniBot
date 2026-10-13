@@ -3722,7 +3722,7 @@ def test_experiment_matrix_and_diagnostics_write_profile_comparison(synthetic_kl
         "min_policy_pass_fold_rate": 0.0,
         "min_positive_forward_return_fold_rate": 0.0,
     }
-    frame, _ = _labeled_frame(synthetic_klines, config, periods=220)
+    frame, _ = _labeled_frame(synthetic_klines, config, periods=260)
 
     result = run_experiment_matrix(frame, config, checkpoint_dir=tmp_path, run_id="matrix", device="cpu")
     diagnostics_config = copy.deepcopy(config)

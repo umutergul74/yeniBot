@@ -229,6 +229,9 @@ def threshold_diagnostics(
                 "threshold_source": source_name,
                 "selected_threshold": source_best["threshold"],
                 "source_best_f1": source_best["f1"],
+                "source_best_precision": source_best["precision"],
+                "source_best_pred_long_rate": source_best["pred_long_rate"],
+                "source_is_validation": float(source_name == "val"),
                 "test_f1_at_selected_threshold": target_at_source["f1"],
                 "test_precision_at_selected_threshold": target_at_source["precision"],
                 "test_recall_at_selected_threshold": target_at_source["recall"],
@@ -261,6 +264,9 @@ def threshold_summary_diagnostics(threshold_metrics: pd.DataFrame) -> pd.DataFra
     columns = [
         "selected_threshold",
         "source_best_f1",
+        "source_best_precision",
+        "source_best_pred_long_rate",
+        "source_is_validation",
         "test_f1_at_selected_threshold",
         "test_precision_at_selected_threshold",
         "test_recall_at_selected_threshold",
@@ -1276,6 +1282,13 @@ def attach_threshold_summary_to_phase1_report(
     updated = dict(report)
     if threshold_summary is None or threshold_summary.empty:
         return updated
+    if _threshold_summary_mean(threshold_summary, "source_is_validation") != 1.0:
+        updated["passed_threshold_guarded"] = False
+        updated["threshold_guarded"] = {
+            "threshold_source": "unavailable_validation_threshold",
+            "reject_reason": "missing_validation_provenance",
+        }
+        return updated
 
     selected_threshold = _threshold_summary_mean(threshold_summary, "selected_threshold")
     selected_f1 = _threshold_summary_mean(threshold_summary, "test_f1_at_selected_threshold")
@@ -1306,7 +1319,12 @@ def attach_threshold_summary_to_phase1_report(
             pd.notna(constrained_pred_rate) and constrained_pred_rate <= max_pred_long_rate
         ),
     }
-    selected_guard_ok = all(bool(value) for value in threshold_checks.values())
+    selection_checks = {
+        "long_f1_selected_threshold": _threshold_summary_mean(threshold_summary, "source_best_f1") > min_long_f1,
+        "selected_precision": _threshold_summary_mean(threshold_summary, "source_best_precision") >= min_precision,
+        "selected_pred_long_rate": _threshold_summary_mean(threshold_summary, "source_best_pred_long_rate") <= max_pred_long_rate,
+    }
+    selected_guard_ok = all(bool(value) for value in selection_checks.values())
     constrained_guard_ok = all(bool(value) for value in constrained_checks.values())
     if selected_guard_ok:
         guarded_source = "validation_selected_threshold"
@@ -1319,11 +1337,11 @@ def attach_threshold_summary_to_phase1_report(
     else:
         guarded_source = "validation_constrained_threshold"
         guarded_reasons = []
-        if not threshold_checks["selected_pred_long_rate"]:
+        if not selection_checks["selected_pred_long_rate"]:
             guarded_reasons.append("selected_threshold_pred_long_rate_above_guardrail")
-        if not threshold_checks["selected_precision"]:
+        if not selection_checks["selected_precision"]:
             guarded_reasons.append("selected_threshold_precision_below_minimum")
-        if not threshold_checks["long_f1_selected_threshold"]:
+        if not selection_checks["long_f1_selected_threshold"]:
             guarded_reasons.append("selected_threshold_f1_below_target")
         guarded_reason = ";".join(guarded_reasons)
         guarded_threshold = constrained_threshold

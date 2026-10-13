@@ -95,8 +95,8 @@ def tiny_config() -> dict:
             "val_bars": 32,
             "test_bars": 32,
             "step_bars": 32,
-            "purge_bars": 4,
-            "embargo_bars": 2,
+            "purge_bars": 10,
+            "embargo_bars": 10,
         },
         "hmm": {
             "n_states": 3,

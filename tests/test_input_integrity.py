@@ -146,7 +146,7 @@ def test_old_training_signature_is_not_reused_or_rewritten(signature_inputs, tmp
     before_manifest = manifest_path.read_bytes()
     before_predictions = predictions_path.read_bytes()
 
-    assert current["signature_version"] == "profile_training_v3"
+    assert current["signature_version"] == "profile_training_v4"
     assert not _is_complete(tmp_path, _hash_payload(current))
     assert manifest_path.read_bytes() == before_manifest
     assert predictions_path.read_bytes() == before_predictions

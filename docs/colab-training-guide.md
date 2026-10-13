@@ -7,12 +7,12 @@ The separately printed active feature profile is not evidence of an additional
 candidate. The matrix configuration selects the control.
 
 Training uses TCN+GRU with train-only scaling/HMM, 5040 training bars, 1080
-validation bars, 720 test bars, 720-bar steps, purge 24 and embargo 6. Maximum
+validation bars, 720 test bars, 720-bar steps, purge 24 and embargo 10. Maximum
 epochs are 100, early stopping monitors rank IC with patience 15. Seed audit uses
 42, 43, 44 on the configured eight folds. These are historical settings, not a
 recommendation to tune them against previously seen holdout results.
 
-The reported 40401 labeled rows split into 32500 selection rows, 4320 reserved
+The reported 40401 labeled rows historically split into 32500 selection rows, 4320 reserved
 holdout rows and 3581 post-anchor rows. The anchor remains fixed at May 13, 2026
 08:00 UTC; recent data does not automatically enter training. `Future OOS ready`
 indicates window availability, not artifact readiness or passing performance.
@@ -55,3 +55,5 @@ availability is still required and errors are retained in setup logs.
 Existing experiments pinned to 477a0638 must continue with their original code.
 They may use the previously prepared 3.13.16 environment. Do not point that
 workspace at a new commit merely to obtain this notebook setup improvement.
+
+The temporal repair additionally excludes 10 selection-tail rows before holdout. See training-temporal-audit.md before running new experiments.
