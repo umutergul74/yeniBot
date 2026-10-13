@@ -25,9 +25,27 @@ Use `docs/architecture.md` for ownership and `docs/main-hardening.md` for workfl
 - For research changes use `.agents/skills/yenibot-research-review/SKILL.md`.
   Read only relevant sections of `SKILLS.md` and the active protocol/runbook.
   Never use a seen final test/holdout to select a new policy.
-- Use the existing Python environment; do not upgrade global packages. Run
-  `python scripts/quality.py static`, then affected tests. Use `quick` for the
-  normal CPU suite and `full` for experiment/training-wide changes.
+- Standing test-budget preference (2026-10-13): minimize agent tokens and redundant
+  execution with scope-based testing. Before running checks, state a compact plan:
+  changed behavior, smallest relevant test group, and final gate if needed.
+- Use the existing Python environment; do not upgrade global packages. Docs-only
+  edits need diff/link checks, not pytest. For code, batch affected tests in ONE
+  pytest call (`-q --tb=short`); add regressions only for meaningful correctness risks.
+- Do not automatically run static + quick + full in succession: quick/full already
+  include static. Use the smallest sufficient scope. Broad training/orchestration,
+  temporal-integrity or artifact-contract changes need ONE full final run after
+  edits stabilize, preferably CI; do not duplicate it locally and in CI.
+- Reuse passing evidence only when relevant code, fixtures, dependencies and
+  environment are unchanged. After a failure run the failed/affected group first;
+  repeat the broad gate only if later changes invalidate its coverage. Never treat
+  stale or failed results as a current pass.
+- Save verbose logs to ignored reports; read the summary and failing traceback
+  only. Batch independent reads, avoid repeated history/log dumps and frequent CI
+  polls; prefer completion waits with at most 60-second blocking intervals.
+  Keep progress brief and useful. Do not launch duplicate workflows for one head.
+- Keep required CI and research gates intact; reducing agent work does not mean
+  deleting tests, weakening thresholds or skipping required checks. Report scope,
+  result and any deliberately unrun checks once; no unmeasured token-saving claims.
 - Add regression tests for correctness changes. Do not hide failed checks or
   change research thresholds to make tests pass. See `docs/main-hardening.md`.
 - Default to one agent. For independent audits the user authorizes at most two

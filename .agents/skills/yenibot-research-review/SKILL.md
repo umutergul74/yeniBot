@@ -19,8 +19,11 @@ feature order and preprocessing setting. Frozen OOS must verify hashes before
 deserialization and perform no fitting. Never regenerate missing frozen evidence
 as a repair. Hashes do not authorize loading artifacts from an untrusted source.
 
-Use synthetic data and temporary output paths to reproduce the issue. Run affected
-tests first; `python scripts/quality.py full` covers broad orchestration changes.
+Use synthetic data and temporary output paths to reproduce the issue. Follow the
+scope-based test-budget policy in AGENTS.md: batch affected regressions, stabilize
+edits, then run one required full gate for broad research changes (prefer CI).
+Do not duplicate full runs locally and in CI, or run static/quick/full in sequence.
+Documentation-only changes do not need pytest; preserve mandatory CI checks.
 Do not run real training or a one-shot final evaluation just to verify code.
 
 Deliver: hypothesis and falsifier, changed contracts, earliest required notebook
