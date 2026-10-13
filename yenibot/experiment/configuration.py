@@ -341,6 +341,7 @@ def _available_walk_forward_fold_ids(n_rows: int, config: dict[str, Any]) -> lis
         step_bars=int(cv_cfg["step_bars"]),
         purge_bars=int(cv_cfg["purge_bars"]),
         embargo_bars=int(cv_cfg["embargo_bars"]),
+        label_horizon=int(_cfg(config, ["labeling", "max_holding_bars"], 10)),
     )
     return [int(fold.fold) for fold in cv.split(int(n_rows))]
 
@@ -608,7 +609,7 @@ def _experiment_signature(
     )
     profiles = [profile for profile in profiles if profile]
     payload = {
-        "signature_version": "training_v2",
+        "signature_version": "training_v3",
         "settings": _training_settings_payload(settings),
         "profiles": {
             profile: _training_config_payload(config, profile=profile)
@@ -627,7 +628,7 @@ def _diagnostics_signature(config: dict[str, Any], settings: dict[str, Any]) -> 
     """Track report-policy changes without invalidating fitted artifacts."""
 
     return {
-        "signature_version": "diagnostics_v1",
+        "signature_version": "diagnostics_v2",
         "validation": copy.deepcopy(_cfg(config, ["validation"], {}) or {}),
         "policy_review": copy.deepcopy(_cfg(config, ["experiments", "policy_review"], {}) or {}),
         "frozen_candidates": copy.deepcopy(_cfg(config, ["experiments", "frozen_candidates"], {}) or {}),
@@ -723,7 +724,7 @@ def _training_signature(
 ) -> dict[str, Any]:
     training_config = profile_config(config, profile)
     return {
-        "signature_version": "profile_training_v3",
+        "signature_version": "profile_training_v4",
         "profile": profile,
         "fold_scope": fold_scope,
         "fold_ids": fold_ids,

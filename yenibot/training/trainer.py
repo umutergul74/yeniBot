@@ -247,6 +247,10 @@ def train_one_fold(
     """Train one purged walk-forward fold and return metrics plus predictions."""
 
     _assert_training_inputs_available(frame, feature_columns, config)
+    horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
+    for left, right in ((fold.train, fold.val), (fold.val, fold.test)):
+        if len(left) == 0 or len(right) == 0 or int(np.max(left)) + horizon >= int(np.min(right)):
+            raise ValueError("Fold label horizon overlaps the next evaluation partition")
     torch_device = _device(device)
     fold_seed = _base_seed(config) + int(fold.fold)
     set_random_seed(fold_seed, deterministic=_deterministic(config))
@@ -455,7 +459,8 @@ def run_walk_forward_training(
         test_bars=int(_cfg(cv_cfg, ["test_bars"], 720)),
         step_bars=int(_cfg(cv_cfg, ["step_bars"], 720)),
         purge_bars=int(_cfg(cv_cfg, ["purge_bars"], 24)),
-        embargo_bars=int(_cfg(cv_cfg, ["embargo_bars"], 6)),
+        embargo_bars=int(_cfg(cv_cfg, ["embargo_bars"], 10)),
+        label_horizon=int(_cfg(config, ["labeling", "max_holding_bars"], 10)),
     )
 
     fold_results = []

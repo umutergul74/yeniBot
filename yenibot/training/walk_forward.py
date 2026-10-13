@@ -25,14 +25,19 @@ class PurgedWalkForwardCV:
         step_bars: int,
         purge_bars: int,
         embargo_bars: int,
+        label_horizon: int = 0,
     ) -> None:
         values = {"train_bars": train_bars, "val_bars": val_bars,
                   "test_bars": test_bars, "step_bars": step_bars,
-                  "purge_bars": purge_bars, "embargo_bars": embargo_bars}
+                  "purge_bars": purge_bars, "embargo_bars": embargo_bars,
+                  "label_horizon": label_horizon}
         for name, value in values.items():
-            minimum = 0 if name in {"purge_bars", "embargo_bars"} else 1
+            minimum = 0 if name in {"purge_bars", "embargo_bars", "label_horizon"} else 1
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
+        for name in ("purge_bars", "embargo_bars"):
+            if values[name] < label_horizon:
+                raise ValueError(f"{name} must be >= label_horizon ({label_horizon})")
         self.train_bars = train_bars
         self.val_bars = val_bars
         self.test_bars = test_bars

@@ -10,7 +10,7 @@ from yenibot.training import PurgedWalkForwardCV, run_walk_forward_training, tra
 
 
 def test_small_pipeline_runs_one_training_step(synthetic_klines, tiny_config, tmp_path) -> None:
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, tiny_config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -41,7 +41,7 @@ def test_small_pipeline_runs_one_training_step(synthetic_klines, tiny_config, tm
 def test_train_one_fold_repeats_with_same_seed_on_cpu(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["project"] = {"random_seed": 123, "deterministic": True}
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -65,7 +65,7 @@ def test_train_one_fold_supports_val_loss_early_stopping_as_explicit_experiment(
     config = copy.deepcopy(tiny_config)
     config["training"]["early_stop_metric"] = "val_loss"
     config["training"]["epochs"] = 2
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -87,7 +87,7 @@ def test_train_one_fold_supports_pairwise_label_margin_loss(synthetic_klines, ti
     config["training"]["loss"]["label_margin_weight"] = 0.05
     config["training"]["loss"]["label_margin"] = 0.25
     config["training"]["epochs"] = 2
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -109,7 +109,7 @@ def test_train_one_fold_supports_pairwise_return_order_loss(synthetic_klines, ti
     config["training"]["loss"]["return_pairwise_min_return_diff"] = 0.0005
     config["training"]["loss"]["return_pairwise_return_scale"] = 0.005
     config["training"]["epochs"] = 2
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -127,7 +127,7 @@ def test_train_one_fold_supports_pairwise_return_order_loss(synthetic_klines, ti
 def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny_config) -> None:
     config = copy.deepcopy(tiny_config)
     config["training"]["early_stop_metric"] = "not_a_real_metric"
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, config)
     frame = features.frame.copy().reset_index(drop=True)
@@ -141,7 +141,7 @@ def test_train_one_fold_rejects_unknown_early_stop_metric(synthetic_klines, tiny
 
 
 def test_run_walk_forward_training_fails_fast_on_active_feature_nans(synthetic_klines, tiny_config) -> None:
-    primary = synthetic_klines(190, "1h")
+    primary = synthetic_klines(220, "1h")
     htf = synthetic_klines(60, "4h")
     features = build_feature_matrix(primary, htf, tiny_config)
     frame = features.frame.copy().reset_index(drop=True)

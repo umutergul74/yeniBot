@@ -210,6 +210,18 @@ def test_constrained_threshold_caps_pred_long_rate() -> None:
     assert row["constrained_threshold_source"] == "constrained_f1"
 
 
+def test_official_gate_requires_validation_eligibility_even_with_good_test_metrics(monkeypatch):
+    from yenibot.experiment import training
+    monkeypatch.setattr(training, "phase1_report", lambda *args: {"checks": {"long_f1": True}})
+    monkeypatch.setattr(training, "_select_official_threshold_candidate", lambda **kwargs: {
+        "threshold_source": "validation_selected_threshold", "f1": .99, "precision": .99,
+        "pred_long_rate": .4, "validation_guard_ok": False,
+    })
+    result = training.summarize_profile_predictions(_predictions(), {}, profile="base",
+        feature_columns=[], fold_scope="full")
+    assert not result["row"]["passed_phase1_official_threshold"]
+
+
 def test_guarded_threshold_rejects_too_broad_selected_threshold() -> None:
     report = {
         "checks": {
@@ -223,6 +235,10 @@ def test_guarded_threshold_rejects_too_broad_selected_threshold() -> None:
     threshold_summary = pd.DataFrame(
         [
             {"metric": "selected_threshold", "mean": 0.30},
+            {"metric": "source_is_validation", "mean": 1.0},
+            {"metric": "source_best_f1", "mean": 0.47},
+            {"metric": "source_best_precision", "mean": 0.34},
+            {"metric": "source_best_pred_long_rate", "mean": 0.86},
             {"metric": "test_f1_at_selected_threshold", "mean": 0.47},
             {"metric": "test_precision_at_selected_threshold", "mean": 0.34},
             {"metric": "test_recall_at_selected_threshold", "mean": 0.75},
@@ -532,6 +548,10 @@ def test_threshold_summary_augments_phase1_report_without_masking_core_checks() 
     threshold_summary = pd.DataFrame(
         [
             {"metric": "selected_threshold", "mean": 0.32},
+            {"metric": "source_is_validation", "mean": 1.0},
+            {"metric": "source_best_f1", "mean": 0.47},
+            {"metric": "source_best_precision", "mean": 0.34},
+            {"metric": "source_best_pred_long_rate", "mean": 0.86},
             {"metric": "test_f1_at_selected_threshold", "mean": 0.46},
             {"metric": "test_precision_at_selected_threshold", "mean": 0.32},
             {"metric": "test_recall_at_selected_threshold", "mean": 0.88},

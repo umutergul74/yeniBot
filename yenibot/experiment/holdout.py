@@ -133,10 +133,15 @@ def _resolve_holdout_settings(settings: dict[str, Any], config: dict[str, Any]) 
                         holdout.setdefault("latest_available_data_end", str(labeled_timestamps.max()))
                         holdout_start = pd.to_datetime(holdout["holdout_data_start"], utc=True)
                         selection_timestamps = labeled_timestamps.loc[labeled_timestamps < holdout_start]
+                        horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
+                        if horizon < 1 or len(selection_timestamps) <= horizon:
+                            raise ValueError("Insufficient selection history for label horizon purge")
+                        selection_timestamps = selection_timestamps.sort_values().iloc[:-horizon]
+                        holdout["selection_purge_bars"] = horizon
                         if not selection_timestamps.empty:
-                            holdout.setdefault("selection_rows", int(len(selection_timestamps)))
+                            holdout["selection_rows"] = int(len(selection_timestamps))
                             holdout.setdefault("selection_data_start", str(selection_timestamps.min()))
-                            holdout.setdefault("selection_data_end", str(selection_timestamps.max()))
+                            holdout["selection_data_end"] = str(selection_timestamps.max())
     latest_data_end = _holdout_latest_available_data_end(holdout)
     if latest_data_end:
         monitor_state = _future_oos_monitor_state(config, latest_data_end)
@@ -155,9 +160,13 @@ def _selection_frame_before_holdout(frame: pd.DataFrame, settings: dict[str, Any
         return frame
     timestamps = pd.to_datetime(frame["timestamp"], utc=True)
     start = pd.to_datetime(holdout_start, utc=True)
-    if not (timestamps >= start).any():
-        return frame
-    return frame.loc[timestamps < start].copy().reset_index(drop=True)
+    selection_end = holdout.get("selection_data_end")
+    if not selection_end or int(holdout.get("selection_purge_bars", 0)) < 1:
+        raise ValueError("Holdout selection boundary missing; prepare_training_holdout_split must run first")
+    if selection_end:
+        end = pd.to_datetime(selection_end, utc=True)
+        return frame.loc[(timestamps <= end) & (timestamps < start)].copy().reset_index(drop=True)
+    raise ValueError("Holdout selection boundary missing; prepare_training_holdout_split must run first")
 
 def _holdout_reservation_frame(settings: dict[str, Any]) -> pd.DataFrame:
     holdout = settings.get("holdout", {}) or {}
@@ -229,6 +238,8 @@ def prepare_training_holdout_split(
 
     data = frame.copy().reset_index(drop=True)
     timestamps = pd.to_datetime(data["timestamp"], utc=True)
+    if timestamps.isna().any() or timestamps.duplicated().any():
+        raise ValueError("Holdout timestamps must be finite and unique")
     order = np.argsort(timestamps.to_numpy())
     data = data.iloc[order].reset_index(drop=True)
     timestamps = pd.to_datetime(data["timestamp"], utc=True)
@@ -259,6 +270,10 @@ def prepare_training_holdout_split(
 
     holdout = split_data.tail(holdout_bars).copy().reset_index(drop=True)
     selection = split_data.iloc[:-holdout_bars].copy().reset_index(drop=True)
+    horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
+    if horizon < 1 or len(selection) <= horizon:
+        raise ValueError("Not enough selection rows for a positive label horizon purge")
+    selection = selection.iloc[:-horizon].copy().reset_index(drop=True)
     if holdout_path is not None:
         Path(holdout_path).parent.mkdir(parents=True, exist_ok=True)
         holdout.to_parquet(holdout_path, index=False)
@@ -269,6 +284,7 @@ def prepare_training_holdout_split(
         "enabled": True,
         "holdout_bars": holdout_bars,
         "selection_rows": int(len(selection)),
+        "selection_purge_bars": horizon,
         "holdout_rows": int(len(holdout)),
         "selection_data_start": str(selection_ts.min()),
         "selection_data_end": str(selection_ts.max()),

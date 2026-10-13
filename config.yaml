@@ -1727,7 +1727,7 @@ walk_forward:
   test_bars: 720
   step_bars: 720
   purge_bars: 24
-  embargo_bars: 6
+  embargo_bars: 10
 
 hmm:
   n_states: 3
