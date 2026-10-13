@@ -73,6 +73,17 @@ def test_label_horizon_requires_both_boundary_gaps(gap):
         assert fold.val[-1] + 10 < fold.test[0]
 
 
+def test_direct_fold_rejects_negative_index_and_unsorted_timestamps():
+    from yenibot.training.walk_forward import FoldIndices
+    frame = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=40, freq="h", tz="UTC"),
+                          "signal": 1., "label": 0, "fwd_return_10h": .01})
+    fold = FoldIndices(0, np.array([-1]), np.array([12]), np.array([24]))
+    with pytest.raises(ValueError, match="in-range"):
+        train_one_fold(frame, fold, ["signal"], {})
+    with pytest.raises(ValueError, match="chronological"):
+        _assert_training_inputs_available(frame.iloc[::-1], ["signal"], {})
+
+
 def test_holdout_purges_targets_without_moving_reserved_window():
     from yenibot.experiment.holdout import prepare_training_holdout_split, _selection_frame_before_holdout
     frame = pd.DataFrame({"timestamp": pd.date_range("2025-01-01", periods=100, freq="h", tz="UTC")})

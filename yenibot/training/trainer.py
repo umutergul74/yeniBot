@@ -99,6 +99,10 @@ def _forward_return_column(frame: pd.DataFrame, config: Any) -> str:
 
 
 def _assert_training_inputs_available(frame: pd.DataFrame, feature_columns: list[str], config: Any) -> None:
+    if "timestamp" in frame.columns:
+        timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+        if timestamps.isna().any() or timestamps.duplicated().any() or not timestamps.is_monotonic_increasing:
+            raise ValueError("Training timestamps must be finite, unique and chronological")
     required = list(feature_columns)
     required.extend(str(column) for column in list(_cfg(config, ["hmm", "features"], []) or []))
     targets = [column for column in required if is_target_column(column)]
@@ -248,6 +252,14 @@ def train_one_fold(
 
     _assert_training_inputs_available(frame, feature_columns, config)
     horizon = int(_cfg(config, ["labeling", "max_holding_bars"], 10))
+    if horizon < 1:
+        raise ValueError("Label horizon must be positive")
+    for indices in (fold.train, fold.val, fold.test):
+        positions = np.asarray(indices)
+        if (positions.ndim != 1 or positions.size == 0 or positions.dtype.kind not in "iu"
+                or positions.min() < 0 or positions.max() >= len(frame)
+                or (np.diff(positions) <= 0).any()):
+            raise ValueError("Fold positions must be increasing unique in-range integers")
     for left, right in ((fold.train, fold.val), (fold.val, fold.test)):
         if len(left) == 0 or len(right) == 0 or int(np.max(left)) + horizon >= int(np.min(right)):
             raise ValueError("Fold label horizon overlaps the next evaluation partition")
